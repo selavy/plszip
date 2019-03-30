@@ -17,6 +17,55 @@ struct GzipHeader
     uint8_t os;
 } __attribute__((packed));
 
+// bit 0   FTEXT
+// bit 1   FHCRC
+// bit 2   FEXTRA
+// bit 3   FNAME
+// bit 4   FCOMMENT
+// bit 5   reserved
+// bit 6   reserved
+// bit 7   reserved
+enum class Flags : uint8_t
+{
+    FTEXT    = 1u << 0,
+    FHCRC    = 1u << 1,
+    FEXTRA   = 1u << 2,
+    FNAME    = 1u << 3,
+    FCOMMENT = 1u << 4,
+    RESERV1  = 1u << 5,
+    RESERV2  = 1u << 6,
+    RESERV3  = 1u << 7,
+};
+
+void print_flags_debug(uint8_t flags) {
+    printf("Flags: ");
+    if ((flags & (uint8_t)Flags::FTEXT) != 0) {
+        printf("FTEXT ");
+    }
+    if ((flags & (uint8_t)Flags::FHCRC) != 0) {
+        printf("FHCRC ");
+    }
+    if ((flags & (uint8_t)Flags::FEXTRA) != 0) {
+        printf("FEXTRA ");
+    }
+    if ((flags & (uint8_t)Flags::FNAME) != 0) {
+        printf("FNAME ");
+    }
+    if ((flags & (uint8_t)Flags::FCOMMENT) != 0) {
+        printf("FCOMMENT ");
+    }
+    if ((flags & (uint8_t)Flags::RESERV1) != 0) {
+        printf("RESERV1 ");
+    }
+    if ((flags & (uint8_t)Flags::RESERV2) != 0) {
+        printf("RESERV2 ");
+    }
+    if ((flags & (uint8_t)Flags::RESERV3) != 0) {
+        printf("RESERV3 ");
+    }
+    printf("\n");
+}
+
 int main(int argc, char** argv)
 {
     if (argc != 2) {
@@ -47,6 +96,8 @@ int main(int argc, char** argv)
     printf("\tmtime = %u\n", hdr.mtime);
     printf("\txfl   = %u\n", hdr.xfl);
     printf("\tos    = %u\n", hdr.os);
+
+    print_flags_debug(hdr.flg);
 
     fclose(fp);
     return 0;
