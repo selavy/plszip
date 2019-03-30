@@ -4,6 +4,14 @@
 #include <cstring>
 #include <string>
 
+// TODO: better names?
+//  ID1 (IDentification 1)
+//  ID2 (IDentification 2)
+//     These have the fixed values ID1 = 31 (0x1f, \037), ID2 = 139
+//     (0x8b, \213), to identify the file as being in gzip format.
+const uint8_t ID1_GZIP = 31;
+const uint8_t ID2_GZIP = 139;
+
 //  +---+---+---+---+---+---+---+---+---+---+
 //  |ID1|ID2|CM |FLG|     MTIME     |XFL|OS | (more-->)
 //  +---+---+---+---+---+---+---+---+---+---+
@@ -113,6 +121,17 @@ int main(int argc, char** argv)
     printf("\tmtime = %u\n", hdr.mtime);
     printf("\txfl   = %u\n", hdr.xfl);
     printf("\tos    = %u\n", hdr.os);
+
+    if (hdr.id1 != ID1_GZIP) {
+        fprintf(stderr, "Unsupported identifier #1: %u\n", hdr.id1);
+        fclose(fp);
+        exit(0);
+    }
+    if (hdr.id2 != ID2_GZIP) {
+        fprintf(stderr, "Unsupported identifier #2: %u\n", hdr.id2);
+        fclose(fp);
+        exit(0);
+    }
 
     print_flags_debug(hdr.flg);
 
