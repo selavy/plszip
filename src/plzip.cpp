@@ -165,6 +165,30 @@ int main(int argc, char** argv)
     }
     printf("File comment: '%s'\n", fcomment.c_str());
 
+    // (if FLG.FHCRC set)
+    //
+    // +---+---+
+    // | CRC16 |
+    // +---+---+
+    //
+    // +=======================+
+    // |...compressed blocks...| (more-->)
+    // +=======================+
+    //
+    // 0   1   2   3   4   5   6   7
+    // +---+---+---+---+---+---+---+---+
+    // |     CRC32     |     ISIZE     |
+    // +---+---+---+---+---+---+---+---+
+    uint16_t crc16 = 0;
+    if ((hdr.flg & static_cast<uint8_t>(Flags::FHCRC)) != 0) {
+        if (fread(&crc16, sizeof(crc16), 1, fp) != 1) {
+            fprintf(stderr, "ERR: failed to read CRC16\n");
+            fclose(fp);
+            exit(1);
+        }
+    }
+    printf("CRC16: %u (0x%04X)\n", crc16, crc16);
+
     fclose(fp);
     return 0;
 }
