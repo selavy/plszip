@@ -67,6 +67,22 @@ void print_flags_debug(uint8_t flags) {
     printf("\n");
 }
 
+// TODO: get Boost.Outcome
+bool read_null_terminated_string(FILE* fp, std::string& result) {
+    char c;
+    result = "";
+    for (;;) {
+        if (fread(&c, sizeof(c), 1, fp) != 1) {
+            return false;
+        }
+        if (c == '\0') {
+            break;
+        }
+        result += c;
+    }
+    return true;
+}
+
 int main(int argc, char** argv)
 {
     if (argc != 2) {
@@ -100,29 +116,54 @@ int main(int argc, char** argv)
 
     print_flags_debug(hdr.flg);
 
+    // (if FLG.FEXTRA set)
+    //
+    // +---+---+=================================+
+    // | XLEN  |...XLEN bytes of "extra field"...| (more-->)
+    // +---+---+=================================+
     if ((hdr.flg & static_cast<uint8_t>(Flags::FEXTRA)) != 0) {
+        uint16_t xlen;
+        if (fread(&xlen, sizeof(xlen), 1, fp) != 1) {
+            fprintf(stderr, "ERR: short read on xlen\n");
+            fclose(fp);
+            exit(1);
+        }
+        printf("XLEN = %u\n", xlen);
+        // TODO: read xlen bytes
         fprintf(stderr, "ERR: FEXTRA flag not supported.\n");
         fclose(fp);
         exit(1);
     }
 
-    std::string fname;
+    // (if FLG.FNAME set)
+    //
+    // +=========================================+
+    // |...original file name, zero-terminated...| (more-->)
+    // +=========================================+
+    std::string fname = "<none>";
     if ((hdr.flg & static_cast<uint8_t>(Flags::FNAME)) != 0) {
-        // TODO: re-write
-        char c;
-        for (;;) {
-            if (fread(&c, sizeof(c), 1, fp) != 1) {
-                fprintf(stderr, "ERR: short read on FNAME\n");
-                fclose(fp);
-                exit(1);
-            } else if (c == '\0') {
-                break;
-            } else {
-                fname += c;
-            }
+        if (!read_null_terminated_string(fp, fname)) {
+            fprintf(stderr, "ERR: failed to read FNAME\n");
+            fclose(fp);
+            exit(1);
         }
     }
     printf("Original Filename: '%s'\n", fname.c_str());
+
+    // (if FLG.FCOMMENT set)
+    //
+    // +===================================+
+    // |...file comment, zero-terminated...| (more-->)
+    // +===================================+
+    std::string fcomment = "<none>";
+    if ((hdr.flg & static_cast<uint8_t>(Flags::FCOMMENT)) != 0) {
+        if (!read_null_terminated_string(fp, fcomment)) {
+            fprintf(stderr, "ERR: failed to read FCOMMENT\n");
+            fclose(fp);
+            exit(1);
+        }
+    }
+    printf("File comment: '%s'\n", fcomment.c_str());
 
     fclose(fp);
     return 0;
