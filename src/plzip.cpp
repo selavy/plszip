@@ -46,6 +46,98 @@ enum class Flags : uint8_t
     RESERV3  = 1u << 7,
 };
 
+// Operating System
+//      0 - FAT filesystem (MS-DOS, OS/2, NT/Win32)
+//      1 - Amiga
+//      2 - VMS (or OpenVMS)
+//      3 - Unix
+//      4 - VM/CMS
+//      5 - Atari TOS
+//      6 - HPFS filesystem (OS/2, NT)
+//      7 - Macintosh
+//      8 - Z-System
+//      9 - CP/M
+//     10 - TOPS-20
+//     11 - NTFS filesystem (NT)
+//     12 - QDOS
+//     13 - Acorn RISCOS
+//    255 - unknown
+
+enum class OperatingSystem : uint8_t
+{
+    FAT          = 0,
+    AMIGA        = 1,
+    VMS          = 2,
+    UNIX         = 3,
+    VM_CMS       = 4,
+    ATARI_TOS    = 5,
+    HPFS         = 6,
+    MACINTOSH    = 7,
+    Z_SYSTEM     = 8,
+    CP_M         = 9,
+    TOPS_20      = 10,
+    NTFS         = 11,
+    QDOS         = 12,
+    ACORN_RISCOS = 13,
+    UNKNOWN      = 255,
+};
+
+void print_operating_system_debug(uint8_t os) {
+    const char* name;
+    auto oss = static_cast<OperatingSystem>(os);
+    switch (oss) {
+        case OperatingSystem::FAT:
+            name = "FAT";
+            break;
+        case OperatingSystem::AMIGA:
+            name = "AMIGA";
+            break;
+        case OperatingSystem::VMS:
+            name = "VMS";
+            break;
+        case OperatingSystem::UNIX:
+            name = "UNIX";
+            break;
+        case OperatingSystem::VM_CMS:
+            name = "VM_CMS";
+            break;
+        case OperatingSystem::ATARI_TOS:
+            name = "ATARI_TOS";
+            break;
+        case OperatingSystem::HPFS:
+            name = "HPFS";
+            break;
+        case OperatingSystem::MACINTOSH:
+            name = "MACINTOSH";
+            break;
+        case OperatingSystem::Z_SYSTEM:
+            name = "Z_SYSTEM";
+            break;
+        case OperatingSystem::CP_M:
+            name = "CP_M";
+            break;
+        case OperatingSystem::TOPS_20:
+            name = "TOPS_20";
+            break;
+        case OperatingSystem::NTFS:
+            name = "NTFS";
+            break;
+        case OperatingSystem::QDOS:
+            name = "QDOS";
+            break;
+        case OperatingSystem::ACORN_RISCOS:
+            name = "ACORN_RISCOS";
+            break;
+        case OperatingSystem::UNKNOWN:
+            name = "UNKNOWN";
+            break;
+        default:
+            name = "unknown";
+            break;
+    }
+    printf("Operating System: %s (%u)\n", name, os);
+}
+
 void print_flags_debug(uint8_t flags) {
     printf("Flags: ");
     if ((flags & (uint8_t)Flags::FTEXT) != 0) {
@@ -207,6 +299,43 @@ int main(int argc, char** argv)
         }
     }
     printf("CRC16: %u (0x%04X)\n", crc16, crc16);
+
+    // Reserved FLG bits must be zero.
+    uint8_t mask = static_cast<uint8_t>(Flags::RESERV1) |
+                   static_cast<uint8_t>(Flags::RESERV2) |
+                   static_cast<uint8_t>(Flags::RESERV3);
+    if ((hdr.flg & mask) != 0) {
+        fprintf(stderr, "ERR: reserved bits are not 0\n");
+        fclose(fp);
+        exit(1);
+    }
+
+    // TODO: read time
+    //  MTIME (Modification TIME)
+    //     This gives the most recent modification time of the original
+    //     file being compressed.  The time is in Unix format, i.e.,
+    //     seconds since 00:00:00 GMT, Jan.  1, 1970.  (Note that this
+    //     may cause problems for MS-DOS and other systems that use
+    //     local rather than Universal time.)  If the compressed data
+    //     did not come from a file, MTIME is set to the time at which
+    //     compression started.  MTIME = 0 means no time stamp is
+    //     available.
+
+    // XFL (eXtra FLags)
+    //    These flags are available for use by specific compression
+    //    methods.  The "deflate" method (CM = 8) sets these flags as
+    //    follows:
+    //
+    //       XFL = 2 - compressor used maximum compression,
+    //                 slowest algorithm
+    //       XFL = 4 - compressor used fastest algorithm
+
+    // OS (Operating System)
+    //    This identifies the type of file system on which compression
+    //    took place.  This may be useful in determining end-of-line
+    //    convention for text files.  The currently defined values are
+    //    as follows:
+    print_operating_system_debug(hdr.os);
 
     fclose(fp);
     return 0;
