@@ -205,6 +205,18 @@ int main(int argc, char** argv)
     }
     // TODO: handle big endian platform
 
+    //  A compliant decompressor must check ID1, ID2, and CM, and
+    //  provide an error indication if any of these have incorrect
+    //  values.  It must examine FEXTRA/XLEN, FNAME, FCOMMENT and FHCRC
+    //  at least so it can skip over the optional fields if they are
+    //  present.  It need not examine any other part of the header or
+    //  trailer; in particular, a decompressor may ignore FTEXT and OS
+    //  and always produce binary output, and still be compliant.  A
+    //  compliant decompressor must give an error indication if any
+    //  reserved bit is non-zero, since such a bit could indicate the
+    //  presence of a new field that would cause subsequent data to be
+    //  interpreted incorrectly.
+
     printf("GzipHeader:\n");
     printf("\tid1   = %u (0x%02x)\n", hdr.id1, hdr.id1);
     printf("\tid2   = %u (0x%02x)\n", hdr.id2, hdr.id2);
@@ -336,6 +348,19 @@ int main(int argc, char** argv)
     //    convention for text files.  The currently defined values are
     //    as follows:
     print_operating_system_debug(hdr.os);
+
+    //  CRC32 (CRC-32)
+    //     This contains a Cyclic Redundancy Check value of the
+    //     uncompressed data computed according to CRC-32 algorithm
+    //     used in the ISO 3309 standard and in section 8.1.1.6.2 of
+    //     ITU-T recommendation V.42.  (See http://www.iso.ch for
+    //     ordering ISO documents. See gopher://info.itu.ch for an
+    //     online version of ITU-T V.42.)
+    //
+    //  ISIZE (Input SIZE)
+    //     This contains the size of the original (uncompressed) input
+    //     data modulo 2^32.
+
 
     fclose(fp);
     return 0;
