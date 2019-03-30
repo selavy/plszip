@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 //  +---+---+---+---+---+---+---+---+---+---+
 //  |ID1|ID2|CM |FLG|     MTIME     |XFL|OS | (more-->)
@@ -98,6 +99,30 @@ int main(int argc, char** argv)
     printf("\tos    = %u\n", hdr.os);
 
     print_flags_debug(hdr.flg);
+
+    if ((hdr.flg & static_cast<uint8_t>(Flags::FEXTRA)) != 0) {
+        fprintf(stderr, "ERR: FEXTRA flag not supported.\n");
+        fclose(fp);
+        exit(1);
+    }
+
+    std::string fname;
+    if ((hdr.flg & static_cast<uint8_t>(Flags::FNAME)) != 0) {
+        // TODO: re-write
+        char c;
+        for (;;) {
+            if (fread(&c, sizeof(c), 1, fp) != 1) {
+                fprintf(stderr, "ERR: short read on FNAME\n");
+                fclose(fp);
+                exit(1);
+            } else if (c == '\0') {
+                break;
+            } else {
+                fname += c;
+            }
+        }
+    }
+    printf("Original Filename: '%s'\n", fname.c_str());
 
     fclose(fp);
     return 0;
