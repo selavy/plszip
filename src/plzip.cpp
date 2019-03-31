@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 // TODO: better names?
 //  ID1 (IDentification 1)
@@ -210,6 +211,13 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
 
 int huffman_test_main()
 {
+    // TODO: Data Structure Rep: store the huffman encoding tree in an array where
+    // 0 = left, 1 = right, so do 0 => 2*n, 1 => 2*n+1. If a value is a leaf, then
+    // the corresponding character goes into that slot, otherwise put some sentinal
+    // value.
+    //
+    // For an FPGA representation, maybe just do a linear search everytime?
+
     printf("Huffman Decoding Test\n");
     printf("---------------------\n");
     printf("\n");
@@ -320,6 +328,15 @@ int huffman_test_main()
     return 0;
 }
 
+struct FileHandle
+{
+    FileHandle(FILE* f = nullptr) noexcept : fp(f) {}
+    ~FileHandle() noexcept { if (fp) { fclose(fp); } }
+    operator FILE* () noexcept { return fp; }
+    explicit operator bool() const noexcept { return fp != nullptr; }
+    FILE* fp;
+};
+
 int main(int argc, char** argv)
 {
     if (argc != 2) {
@@ -328,11 +345,18 @@ int main(int argc, char** argv)
     }
 
     const char* filename = argv[1];
-    FILE* fp = fopen(filename, "rb");
+    FileHandle fp = fopen(filename, "rb");
     if (!fp) {
         perror("fopen");
         exit(1);
     }
+
+    // // TODO: create output name based on input name
+    // FILE* output = fopen("output.txt", "wb");
+    // if (!output) {
+    //     perror("fopen");
+    //     exit(1);
+    // }
 
     //------------------------------------------------
     // Header
@@ -341,7 +365,6 @@ int main(int argc, char** argv)
     GzipHeader hdr;
     if (fread(&hdr, sizeof(hdr), 1, fp) != 1) {
         fprintf(stderr, "fread: short read\n");
-        fclose(fp);
         exit(1);
     }
     // TODO: handle big endian platform
@@ -369,12 +392,10 @@ int main(int argc, char** argv)
 
     if (hdr.id1 != ID1_GZIP) {
         fprintf(stderr, "Unsupported identifier #1: %u\n", hdr.id1);
-        fclose(fp);
         exit(0);
     }
     if (hdr.id2 != ID2_GZIP) {
         fprintf(stderr, "Unsupported identifier #2: %u\n", hdr.id2);
-        fclose(fp);
         exit(0);
     }
 
@@ -389,13 +410,11 @@ int main(int argc, char** argv)
         uint16_t xlen;
         if (fread(&xlen, sizeof(xlen), 1, fp) != 1) {
             fprintf(stderr, "ERR: short read on xlen\n");
-            fclose(fp);
             exit(1);
         }
         printf("XLEN = %u\n", xlen);
         // TODO: read xlen bytes
         fprintf(stderr, "ERR: FEXTRA flag not supported.\n");
-        fclose(fp);
         exit(1);
     }
 
@@ -408,7 +427,6 @@ int main(int argc, char** argv)
     if ((hdr.flg & static_cast<uint8_t>(Flags::FNAME)) != 0) {
         if (!read_null_terminated_string(fp, fname)) {
             fprintf(stderr, "ERR: failed to read FNAME\n");
-            fclose(fp);
             exit(1);
         }
     }
@@ -423,7 +441,6 @@ int main(int argc, char** argv)
     if ((hdr.flg & static_cast<uint8_t>(Flags::FCOMMENT)) != 0) {
         if (!read_null_terminated_string(fp, fcomment)) {
             fprintf(stderr, "ERR: failed to read FCOMMENT\n");
-            fclose(fp);
             exit(1);
         }
     }
@@ -447,7 +464,6 @@ int main(int argc, char** argv)
     if ((hdr.flg & static_cast<uint8_t>(Flags::FHCRC)) != 0) {
         if (fread(&crc16, sizeof(crc16), 1, fp) != 1) {
             fprintf(stderr, "ERR: failed to read CRC16\n");
-            fclose(fp);
             exit(1);
         }
     }
@@ -459,7 +475,6 @@ int main(int argc, char** argv)
                    static_cast<uint8_t>(Flags::RESERV3);
     if ((hdr.flg & mask) != 0) {
         fprintf(stderr, "ERR: reserved bits are not 0\n");
-        fclose(fp);
         exit(1);
     }
 
@@ -495,12 +510,12 @@ int main(int argc, char** argv)
     //------------------------------------------------
 
     BlockHeader blkhdr;
+    std::vector<char> copy_buffer;
 
     for (;;) {
         // TODO: need to only read 3 bits from stream, save other 5 bits
         if (fread(&blkhdr, sizeof(blkhdr), 1, fp) != 1) {
             fprintf(stderr, "ERR: short read on block header\n");
-            fclose(fp);
             exit(1);
         }
 
@@ -516,22 +531,27 @@ int main(int argc, char** argv)
             uint16_t nlen;
             if (fread(&len, sizeof(len), 1, fp) != 1) {
                 fprintf(stderr, "ERR: short read on len\n");
-                fclose(fp);
                 exit(1);
             }
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
                 fprintf(stderr, "ERR: short read on nlen\n");
-                fclose(fp);
                 exit(1);
             }
-            // TODO: copy `len` bytes directly to output
+
+            // copy `len` bytes directly to output
+            copy_buffer.assign('\0', len);
+            if (fread(copy_buffer.data(), len, 1, fp) != 1) {
+                fprintf(stderr, "ERR: short read on uncompressed data\n");
+                exit(1);
+            }
+
+            // TODO: write to file instead
         } else if (blkhdr.btype == static_cast<uint8_t>(BType::FIXED_HUFFMAN)) {
             printf("Block Encoding: Fixed Huffman\n");
         } else if (blkhdr.btype == static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN)) {
             printf("Block Encoding: Dynamic Huffman\n");
         } else {
             fprintf(stderr, "ERR: unsupported block encoding.\n");
-            fclose(fp);
             exit(1);
         }
 
@@ -556,8 +576,6 @@ int main(int argc, char** argv)
     //  ISIZE (Input SIZE)
     //     This contains the size of the original (uncompressed) input
     //     data modulo 2^32.
-
-    fclose(fp);
 
     printf("\n\n\n");
     if (huffman_test_main() != 0) {
