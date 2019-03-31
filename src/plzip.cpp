@@ -82,7 +82,8 @@ enum class OperatingSystem : uint8_t
     UNKNOWN      = 255,
 };
 
-void print_operating_system_debug(uint8_t os) {
+void print_operating_system_debug(uint8_t os)
+{
     const char* name;
     auto oss = static_cast<OperatingSystem>(os);
     switch (oss) {
@@ -138,7 +139,8 @@ void print_operating_system_debug(uint8_t os) {
     printf("Operating System: %s (%u)\n", name, os);
 }
 
-void print_flags_debug(uint8_t flags) {
+void print_flags_debug(uint8_t flags)
+{
     printf("Flags: ");
     if ((flags & (uint8_t)Flags::FTEXT) != 0) {
         printf("FTEXT ");
@@ -168,7 +170,8 @@ void print_flags_debug(uint8_t flags) {
 }
 
 // TODO: get Boost.Outcome
-bool read_null_terminated_string(FILE* fp, std::string& result) {
+bool read_null_terminated_string(FILE* fp, std::string& result)
+{
     char c;
     result = "";
     for (;;) {
@@ -181,6 +184,114 @@ bool read_null_terminated_string(FILE* fp, std::string& result) {
         result += c;
     }
     return true;
+}
+
+int huffman_test_main()
+{
+    constexpr size_t MaxBitLength = 32;
+    const char alpha[] = { 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H' };
+    const size_t nbits[] = { 3, 3, 3, 3, 3, 2, 4, 4 };
+    const size_t nalpha = sizeof(alpha);
+
+    if (nalpha != sizeof(alpha) || nalpha != (sizeof(nbits)/sizeof(nbits[0]))) {
+        fprintf(stderr, "ERR: alphabet length and # of bit lengths don't match\n");
+        return 1;
+    }
+
+    // 1) Count the number of codes for each code length. Let bl_count[N] be the number of codes of length N, N >= 1.
+    static size_t bl_count[MaxBitLength];
+    size_t max_bit_length = 0;
+    memset(&bl_count[0], 0, sizeof(bl_count));
+    for (size_t i = 0; i < nalpha; ++i) {
+        if (nbits[i] >= MaxBitLength) {
+            fprintf(stderr, "ERR: bit length too long: %zu\n", nbits[i]);
+            return 1;
+        }
+        ++bl_count[nbits[i]];
+        if (nbits[i] > max_bit_length) {
+            max_bit_length = nbits[i];
+        }
+    }
+
+    // DEBUG
+    printf("N      bl_count[N]\n");
+    printf("-      -----------\n");
+    for (size_t i = 1; i <= max_bit_length; ++i) {
+        printf("%zu      %zu\n", i, bl_count[i]);
+    }
+    printf("\n");
+    // GUBED
+
+    // 2) Find the numerical value of the smallest code for each code length:
+    // code = 0;
+    // bl_count[0] = 0;
+    // for (bits = 1; bits <= MAX_BITS; bits++) {
+    //     code = (code + bl_count[bits-1]) << 1;
+    //     next_code[bits] = code;
+    // }
+    static uint32_t next_code[MaxBitLength];
+    memset(&next_code[0], 0, sizeof(next_code));
+    bl_count[0] = 0;
+    uint32_t code = 0;
+    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
+        code = (code + bl_count[bits-1]) << 1;
+        next_code[bits] = code;
+    }
+
+    // DEBUG
+    printf("N      next_code[N]\n");
+    printf("-      -----------\n");
+    for (size_t i = 1; i <= max_bit_length; ++i) {
+        printf("%zu      %u\n", i, next_code[i]);
+    }
+    printf("\n");
+    // GUBED
+
+    // N      next_code[N]
+    // -      ------------
+    // 1      0  => 0000
+    // 2      0  => 0000
+    // 3      2  => 0010
+    // 4      14 => 1110
+
+    // 3) Assign numerical values to all codes, using consecutive values for all codes of the same length with
+    // the base values determined at step 2.  Codes that are never used (which have a bit length of zero) must
+    // not be assigned a value.
+    // for (n = 0;  n <= max_code; n++) {
+    //     len = tree[n].Len;
+    //     if (len != 0) {
+    //         tree[n].Code = next_code[len];
+    //         next_code[len]++;
+    //     }
+    // }
+    static uint32_t codes[512];
+    memset(&codes[0], 0, sizeof(codes));
+    for (size_t i = 0; i < nalpha; ++i) {
+        size_t len = nbits[i];
+        if (len != 0) {
+            codes[i] = next_code[len]++;
+        }
+    }
+
+    printf("Symbol Length   Code\n");
+    printf("------ ------   ----\n");
+    for (size_t i = 0; i < nalpha; ++i) {
+        printf("%c      %zu        %u\n", alpha[i], nbits[i], codes[i]);
+    }
+    printf("\n");
+
+    // Symbol Length   Code
+    // ------ ------   ----
+    // A       3        010
+    // B       3        011
+    // C       3        100
+    // D       3        101
+    // E       3        110
+    // F       2         00
+    // G       4       1110
+    // H       4       1111
+
+    return 0;
 }
 
 int main(int argc, char** argv)
@@ -361,7 +472,12 @@ int main(int argc, char** argv)
     //     This contains the size of the original (uncompressed) input
     //     data modulo 2^32.
 
-
     fclose(fp);
+
+    if (huffman_test_main() != 0) {
+        fprintf(stderr, "ERR: huffman_test_main failed\n");
+        exit(1);
+    }
+
     return 0;
 }
