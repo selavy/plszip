@@ -497,6 +497,7 @@ int main(int argc, char** argv)
     BlockHeader blkhdr;
 
     for (;;) {
+        // TODO: need to only read 3 bits from stream, save other 5 bits
         if (fread(&blkhdr, sizeof(blkhdr), 1, fp) != 1) {
             fprintf(stderr, "ERR: short read on block header\n");
             fclose(fp);
@@ -507,6 +508,32 @@ int main(int argc, char** argv)
         printf("\tbfinal = %u\n", blkhdr.bfinal);
         printf("\tbtype  = %u\n", blkhdr.btype);
         printf("\n");
+
+        if (blkhdr.btype == BType::NO_COMPRESSION) {
+            printf("Block Encoding: No Compression\n");
+            // discard remaining bits in first byte
+            uint16_t len;
+            uint16_t nlen;
+            if (fread(&len, sizeof(len), 1, fp) != 1) {
+                fprintf(stderr, "ERR: short read on len\n");
+                fclose(fp);
+                exit(1);
+            }
+            if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
+                fprintf(stderr, "ERR: short read on nlen\n");
+                fclose(fp);
+                exit(1);
+            }
+            // TODO: copy `len` bytes directly to output
+        } else if (blkhdr.btype == BType::FIXED_HUFFMAN) {
+            printf("Block Encoding: Fixed Huffman\n");
+        } else if (blkhdr.btype == BType::DYNAMIC_HUFFMAN) {
+            printf("Block Encoding: Dynamic Huffman\n");
+        } else {
+            fprintf(stderr, "ERR: unsupported block encoding.\n");
+            fclose(fp);
+            exit(1);
+        }
 
         if (blkhdr.bfinal) {
             printf("Processed final compressed block.\n");
