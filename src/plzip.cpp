@@ -210,6 +210,10 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
 
 int huffman_test_main()
 {
+    printf("Huffman Decoding Test\n");
+    printf("---------------------\n");
+    printf("\n");
+
     constexpr size_t MaxBitLength = 32;
     const char alpha[] = { 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H' };
     const size_t nbits[] = { 3, 3, 3, 3, 3, 2, 4, 4 };
@@ -491,16 +495,24 @@ int main(int argc, char** argv)
     //------------------------------------------------
 
     BlockHeader blkhdr;
-    if (fread(&blkhdr, sizeof(blkhdr), 1, fp) != 1) {
-        fprintf(stderr, "ERR: short read on block header\n");
-        fclose(fp);
-        exit(1);
-    }
 
-    printf("BlockHeader:\n");
-    printf("\tbfinal = %u\n", blkhdr.bfinal);
-    printf("\tbtype  = %u\n", blkhdr.btype);
-    printf("\n");
+    for (;;) {
+        if (fread(&blkhdr, sizeof(blkhdr), 1, fp) != 1) {
+            fprintf(stderr, "ERR: short read on block header\n");
+            fclose(fp);
+            exit(1);
+        }
+
+        printf("BlockHeader:\n");
+        printf("\tbfinal = %u\n", blkhdr.bfinal);
+        printf("\tbtype  = %u\n", blkhdr.btype);
+        printf("\n");
+
+        if (blkhdr.bfinal) {
+            printf("Processed final compressed block.\n");
+            break;
+        }
+    }
 
     //------------------------------------------------
     // Footer
@@ -520,6 +532,7 @@ int main(int argc, char** argv)
 
     fclose(fp);
 
+    printf("\n\n\n");
     if (huffman_test_main() != 0) {
         fprintf(stderr, "ERR: huffman_test_main failed\n");
         exit(1);
