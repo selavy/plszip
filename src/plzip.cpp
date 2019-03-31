@@ -4,6 +4,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <libgen.h>
 
 // TODO: better names?
 //  ID1 (IDentification 1)
@@ -337,27 +338,10 @@ struct FileHandle
     FILE* fp;
 };
 
-std::string make_output_filename(const char* filename)
-{
-    if (!filename) {
-        return "output.txt";
-    }
-    size_t len = strlen(filename);
-    const char* extension = ".gz";
-    size_t extlen = strlen(extension);
-    if (len > extlen && strcmp(filename + len - extlen, extension) == 0) {
-        return { filename, len - extlen };
-    } else {
-        std::string result{ filename, len };
-        result += ".out";
-        return result;
-    }
-}
-
 int main(int argc, char** argv)
 {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s [FILE]\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s [FILE] [OUT]\n", argv[0]);
         exit(0);
     }
 
@@ -368,20 +352,12 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    std::string output_filename = make_output_filename(input_filename);
-    printf("Output filename: '%s'\n", output_filename.c_str());
-    FileHandle output = fopen(output_filename.c_str(), "wb");
+    const char* output_filename = argv[2];
+    FileHandle output = fopen(output_filename, "wb");
     if (!fp) {
         perror("fopen");
         exit(1);
     }
-
-    // // TODO: create output name based on input name
-    // FILE* output = fopen("output.txt", "wb");
-    // if (!output) {
-    //     perror("fopen");
-    //     exit(1);
-    // }
 
     //------------------------------------------------
     // Header
@@ -563,14 +539,18 @@ int main(int argc, char** argv)
                 exit(1);
             }
 
+            // TODO: faster API for copying from input to output? Might be on non-aligned
+            //       address though.
             // copy `len` bytes directly to output
             copy_buffer.assign('\0', len);
             if (fread(copy_buffer.data(), len, 1, fp) != 1) {
                 fprintf(stderr, "ERR: short read on uncompressed data\n");
                 exit(1);
             }
-
-            // TODO: write to file instead
+            if (fwrite(copy_buffer.data(), len, 1, output) != 1) {
+                fprintf(stderr, "ERR: short write of uncompressed data\n");
+                exit(1);
+            }
         } else if (blkhdr.btype == static_cast<uint8_t>(BType::FIXED_HUFFMAN)) {
             printf("Block Encoding: Fixed Huffman\n");
         } else if (blkhdr.btype == static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN)) {
