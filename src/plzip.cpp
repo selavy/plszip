@@ -509,7 +509,7 @@ int main(int argc, char** argv)
         printf("\tbtype  = %u\n", blkhdr.btype);
         printf("\n");
 
-        if (blkhdr.btype == BType::NO_COMPRESSION) {
+        if (blkhdr.btype == static_cast<uint8_t>(BType::NO_COMPRESSION)) {
             printf("Block Encoding: No Compression\n");
             // discard remaining bits in first byte
             uint16_t len;
@@ -525,9 +525,9 @@ int main(int argc, char** argv)
                 exit(1);
             }
             // TODO: copy `len` bytes directly to output
-        } else if (blkhdr.btype == BType::FIXED_HUFFMAN) {
+        } else if (blkhdr.btype == static_cast<uint8_t>(BType::FIXED_HUFFMAN)) {
             printf("Block Encoding: Fixed Huffman\n");
-        } else if (blkhdr.btype == BType::DYNAMIC_HUFFMAN) {
+        } else if (blkhdr.btype == static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN)) {
             printf("Block Encoding: Dynamic Huffman\n");
         } else {
             fprintf(stderr, "ERR: unsupported block encoding.\n");
