@@ -82,6 +82,28 @@ enum class OperatingSystem : uint8_t
     UNKNOWN      = 255,
 };
 
+// Each block of compressed data begins with 3 header bits containing the following data:
+// first bit       BFINAL
+// next 2 bits     BTYPE
+struct BlockHeader
+{
+    uint8_t bfinal : 1;
+    uint8_t btype  : 2;
+} __attribute__((packed));
+
+// BTYPE specifies how the data are compressed, as follows:
+// 00 - no compression
+// 01 - compressed with fixed Huffman codes
+// 10 - compressed with dynamic Huffman codes
+// 11 - reserved (error)
+enum class BType : uint8_t
+{
+    NO_COMPRESSION   = 0x0u,
+    FIXED_HUFFMAN    = 0x1u,
+    DYNAMIC_HUFFMAN  = 0x2u,
+    RESERVED         = 0x3u,
+};
+
 void print_operating_system_debug(uint8_t os)
 {
     const char* name;
@@ -308,6 +330,10 @@ int main(int argc, char** argv)
         exit(1);
     }
 
+    //------------------------------------------------
+    // Header
+    //------------------------------------------------
+
     GzipHeader hdr;
     if (fread(&hdr, sizeof(hdr), 1, fp) != 1) {
         fprintf(stderr, "fread: short read\n");
@@ -459,6 +485,26 @@ int main(int argc, char** argv)
     //    convention for text files.  The currently defined values are
     //    as follows:
     print_operating_system_debug(hdr.os);
+
+    //------------------------------------------------
+    // Read Compressed Data
+    //------------------------------------------------
+
+    BlockHeader blkhdr;
+    if (fread(&blkhdr, sizeof(blkhdr), 1, fp) != 1) {
+        fprintf(stderr, "ERR: short read on block header\n");
+        fclose(fp);
+        exit(1);
+    }
+
+    printf("BlockHeader:\n");
+    printf("\tbfinal = %u\n", blkhdr.bfinal);
+    printf("\tbtype  = %u\n", blkhdr.btype);
+    printf("\n");
+
+    //------------------------------------------------
+    // Footer
+    //------------------------------------------------
 
     //  CRC32 (CRC-32)
     //     This contains a Cyclic Redundancy Check value of the
