@@ -337,6 +337,23 @@ struct FileHandle
     FILE* fp;
 };
 
+std::string make_output_filename(const char* filename)
+{
+    if (!filename) {
+        return "output.txt";
+    }
+    size_t len = strlen(filename);
+    const char* extension = ".gz";
+    size_t extlen = strlen(extension);
+    if (len > extlen && strcmp(filename + len - extlen, extension) == 0) {
+        return { filename, len - extlen };
+    } else {
+        std::string result{ filename, len };
+        result += ".out";
+        return result;
+    }
+}
+
 int main(int argc, char** argv)
 {
     if (argc != 2) {
@@ -344,8 +361,16 @@ int main(int argc, char** argv)
         exit(0);
     }
 
-    const char* filename = argv[1];
-    FileHandle fp = fopen(filename, "rb");
+    const char* input_filename = argv[1];
+    FileHandle fp = fopen(input_filename, "rb");
+    if (!fp) {
+        perror("fopen");
+        exit(1);
+    }
+
+    std::string output_filename = make_output_filename(input_filename);
+    printf("Output filename: '%s'\n", output_filename.c_str());
+    FileHandle output = fopen(output_filename.c_str(), "wb");
     if (!fp) {
         perror("fopen");
         exit(1);
