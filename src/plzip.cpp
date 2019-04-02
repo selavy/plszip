@@ -214,6 +214,61 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
 constexpr uint16_t EmptySentinel = UINT16_MAX;
 std::vector<uint16_t> g_FixedHuffmanTree;
 
+std::vector<uint16_t> g_ExtraBits;
+std::vector<uint16_t> g_BaseLengths;
+
+bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& base_lengths)
+{
+//       Extra               Extra               Extra
+//  Code Bits Length(s) Code Bits Lengths   Code Bits Length(s)
+//  ---- ---- ------     ---- ---- -------   ---- ---- -------
+//   257   0     3       267   1   15,16     277   4   67-82
+//   258   0     4       268   1   17,18     278   4   83-98
+//   259   0     5       269   2   19-22     279   4   99-114
+//   260   0     6       270   2   23-26     280   4  115-130
+//   261   0     7       271   2   27-30     281   5  131-162
+//   262   0     8       272   2   31-34     282   5  163-194
+//   263   0     9       273   3   35-42     283   5  195-226
+//   264   0    10       274   3   43-50     284   5  227-257
+//   265   1  11,12      275   3   51-58     285   0    258
+//   266   1  13,14      276   3   59-66
+
+    // TODO: can subtract 257
+    constexpr size_t Elements = 259;
+    extra_bits.assign(Elements, 0);
+    base_lengths.assign(Elements, 0);
+    for (size_t i = 257; i <= 264; ++i) {
+        extra_bits[i] = 0;
+        base_lengths[i] = i - 257 + 3;
+    }
+    for (size_t i = 265; i <= 268; ++i) {
+        extra_bits[i] = 1;
+        base_lengths[i] = (i - 265 + 11) + (i - 256)*2;
+    }
+    for (size_t i = 269; i <= 272; ++i) {
+        extra_bits[i] = 2;
+        base_lengths[i] = (i - 269 + 19) + (i - 269)*4;
+    }
+    for (size_t i = 273; i <= 276; ++i) {
+        extra_bits[i] = 3;
+        base_lengths[i] = (i - 273 + 35) + (i - 273)*8;
+    }
+    for (size_t i = 277; i <= 280; ++i) {
+        extra_bits[i] = 4;
+        base_lengths[i] = (i - 277 + 67) + (i - 273)*16;
+    }
+    for (size_t i = 281; i <= 284; ++i) {
+        extra_bits[i] = 5;
+        base_lengths[i] = (i - 281 + 131) + (i - 281)*32;
+    }
+    for (size_t i = 285; i <= 285; ++i) {
+        extra_bits[i] = 0;
+        base_lengths[i] = 258;
+    }
+
+    return true;
+}
+
 bool init_huffman_tree(std::vector<uint16_t>& tree)
 {
     constexpr size_t MaxBitLength = 16;
@@ -444,6 +499,8 @@ int huffman_test_main()
 struct FileHandle
 {
     FileHandle(FILE* f = nullptr) noexcept : fp(f) {}
+    FileHandle(FileHandle&) noexcept = delete;
+    FileHandle& operator=(FileHandle&) noexcept = delete;
     ~FileHandle() noexcept { if (fp) { fclose(fp); } }
     operator FILE* () noexcept { return fp; }
     explicit operator bool() const noexcept { return fp != nullptr; }
@@ -474,6 +531,16 @@ struct BitReader
     uint8_t buffer;
 };
 
+uint16_t read_huffman_value(const uint16_t* huffman_tree, BitReader& reader)
+{
+    size_t index = 1;
+    do {
+        index *= 2;
+        index += reader.GetBit() ? 1 : 0;
+    } while (huffman_tree[index] == EmptySentinel);
+    return huffman_tree[index];
+}
+
 int main(int argc, char** argv)
 {
     if (argc != 3) {
@@ -482,8 +549,11 @@ int main(int argc, char** argv)
     }
 
     if (!init_huffman_tree(g_FixedHuffmanTree)) {
-        fprintf(stderr, "Failed to initialize Fixed Huffman decoding tree\n");
+        fprintf(stderr, "ERR: failed to initialize fixed huffman decoding tree\n");
         exit(1);
+    }
+    if (!init_huffman_lengths(g_ExtraBits, g_BaseLengths)) {
+        fprintf(stderr, "ERR: failed to initialize fixed huffman data\n");
     }
 
     const char* input_filename = argv[1];
@@ -655,7 +725,7 @@ int main(int argc, char** argv)
     // Read Compressed Data
     //------------------------------------------------
 
-    std::vector<char> copy_buffer;
+    std::vector<uint8_t> copy_buffer;
     for (;;) {
         BitReader reader(fp);
         uint8_t bfinal = reader.GetBit();
@@ -663,6 +733,7 @@ int main(int argc, char** argv)
         btype_ |= reader.GetBit() << 0;
         btype_ |= reader.GetBit() << 1;
         BType btype = static_cast<BType>(btype_);
+        copy_buffer.clear();
 
         printf("BlockHeader:\n");
         printf("\tbfinal = %u\n", bfinal);
@@ -696,21 +767,33 @@ int main(int argc, char** argv)
                 exit(1);
             }
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
-            //  decode literal/length value from input stream
-            //  if value < 256
-            //     copy value (literal byte) to output stream
-            //  otherwise
-            //     if value = end of block (256)
-            //        break from loop
-            //     otherwise (value = 257..285)
-            //        decode distance from input stream
-            //
-            //        move backwards distance bytes in the output
-            //        stream, and copy length bytes from this
-            //        position to the output stream.
+            // if compressed with dynamic Huffman codes
+            //    read representation of code trees (see
+            //       subsection below)
+            // loop (until end of block code recognized)
+            //    decode literal/length value from input stream
+            //    if value < 256
+            //       copy value (literal byte) to output stream
+            //    otherwise
+            //       if value = end of block (256)
+            //          break from loop
+            //       otherwise (value = 257..285)
+            //          decode distance from input stream
 
+            //          move backwards distance bytes in the output
+            //          stream, and copy length bytes from this
+            //          position to the output stream.
+            // end loop
+
+            const uint16_t* huffman_tree;
+            const uint16_t* extra_bits;
+            const uint16_t* base_lengths;
+            copy_buffer.clear();
             if (btype == BType::FIXED_HUFFMAN) {
                 printf("Block Encoding: Fixed Huffman\n");
+                huffman_tree = g_FixedHuffmanTree.data();
+                extra_bits = g_ExtraBits.data();
+                base_lengths = g_BaseLengths.data();
             } else {
                 printf("Block Encoding: Dynamic Huffman\n");
                 fprintf(stderr, "ERR: dynamic huffman not supported yet\n");
@@ -718,26 +801,32 @@ int main(int argc, char** argv)
             }
 
             for (;;) {
-                size_t index = 1;
-                do {
-                    index *= 2;
-                    index += reader.GetBit() ? 1 : 0;
-                } while (g_FixedHuffmanTree[index] == EmptySentinel);
-                uint16_t value = g_FixedHuffmanTree[index];
-                // TEMP TEMP
-                printf("FOUND VALUE: %u (%c)\n", value, (char)value);
+                uint16_t value = read_huffman_value(huffman_tree, reader);
                 if (value < 256) {
-                    if (fwrite(&value, sizeof(value), 1, output) != 1) {
-                        fprintf(stderr, "ERR: short write");
-                        exit(1);
-                    }
+                    copy_buffer.push_back(static_cast<uint8_t>(value));
                 } else if (value == 256) {
                     // TEMP TEMP
                     printf("Found end of compressed block!\n");
                     break;
                 } else if (value < 285) {
-                    fprintf(stderr, "ERR: distance decoding not supported yet!\n");
-                    exit(1);
+                    size_t length = base_lengths[value];
+                    size_t extra = 0;
+                    size_t distance = 0;
+                    for (int i = 0; i < extra_bits[value]; ++i) {
+                        extra <<= 1;
+                        extra |= reader.GetBit() ? 1 : 0;
+                    }
+                    length += extra;
+                    for (int i = 0; i < 5; ++i) {
+                        distance <<= 1;
+                        distance |= reader.GetBit() ? 1 : 0;
+                    }
+                    // TODO: is there a more efficient way to copy from a portion of the buffer
+                    //       to another? I could pre-allocate the size, then memcpy the section over?
+                    size_t start_index = copy_buffer.size() - distance - 1;
+                    for (size_t i = 0; i < length; ++i) {
+                        copy_buffer.push_back(copy_buffer[start_index + i]);
+                    }
                 } else {
                     fprintf(stderr, "ERR: invalid fixed huffman value: %u\n", value);
                     exit(1);
@@ -745,6 +834,11 @@ int main(int argc, char** argv)
             }
         } else {
             fprintf(stderr, "ERR: unsupported block encoding: %u\n", (uint8_t)btype);
+            exit(1);
+        }
+
+        if (fwrite(copy_buffer.data(), copy_buffer.size(), 1, output) != 1) {
+            fprintf(stderr, "ERR: short write\n");
             exit(1);
         }
 
