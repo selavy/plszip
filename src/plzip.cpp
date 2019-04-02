@@ -90,9 +90,9 @@ enum class OperatingSystem : uint8_t
 // next 2 bits     BTYPE
 struct BlockHeader
 {
-    uint8_t bfinal : 1;
-    uint8_t btype  : 2;
-} __attribute__((packed));
+    uint8_t bfinal; // : 1
+    uint8_t btype;  // : 2
+};
 
 // BTYPE specifies how the data are compressed, as follows:
 // 00 - no compression
@@ -450,6 +450,30 @@ struct FileHandle
     FILE* fp;
 };
 
+struct BitReader
+{
+    BitReader(FILE* f) : fp(f), index(sizeof(buffer)*8), buffer(0) {}
+
+    // TODO: error handling
+    bool GetBit()
+    {
+        if (index >= sizeof(buffer)*8) {
+            if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
+                fprintf(stderr, "BitReader: ERR: short read\n");
+                exit(1);
+            }
+            index = 0;
+        }
+        bool result = (buffer & (1u << index)) != 0;
+        ++index;
+        return result;
+    }
+
+    FILE*   fp;
+    uint8_t index;
+    uint8_t buffer;
+};
+
 int main(int argc, char** argv)
 {
     if (argc != 3) {
@@ -536,7 +560,6 @@ int main(int argc, char** argv)
         if (fread(buffer.data(), xlen, 1, fp) != 1) {
             fprintf(stderr, "ERR: short read on FEXTRA bytes\n");
         }
-        // TODO: read xlen bytes
         fprintf(stderr, "ERR: FEXTRA flag not supported.\n");
         exit(1);
     }
@@ -636,11 +659,16 @@ int main(int argc, char** argv)
     std::vector<char> copy_buffer;
 
     for (;;) {
-        // TODO: need to only read 3 bits from stream, save other 5 bits
-        if (fread(&blkhdr, sizeof(blkhdr), 1, fp) != 1) {
-            fprintf(stderr, "ERR: short read on block header\n");
-            exit(1);
-        }
+        BitReader reader(fp);
+        blkhdr.bfinal = reader.GetBit();
+        blkhdr.btype = 0;
+        blkhdr.btype |= reader.GetBit() << 1;
+        blkhdr.btype |= reader.GetBit() << 0;
+        // // TODO: need to only read 3 bits from stream, save other 5 bits
+        // if (fread(&blkhdr, sizeof(blkhdr), 1, fp) != 1) {
+        //     fprintf(stderr, "ERR: short read on block header\n");
+        //     exit(1);
+        // }
 
         printf("BlockHeader:\n");
         printf("\tbfinal = %u\n", blkhdr.bfinal);
@@ -689,7 +717,32 @@ int main(int argc, char** argv)
             //        stream, and copy length bytes from this
             //        position to the output stream.
 
-
+            for (;;) {
+                size_t index = 1;
+                do {
+                    index *= 2;
+                    index += reader.GetBit() ? 1 : 0;
+                } while (g_FixedHuffmanTree[index] == EmptySentinel);
+                uint16_t value = g_FixedHuffmanTree[index];
+                // TEMP TEMP
+                printf("FOUND VALUE: %u\n", value);
+                if (value < 256) {
+                    if (fwrite(&value, sizeof(value), 1, output) != 1) {
+                        fprintf(stderr, "ERR: short write");
+                        exit(1);
+                    }
+                } else if (value == 256) {
+                    // TEMP TEMP
+                    printf("Found end of compressed block!\n");
+                    break;
+                } else if (value < 285) {
+                    fprintf(stderr, "ERR: distance decoding not supported yet!\n");
+                    exit(1);
+                } else {
+                    fprintf(stderr, "ERR: invalid fixed huffman value: %u\n", value);
+                    exit(1);
+                }
+            }
         } else if (blkhdr.btype == static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN)) {
             printf("Block Encoding: Dynamic Huffman\n");
         } else {
