@@ -2,7 +2,7 @@
 
 PLZIP=../build/src/plzip
 
-TESTS=(test1 test2)
+TESTS=(test1 test2 test3)
 
 # TEST=test1
 for TEST in ${TESTS[@]};
