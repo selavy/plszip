@@ -213,7 +213,6 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
 
 constexpr uint16_t EmptySentinel = UINT16_MAX;
 std::vector<uint16_t> g_FixedHuffmanTree;
-
 std::vector<uint16_t> g_ExtraBits;
 std::vector<uint16_t> g_BaseLengths;
 
@@ -234,7 +233,7 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
 //   266   1  13,14      276   3   59-66
 
     // TODO: can subtract 257
-    constexpr size_t Elements = 259;
+    constexpr size_t Elements = 285;
     extra_bits.assign(Elements, 0);
     base_lengths.assign(Elements, 0);
     for (size_t i = 257; i <= 264; ++i) {
@@ -467,32 +466,6 @@ int huffman_test_main()
     // G       4       1110
     // H       4       1111
 
-#if 0
-    // table size = 2**(max_bit_length) + 1)
-    static char tree[32];
-    memset(&tree[0], ' ', sizeof(tree));
-
-    for (size_t i = 0; i < nalpha; ++i) {
-        char letter = alpha[i];
-        size_t len = nbits[i];
-        uint32_t code = codes[i];
-
-        size_t idx = 1;
-        printf("Handling %c -> %zu -> %u\n", letter, len, code);
-        for (int j = len - 1; j >= 0; --j) {
-            bool isset = (code & (1u << j)) != 0;
-            printf("BitSet? %d\n", isset);
-            idx = 2*idx + int(isset);
-        }
-        printf("Index = %zu\n", idx);
-        tree[idx] = letter;
-    }
-
-
-    for (size_t i = 0; i < sizeof(tree); ++i) {
-        printf("%zu\t%c\n", i, tree[i]);
-    }
-#endif
     return 0;
 }
 
@@ -543,7 +516,12 @@ uint16_t read_huffman_value(const uint16_t* huffman_tree, BitReader& reader)
 
 int main(int argc, char** argv)
 {
-    if (argc != 3) {
+    const char* output_filename;
+    if (argc == 2) {
+        output_filename = nullptr;
+    } else if (argc == 3) {
+        output_filename = argv[2];
+    } else {
         fprintf(stderr, "Usage: %s [FILE] [OUT]\n", argv[0]);
         exit(0);
     }
@@ -563,9 +541,8 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    const char* output_filename = argv[2];
-    FileHandle output = fopen(output_filename, "wb");
-    if (!fp) {
+    FileHandle output = output_filename ? fopen(output_filename, "wb") : stdout;
+    if (!output) {
         perror("fopen");
         exit(1);
     }
@@ -779,7 +756,6 @@ int main(int argc, char** argv)
             //          break from loop
             //       otherwise (value = 257..285)
             //          decode distance from input stream
-
             //          move backwards distance bytes in the output
             //          stream, and copy length bytes from this
             //          position to the output stream.
