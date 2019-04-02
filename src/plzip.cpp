@@ -531,6 +531,11 @@ int main(int argc, char** argv)
             exit(1);
         }
         printf("XLEN = %u\n", xlen);
+        std::vector<uint8_t> buffer;
+        buffer.assign(xlen, 0u);
+        if (fread(buffer.data(), xlen, 1, fp) != 1) {
+            fprintf(stderr, "ERR: short read on FEXTRA bytes\n");
+        }
         // TODO: read xlen bytes
         fprintf(stderr, "ERR: FEXTRA flag not supported.\n");
         exit(1);
