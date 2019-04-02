@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <libgen.h>
+#include <cassert>
 
 // TODO: better names?
 //  ID1 (IDentification 1)
@@ -210,6 +211,91 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
     return true;
 }
 
+constexpr uint16_t EmptySentinel = UINT16_MAX;
+std::vector<uint16_t> g_FixedHuffmanTree;
+
+bool init_huffman_tree(std::vector<uint16_t>& tree)
+{
+    constexpr size_t MaxBitLength = 16;
+    static size_t bl_count[MaxBitLength];
+    static uint16_t next_code[MaxBitLength];
+    constexpr size_t AlphaLen = 288;
+    static size_t nbits[AlphaLen];
+    static uint16_t codes[AlphaLen];
+
+    memset(&nbits[0], 0, sizeof(nbits));
+
+    //   Lit Value    Bits        Codes
+    //   ---------    ----        -----
+    //     0 - 143     8          00110000 through
+    //                            10111111
+    //   144 - 255     9          110010000 through
+    //                            111111111
+    //   256 - 279     7          0000000 through
+    //                            0010111
+    //   280 - 287     8          11000000 through
+    //                            11000111
+    for (size_t i = 0; i <= 143; ++i) {
+        nbits[i] = 8;
+    }
+    for (size_t i = 144; i <= 255; ++i) {
+        nbits[i] = 9;
+    }
+    for (size_t i = 256; i <= 279; ++i) {
+        nbits[i] = 7;
+    }
+    for (size_t i = 280; i <= 287; ++i) {
+        nbits[i] = 8;
+    }
+
+    // 1) Count the number of codes for each code length. Let bl_count[N] be the number of codes of length N, N >= 1.
+    memset(&bl_count[0], 0, sizeof(bl_count));
+    size_t max_bit_length = 0;
+    for (size_t i = 0; i < AlphaLen; ++i) {
+        assert(nbits[i] <= MaxBitLength && "Unsupported bit length");
+        ++bl_count[nbits[i]];
+        if (nbits[i] > max_bit_length) {
+            max_bit_length = nbits[i];
+        }
+    }
+    bl_count[0] = 0;
+
+    // 2) Find the numerical value of the smallest code for each code length:
+    memset(&next_code[0], 0, sizeof(next_code));
+    uint32_t code = 0;
+    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
+        code = (code + bl_count[bits-1]) << 1;
+        next_code[bits] = code;
+    }
+
+    // 3) Assign numerical values to all codes, using consecutive values for all codes of the same length with
+    // the base values determined at step 2.  Codes that are never used (which have a bit length of zero) must
+    // not be assigned a value.
+    memset(&codes[0], 0, sizeof(codes));
+    for (size_t i = 0; i < AlphaLen; ++i) {
+        if (nbits[i] != 0) {
+            codes[i] = next_code[nbits[i]]++;
+        }
+    }
+
+    // Table size is 2**(max_bit_length + 1)
+    size_t table_size = 1u << (max_bit_length + 1);
+    tree.assign(table_size, EmptySentinel);
+    for (size_t value = 0; value < AlphaLen; ++value) {
+        size_t len = nbits[value];
+        uint16_t code = codes[value];
+        size_t index = 1;
+        for (int i = len - 1; i >= 0; --i) {
+            int isset = ((code & (1u << i)) != 0) ? 1 : 0;
+            index = 2*index + isset;
+        }
+        assert(tree[index] == EmptySentinel && "Assigned multiple values to same index");
+        tree[index] = value;
+    }
+
+    return true;
+}
+
 int huffman_test_main()
 {
     // TODO: Data Structure Rep: store the huffman encoding tree in an array where
@@ -326,6 +412,32 @@ int huffman_test_main()
     // G       4       1110
     // H       4       1111
 
+#if 0
+    // table size = 2**(max_bit_length) + 1)
+    static char tree[32];
+    memset(&tree[0], ' ', sizeof(tree));
+
+    for (size_t i = 0; i < nalpha; ++i) {
+        char letter = alpha[i];
+        size_t len = nbits[i];
+        uint32_t code = codes[i];
+
+        size_t idx = 1;
+        printf("Handling %c -> %zu -> %u\n", letter, len, code);
+        for (int j = len - 1; j >= 0; --j) {
+            bool isset = (code & (1u << j)) != 0;
+            printf("BitSet? %d\n", isset);
+            idx = 2*idx + int(isset);
+        }
+        printf("Index = %zu\n", idx);
+        tree[idx] = letter;
+    }
+
+
+    for (size_t i = 0; i < sizeof(tree); ++i) {
+        printf("%zu\t%c\n", i, tree[i]);
+    }
+#endif
     return 0;
 }
 
@@ -343,6 +455,11 @@ int main(int argc, char** argv)
     if (argc != 3) {
         fprintf(stderr, "Usage: %s [FILE] [OUT]\n", argv[0]);
         exit(0);
+    }
+
+    if (!init_huffman_tree(g_FixedHuffmanTree)) {
+        fprintf(stderr, "Failed to initialize Fixed Huffman decoding tree\n");
+        exit(1);
     }
 
     const char* input_filename = argv[1];
@@ -553,6 +670,21 @@ int main(int argc, char** argv)
             }
         } else if (blkhdr.btype == static_cast<uint8_t>(BType::FIXED_HUFFMAN)) {
             printf("Block Encoding: Fixed Huffman\n");
+
+            //  decode literal/length value from input stream
+            //  if value < 256
+            //     copy value (literal byte) to output stream
+            //  otherwise
+            //     if value = end of block (256)
+            //        break from loop
+            //     otherwise (value = 257..285)
+            //        decode distance from input stream
+            //
+            //        move backwards distance bytes in the output
+            //        stream, and copy length bytes from this
+            //        position to the output stream.
+
+
         } else if (blkhdr.btype == static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN)) {
             printf("Block Encoding: Dynamic Huffman\n");
         } else {
