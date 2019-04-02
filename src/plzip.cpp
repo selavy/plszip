@@ -90,8 +90,8 @@ enum class OperatingSystem : uint8_t
 // next 2 bits     BTYPE
 struct BlockHeader
 {
-    uint8_t bfinal; // : 1
-    uint8_t btype;  // : 2
+    uint8_t bfinal : 1;
+    uint8_t btype  : 2;
 };
 
 // BTYPE specifies how the data are compressed, as follows:
@@ -655,27 +655,21 @@ int main(int argc, char** argv)
     // Read Compressed Data
     //------------------------------------------------
 
-    BlockHeader blkhdr;
     std::vector<char> copy_buffer;
-
     for (;;) {
         BitReader reader(fp);
-        blkhdr.bfinal = reader.GetBit();
-        blkhdr.btype = 0;
-        blkhdr.btype |= reader.GetBit() << 1;
-        blkhdr.btype |= reader.GetBit() << 0;
-        // // TODO: need to only read 3 bits from stream, save other 5 bits
-        // if (fread(&blkhdr, sizeof(blkhdr), 1, fp) != 1) {
-        //     fprintf(stderr, "ERR: short read on block header\n");
-        //     exit(1);
-        // }
+        uint8_t bfinal = reader.GetBit();
+        uint8_t btype_ = 0u;
+        btype_ |= reader.GetBit() << 0;
+        btype_ |= reader.GetBit() << 1;
+        BType btype = static_cast<BType>(btype_);
 
         printf("BlockHeader:\n");
-        printf("\tbfinal = %u\n", blkhdr.bfinal);
-        printf("\tbtype  = %u\n", blkhdr.btype);
+        printf("\tbfinal = %u\n", bfinal);
+        printf("\tbtype  = %u\n", btype_);
         printf("\n");
 
-        if (blkhdr.btype == static_cast<uint8_t>(BType::NO_COMPRESSION)) {
+        if (btype == BType::NO_COMPRESSION) {
             printf("Block Encoding: No Compression\n");
             // discard remaining bits in first byte
             uint16_t len;
@@ -701,9 +695,7 @@ int main(int argc, char** argv)
                 fprintf(stderr, "ERR: short write of uncompressed data\n");
                 exit(1);
             }
-        } else if (blkhdr.btype == static_cast<uint8_t>(BType::FIXED_HUFFMAN)) {
-            printf("Block Encoding: Fixed Huffman\n");
-
+        } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             //  decode literal/length value from input stream
             //  if value < 256
             //     copy value (literal byte) to output stream
@@ -717,6 +709,14 @@ int main(int argc, char** argv)
             //        stream, and copy length bytes from this
             //        position to the output stream.
 
+            if (btype == BType::FIXED_HUFFMAN) {
+                printf("Block Encoding: Fixed Huffman\n");
+            } else {
+                printf("Block Encoding: Dynamic Huffman\n");
+                fprintf(stderr, "ERR: dynamic huffman not supported yet\n");
+                exit(1);
+            }
+
             for (;;) {
                 size_t index = 1;
                 do {
@@ -725,7 +725,7 @@ int main(int argc, char** argv)
                 } while (g_FixedHuffmanTree[index] == EmptySentinel);
                 uint16_t value = g_FixedHuffmanTree[index];
                 // TEMP TEMP
-                printf("FOUND VALUE: %u\n", value);
+                printf("FOUND VALUE: %u (%c)\n", value, (char)value);
                 if (value < 256) {
                     if (fwrite(&value, sizeof(value), 1, output) != 1) {
                         fprintf(stderr, "ERR: short write");
@@ -743,14 +743,12 @@ int main(int argc, char** argv)
                     exit(1);
                 }
             }
-        } else if (blkhdr.btype == static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN)) {
-            printf("Block Encoding: Dynamic Huffman\n");
         } else {
-            fprintf(stderr, "ERR: unsupported block encoding.\n");
+            fprintf(stderr, "ERR: unsupported block encoding: %u\n", (uint8_t)btype);
             exit(1);
         }
 
-        if (blkhdr.bfinal) {
+        if (bfinal) {
             printf("Processed final compressed block.\n");
             break;
         }
