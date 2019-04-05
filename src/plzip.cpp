@@ -277,7 +277,10 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     static uint16_t next_code[MaxBitLength];
     static uint16_t codes[512];
 
-    assert(n < ARRSIZE(codes));
+    if (!(n < ARRSIZE(codes))) {
+        assert(false && "code lengths too long");
+        return false;
+    }
 
     // 1) Count the number of codes for each code length. Let bl_count[N] be the number of codes of length N, N >= 1.
     memset(&bl_count[0], 0, sizeof(bl_count));
@@ -612,6 +615,7 @@ int main(int argc, char** argv)
     // Read Compressed Data
     //------------------------------------------------
 
+    std::vector<uint16_t> dynamic_huffman_tree;
     std::vector<uint8_t> copy_buffer;
     for (;;) {
         BitReader reader(fp);
@@ -682,19 +686,19 @@ int main(int argc, char** argv)
             } else {
                 printf("Block Encoding: Dynamic Huffman\n");
 
-                const uint8_t code_lengths_order[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
-                uint8_t code_lengths[19];
+                static uint16_t code_lengths_order[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
+                static uint16_t code_lengths[19];
                 memset(&code_lengths[0], 0, sizeof(code_lengths));
 
-                int hlit = reader.read_bits(5) + 257;
-                int hdist = reader.read_bits(5) + 1;
-                int hclen = reader.read_bits(4) + 4;
+                size_t hlit = reader.read_bits(5) + 257;
+                size_t hdist = reader.read_bits(5) + 1;
+                size_t hclen = reader.read_bits(4) + 4;
 
-                printf("hlit: %d\n", hlit);
-                printf("hdist: %d\n", hdist);
-                printf("hclen: %d\n", hclen);
+                printf("hlit:  %zu\n", hlit);
+                printf("hdist: %zu\n", hdist);
+                printf("hclen: %zu\n", hclen);
 
-                for (int i = 0; i < hclen; ++i) {
+                for (size_t i = 0; i < hclen; ++i) {
                     uint8_t codelen = reader.read_bits(3);
                     printf("\tcodelen = %u\n", codelen);
                     code_lengths[code_lengths_order[i]] = codelen;
@@ -705,6 +709,39 @@ int main(int argc, char** argv)
                     printf("%zu\t%u\n", i, code_lengths[i]);
                 }
                 printf("\n");
+
+                if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], ARRSIZE(code_lengths))) {
+                    fprintf(stderr, "ERR: unable to initialize huffman tree for dynamic huffman encoding.\n");
+                }
+
+                auto repeat_value = [](std::vector<uint16_t>& v, uint16_t value, size_t repeat) {
+                    for (size_t i = 0; i < repeat; ++i) {
+                        v.push_back(value);
+                    }
+                };
+
+                std::vector<uint16_t> clens;
+                for (size_t i = 0; i < (hlit + hdist); ++i) {
+                    uint16_t value = read_huffman_value(huffman_tree, reader);
+                    if (value <= 15) {
+                        clens.push_back(value);
+                    } else if (value == 16) {
+                        size_t repeat = reader.read_bits(2) + 3;
+                        if (!clens.empty()) {
+                            fprintf(stderr, "ERR: received repeat code with no codes.\n");
+                            exit(1);
+                        }
+                        repeat_value(clens, clens.back(), repeat);
+                    } else if (value == 17) {
+                        size_t repeat = reader.read_bits(3) + 3;
+                        repeat_value(clens, 0, repeat);
+                    } else if (value == 18) {
+                        size_t repeat = reader.read_bits(7) + 11;
+                        repeat_value(clens, 0, repeat);
+                    }
+                }
+
+                printf("Read %zu code lengths\n", clens.size());
 
                 fprintf(stderr, "ERR: dynamic huffman not supported yet\n");
                 exit(1);
