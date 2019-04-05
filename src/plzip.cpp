@@ -7,6 +7,8 @@
 #include <libgen.h>
 #include <cassert>
 
+#define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
+
 // TODO: better names?
 //  ID1 (IDentification 1)
 //  ID2 (IDentification 2)
@@ -268,6 +270,63 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
     return true;
 }
 
+bool init_huffman_tree2(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
+{
+    constexpr size_t MaxBitLength = 16;
+    static size_t bl_count[MaxBitLength];
+    static uint16_t next_code[MaxBitLength];
+    static uint16_t codes[512];
+
+    assert(n < ARRSIZE(codes));
+
+    // 1) Count the number of codes for each code length. Let bl_count[N] be the number of codes of length N, N >= 1.
+    memset(&bl_count[0], 0, sizeof(bl_count));
+    size_t max_bit_length = 0;
+    for (size_t i = 0; i < n; ++i) {
+        assert(code_lengths[i] <= MaxBitLength && "Unsupported bit length");
+        ++bl_count[code_lengths[i]];
+        if (code_lengths[i] > max_bit_length) {
+            max_bit_length = code_lengths[i];
+        }
+    }
+    bl_count[0] = 0;
+
+    // 2) Find the numerical value of the smallest code for each code length:
+    memset(&next_code[0], 0, sizeof(next_code));
+    uint32_t code = 0;
+    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
+        code = (code + bl_count[bits-1]) << 1;
+        next_code[bits] = code;
+    }
+
+    // 3) Assign numerical values to all codes, using consecutive values for all codes of the same length with
+    // the base values determined at step 2.  Codes that are never used (which have a bit length of zero) must
+    // not be assigned a value.
+    memset(&codes[0], 0, sizeof(codes));
+    for (size_t i = 0; i < n; ++i) {
+        if (code_lengths[i] != 0) {
+            codes[i] = next_code[code_lengths[i]]++;
+        }
+    }
+
+    // Table size is 2**(max_bit_length + 1)
+    size_t table_size = 1u << (max_bit_length + 1);
+    tree.assign(table_size, EmptySentinel);
+    for (size_t value = 0; value < n; ++value) {
+        size_t len = code_lengths[value];
+        uint16_t code = codes[value];
+        size_t index = 1;
+        for (int i = len - 1; i >= 0; --i) {
+            int isset = ((code & (1u << i)) != 0) ? 1 : 0;
+            index = 2*index + isset;
+        }
+        assert(tree[index] == EmptySentinel && "Assigned multiple values to same index");
+        tree[index] = value;
+    }
+
+    return true;
+}
+
 bool init_huffman_tree(std::vector<uint16_t>& tree)
 {
     constexpr size_t MaxBitLength = 16;
@@ -485,7 +544,7 @@ struct BitReader
     BitReader(FILE* f) : fp(f), index(sizeof(buffer)*8), buffer(0) {}
 
     // TODO: error handling
-    bool GetBit()
+    bool read_bit()
     {
         if (index >= sizeof(buffer)*8) {
             if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
@@ -499,6 +558,17 @@ struct BitReader
         return result;
     }
 
+    uint8_t read_bits(size_t nbits)
+    {
+        assert(nbits <= 8);
+        uint8_t result = 0;
+        for (size_t i = 0; i < nbits; ++i) {
+            result <<= 1;
+            result |= read_bit() ? 1 : 0;
+        }
+        return result;
+    }
+
     FILE*   fp;
     uint8_t index;
     uint8_t buffer;
@@ -509,9 +579,36 @@ uint16_t read_huffman_value(const uint16_t* huffman_tree, BitReader& reader)
     size_t index = 1;
     do {
         index *= 2;
-        index += reader.GetBit() ? 1 : 0;
+        index += reader.read_bit() ? 1 : 0;
     } while (huffman_tree[index] == EmptySentinel);
     return huffman_tree[index];
+}
+
+void get_static_huffman_lengths(std::vector<uint16_t>& code_lengths)
+{
+    //   Lit Value    Bits        Codes
+    //   ---------    ----        -----
+    //     0 - 143     8          00110000 through
+    //                            10111111
+    //   144 - 255     9          110010000 through
+    //                            111111111
+    //   256 - 279     7          0000000 through
+    //                            0010111
+    //   280 - 287     8          11000000 through
+    //                            11000111
+    code_lengths.assign(288, 0);
+    for (size_t i = 0; i <= 143; ++i) {
+        code_lengths[i] = 8;
+    }
+    for (size_t i = 144; i <= 255; ++i) {
+        code_lengths[i] = 9;
+    }
+    for (size_t i = 256; i <= 279; ++i) {
+        code_lengths[i] = 7;
+    }
+    for (size_t i = 280; i <= 287; ++i) {
+        code_lengths[i] = 8;
+    }
 }
 
 int main(int argc, char** argv)
@@ -532,7 +629,24 @@ int main(int argc, char** argv)
     }
     if (!init_huffman_lengths(g_ExtraBits, g_BaseLengths)) {
         fprintf(stderr, "ERR: failed to initialize fixed huffman data\n");
+        exit(1);
     }
+
+    std::vector<uint16_t> clens;
+    get_static_huffman_lengths(clens);
+    std::vector<uint16_t> tmp;
+    if (!init_huffman_tree2(tmp, clens.data(), clens.size())) {
+        fprintf(stderr, "ERR: failed to initialize!\n");
+        exit(1);
+    }
+
+    assert(tmp.size() == g_FixedHuffmanTree.size());
+    for (size_t i = 0; i < tmp.size(); ++i) {
+        assert(tmp[i] == g_FixedHuffmanTree[i]);
+    }
+    printf("Passed!\n");
+    
+    exit(0);
 
     const char* input_filename = argv[1];
     FileHandle fp = fopen(input_filename, "rb");
@@ -705,10 +819,10 @@ int main(int argc, char** argv)
     std::vector<uint8_t> copy_buffer;
     for (;;) {
         BitReader reader(fp);
-        uint8_t bfinal = reader.GetBit();
+        uint8_t bfinal = reader.read_bit();
         uint8_t btype_ = 0u;
-        btype_ |= reader.GetBit() << 0;
-        btype_ |= reader.GetBit() << 1;
+        btype_ |= reader.read_bit() << 0;
+        btype_ |= reader.read_bit() << 1;
         BType btype = static_cast<BType>(btype_);
         copy_buffer.clear();
 
@@ -731,8 +845,7 @@ int main(int argc, char** argv)
                 exit(1);
             }
 
-            // TODO: faster API for copying from input to output? Might be on non-aligned
-            //       address though.
+            // TODO: faster API for copying from input to output? Might be on non-aligned though.
             // copy `len` bytes directly to output
             copy_buffer.assign('\0', len);
             if (fread(copy_buffer.data(), len, 1, fp) != 1) {
@@ -772,6 +885,31 @@ int main(int argc, char** argv)
                 base_lengths = g_BaseLengths.data();
             } else {
                 printf("Block Encoding: Dynamic Huffman\n");
+
+                const uint8_t code_lengths_order[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
+                uint8_t code_lengths[19];
+                memset(&code_lengths[0], 0, sizeof(code_lengths));
+
+                int hlit = reader.read_bits(5) + 257;
+                int hdist = reader.read_bits(5) + 1;
+                int hclen = reader.read_bits(4) + 4;
+
+                printf("hlit: %d\n", hlit);
+                printf("hdist: %d\n", hdist);
+                printf("hclen: %d\n", hclen);
+
+                for (int i = 0; i < hclen; ++i) {
+                    uint8_t codelen = reader.read_bits(3);
+                    printf("\tcodelen = %u\n", codelen);
+                    code_lengths[code_lengths_order[i]] = codelen;
+                }
+
+                printf("Code Lengths Table:\n");
+                for (size_t i = 0; i < ARRSIZE(code_lengths); ++i) {
+                    printf("%zu\t%u\n", i, code_lengths[i]);
+                }
+                printf("\n");
+
                 fprintf(stderr, "ERR: dynamic huffman not supported yet\n");
                 exit(1);
             }
@@ -790,12 +928,12 @@ int main(int argc, char** argv)
                     size_t distance = 0;
                     for (int i = 0; i < extra_bits[value]; ++i) {
                         extra <<= 1;
-                        extra |= reader.GetBit() ? 1 : 0;
+                        extra |= reader.read_bit() ? 1 : 0;
                     }
                     length += extra;
                     for (int i = 0; i < 5; ++i) {
                         distance <<= 1;
-                        distance |= reader.GetBit() ? 1 : 0;
+                        distance |= reader.read_bit() ? 1 : 0;
                     }
                     // TODO: is there a more efficient way to copy from a portion of the buffer
                     //       to another? I could pre-allocate the size, then memcpy the section over?
