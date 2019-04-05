@@ -270,7 +270,7 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
     return true;
 }
 
-bool init_huffman_tree2(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
+bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
 {
     constexpr size_t MaxBitLength = 16;
     static size_t bl_count[MaxBitLength];
@@ -314,88 +314,6 @@ bool init_huffman_tree2(std::vector<uint16_t>& tree, const uint16_t* code_length
     tree.assign(table_size, EmptySentinel);
     for (size_t value = 0; value < n; ++value) {
         size_t len = code_lengths[value];
-        uint16_t code = codes[value];
-        size_t index = 1;
-        for (int i = len - 1; i >= 0; --i) {
-            int isset = ((code & (1u << i)) != 0) ? 1 : 0;
-            index = 2*index + isset;
-        }
-        assert(tree[index] == EmptySentinel && "Assigned multiple values to same index");
-        tree[index] = value;
-    }
-
-    return true;
-}
-
-bool init_huffman_tree(std::vector<uint16_t>& tree)
-{
-    constexpr size_t MaxBitLength = 16;
-    static size_t bl_count[MaxBitLength];
-    static uint16_t next_code[MaxBitLength];
-    constexpr size_t AlphaLen = 288;
-    static size_t nbits[AlphaLen];
-    static uint16_t codes[AlphaLen];
-
-    memset(&nbits[0], 0, sizeof(nbits));
-
-    //   Lit Value    Bits        Codes
-    //   ---------    ----        -----
-    //     0 - 143     8          00110000 through
-    //                            10111111
-    //   144 - 255     9          110010000 through
-    //                            111111111
-    //   256 - 279     7          0000000 through
-    //                            0010111
-    //   280 - 287     8          11000000 through
-    //                            11000111
-    for (size_t i = 0; i <= 143; ++i) {
-        nbits[i] = 8;
-    }
-    for (size_t i = 144; i <= 255; ++i) {
-        nbits[i] = 9;
-    }
-    for (size_t i = 256; i <= 279; ++i) {
-        nbits[i] = 7;
-    }
-    for (size_t i = 280; i <= 287; ++i) {
-        nbits[i] = 8;
-    }
-
-    // 1) Count the number of codes for each code length. Let bl_count[N] be the number of codes of length N, N >= 1.
-    memset(&bl_count[0], 0, sizeof(bl_count));
-    size_t max_bit_length = 0;
-    for (size_t i = 0; i < AlphaLen; ++i) {
-        assert(nbits[i] <= MaxBitLength && "Unsupported bit length");
-        ++bl_count[nbits[i]];
-        if (nbits[i] > max_bit_length) {
-            max_bit_length = nbits[i];
-        }
-    }
-    bl_count[0] = 0;
-
-    // 2) Find the numerical value of the smallest code for each code length:
-    memset(&next_code[0], 0, sizeof(next_code));
-    uint32_t code = 0;
-    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
-        code = (code + bl_count[bits-1]) << 1;
-        next_code[bits] = code;
-    }
-
-    // 3) Assign numerical values to all codes, using consecutive values for all codes of the same length with
-    // the base values determined at step 2.  Codes that are never used (which have a bit length of zero) must
-    // not be assigned a value.
-    memset(&codes[0], 0, sizeof(codes));
-    for (size_t i = 0; i < AlphaLen; ++i) {
-        if (nbits[i] != 0) {
-            codes[i] = next_code[nbits[i]]++;
-        }
-    }
-
-    // Table size is 2**(max_bit_length + 1)
-    size_t table_size = 1u << (max_bit_length + 1);
-    tree.assign(table_size, EmptySentinel);
-    for (size_t value = 0; value < AlphaLen; ++value) {
-        size_t len = nbits[value];
         uint16_t code = codes[value];
         size_t index = 1;
         for (int i = len - 1; i >= 0; --i) {
@@ -584,7 +502,7 @@ uint16_t read_huffman_value(const uint16_t* huffman_tree, BitReader& reader)
     return huffman_tree[index];
 }
 
-void get_static_huffman_lengths(std::vector<uint16_t>& code_lengths)
+void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths)
 {
     //   Lit Value    Bits        Codes
     //   ---------    ----        -----
@@ -611,6 +529,24 @@ void get_static_huffman_lengths(std::vector<uint16_t>& code_lengths)
     }
 }
 
+bool init_fixed_huffman_data()
+{
+    std::vector<uint16_t> code_lengths;
+    get_fixed_huffman_lengths(code_lengths);
+
+    if (!init_huffman_tree(g_FixedHuffmanTree, code_lengths.data(), code_lengths.size())) {
+        fprintf(stderr, "ERR: failed to initialize fixed huffman decoding tree\n");
+        return false;
+    }
+
+    if (!init_huffman_lengths(g_ExtraBits, g_BaseLengths)) {
+        fprintf(stderr, "ERR: failed to initialize fixed huffman data\n");
+        return false;
+    }
+
+    return true;
+}
+
 int main(int argc, char** argv)
 {
     const char* output_filename;
@@ -623,30 +559,9 @@ int main(int argc, char** argv)
         exit(0);
     }
 
-    if (!init_huffman_tree(g_FixedHuffmanTree)) {
-        fprintf(stderr, "ERR: failed to initialize fixed huffman decoding tree\n");
+    if (!init_fixed_huffman_data()) {
         exit(1);
     }
-    if (!init_huffman_lengths(g_ExtraBits, g_BaseLengths)) {
-        fprintf(stderr, "ERR: failed to initialize fixed huffman data\n");
-        exit(1);
-    }
-
-    std::vector<uint16_t> clens;
-    get_static_huffman_lengths(clens);
-    std::vector<uint16_t> tmp;
-    if (!init_huffman_tree2(tmp, clens.data(), clens.size())) {
-        fprintf(stderr, "ERR: failed to initialize!\n");
-        exit(1);
-    }
-
-    assert(tmp.size() == g_FixedHuffmanTree.size());
-    for (size_t i = 0; i < tmp.size(); ++i) {
-        assert(tmp[i] == g_FixedHuffmanTree[i]);
-    }
-    printf("Passed!\n");
-    
-    exit(0);
 
     const char* input_filename = argv[1];
     FileHandle fp = fopen(input_filename, "rb");
