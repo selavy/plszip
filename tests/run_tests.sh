@@ -3,8 +3,6 @@
 PLZIP=../build/src/plzip
 
 TESTS=(test1 test2 test3 test4)
-
-# TEST=test1
 for TEST in ${TESTS[@]};
 do
     ORIG=${TEST}.txt

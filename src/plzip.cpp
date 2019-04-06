@@ -367,13 +367,16 @@ struct BitReader
     {
         assert(nbits <= 8);
         uint8_t result = 0;
-        // for (size_t i = 0; i < nbits; ++i) {
-        //     result <<= 1;
-        //     result |= read_bit() ? 1 : 0;
-        // }
+#if 0
+        for (size_t i = 0; i < nbits; ++i) {
+            result <<= 1;
+            result |= read_bit() ? 1 : 0;
+        }
+#else
         for (size_t i = 0; i < nbits; ++i) {
             result |= (read_bit() ? 1 : 0) << i;
         }
+#endif
         return result;
     }
 
@@ -679,7 +682,7 @@ int main(int argc, char** argv)
             //          position to the output stream.
             // end loop
 
-            const uint16_t* huffman_tree;
+            const uint16_t* huffman_tree = nullptr; // TEMP: error about unitialized huffman_tree
             const uint16_t* extra_bits;
             const uint16_t* base_lengths;
             copy_buffer.clear();
