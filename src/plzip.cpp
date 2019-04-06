@@ -272,12 +272,13 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
 
 bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
 {
+    constexpr size_t MaxCodes = 512;
     constexpr size_t MaxBitLength = 16;
     static size_t bl_count[MaxBitLength];
     static uint16_t next_code[MaxBitLength];
-    static uint16_t codes[512];
+    static uint16_t codes[MaxCodes];
 
-    if (!(n < ARRSIZE(codes))) {
+    if (!(n < MaxCodes)) {
         assert(false && "code lengths too long");
         return false;
     }
@@ -345,12 +346,12 @@ struct FileHandle
 
 struct BitReader
 {
-    BitReader(FILE* f) : fp(f), index(sizeof(buffer)*8), buffer(0) {}
+    BitReader(FILE* f) : fp(f), index(bufsize()), buffer(0) {}
 
     // TODO: error handling
     bool read_bit()
     {
-        if (index >= sizeof(buffer)*8) {
+        if (index >= bufsize()) {
             if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
                 fprintf(stderr, "BitReader: ERR: short read\n");
                 exit(1);
@@ -366,12 +367,17 @@ struct BitReader
     {
         assert(nbits <= 8);
         uint8_t result = 0;
+        // for (size_t i = 0; i < nbits; ++i) {
+        //     result <<= 1;
+        //     result |= read_bit() ? 1 : 0;
+        // }
         for (size_t i = 0; i < nbits; ++i) {
-            result <<= 1;
-            result |= read_bit() ? 1 : 0;
+            result |= (read_bit() ? 1 : 0) << i;
         }
         return result;
     }
+
+    size_t bufsize() const noexcept { return sizeof(buffer)*8; }
 
     FILE*   fp;
     uint8_t index;
@@ -622,15 +628,12 @@ int main(int argc, char** argv)
     for (;;) {
         BitReader reader(fp);
         uint8_t bfinal = reader.read_bit();
-        uint8_t btype_ = 0u;
-        btype_ |= reader.read_bit() << 0;
-        btype_ |= reader.read_bit() << 1;
-        BType btype = static_cast<BType>(btype_);
+        BType btype = static_cast<BType>(reader.read_bits(2));
         copy_buffer.clear();
 
         printf("BlockHeader:\n");
         printf("\tbfinal = %u\n", bfinal);
-        printf("\tbtype  = %u\n", btype_);
+        printf("\tbtype  = %u\n", (uint8_t)btype);
         printf("\n");
 
         if (btype == BType::NO_COMPRESSION) {
@@ -688,8 +691,11 @@ int main(int argc, char** argv)
             } else {
                 printf("Block Encoding: Dynamic Huffman\n");
 
-                static uint16_t code_lengths_order[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
-                static uint16_t code_lengths[19];
+                constexpr size_t NumCodeLengths = 19;
+                static uint16_t code_lengths_order[NumCodeLengths] = {
+                    16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
+                };
+                static uint16_t code_lengths[NumCodeLengths];
                 memset(&code_lengths[0], 0, sizeof(code_lengths));
 
                 size_t hlit = reader.read_bits(5) + 257;
@@ -707,12 +713,12 @@ int main(int argc, char** argv)
                 }
 
                 printf("Code Lengths Table:\n");
-                for (size_t i = 0; i < ARRSIZE(code_lengths); ++i) {
+                for (size_t i = 0; i < NumCodeLengths; ++i) {
                     printf("%zu\t%u\n", i, code_lengths[i]);
                 }
                 printf("\n");
 
-                if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], ARRSIZE(code_lengths))) {
+                if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], NumCodeLengths)) {
                     fprintf(stderr, "ERR: unable to initialize huffman tree for dynamic huffman encoding.\n");
                 }
 
