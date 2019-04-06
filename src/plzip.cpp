@@ -335,6 +335,8 @@ struct FileHandle
     FileHandle(FILE* f = nullptr) noexcept : fp(f) {}
     FileHandle(FileHandle&) noexcept = delete;
     FileHandle& operator=(FileHandle&) noexcept = delete;
+    FileHandle(FileHandle&& rhs) noexcept : fp(rhs.fp) { rhs.fp = nullptr; }
+    FileHandle& operator=(FileHandle&& rhs) noexcept { fp = rhs.fp; rhs.fp = nullptr; return *this; }
     ~FileHandle() noexcept { if (fp) { fclose(fp); } }
     operator FILE* () noexcept { return fp; }
     explicit operator bool() const noexcept { return fp != nullptr; }
