@@ -283,7 +283,8 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
         return false;
     }
 
-    // 1) Count the number of codes for each code length. Let bl_count[N] be the number of codes of length N, N >= 1.
+    // 1) Count the number of codes for each code length. Let bl_count[N] be the number
+    // of codes of length N, N >= 1.
     memset(&bl_count[0], 0, sizeof(bl_count));
     size_t max_bit_length = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -303,9 +304,9 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
         next_code[bits] = code;
     }
 
-    // 3) Assign numerical values to all codes, using consecutive values for all codes of the same length with
-    // the base values determined at step 2.  Codes that are never used (which have a bit length of zero) must
-    // not be assigned a value.
+    // 3) Assign numerical values to all codes, using consecutive values for all codes of
+    // the same length with the base values determined at step 2.  Codes that are never
+    // used (which have a bit length of zero) must not be assigned a value.
     memset(&codes[0], 0, sizeof(codes));
     for (size_t i = 0; i < n; ++i) {
         if (code_lengths[i] != 0) {
@@ -318,10 +319,13 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     tree.assign(table_size, EmptySentinel);
     for (size_t value = 0; value < n; ++value) {
         size_t len = code_lengths[value];
+        if (len == 0) {
+            continue;
+        }
         uint16_t code = codes[value];
         size_t index = 1;
         for (int i = len - 1; i >= 0; --i) {
-            int isset = ((code & (1u << i)) != 0) ? 1 : 0;
+            size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
             index = 2*index + isset;
         }
         assert(tree[index] == EmptySentinel && "Assigned multiple values to same index");

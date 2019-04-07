@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PLZIP=../build/src/plzip
+PLZIP=../build/debug/bin/plzip
 
 TESTS=(test1 test2 test3 test4)
 for TEST in ${TESTS[@]};
