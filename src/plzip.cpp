@@ -272,7 +272,7 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
 
 bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
 {
-    constexpr size_t MaxCodes = 512;
+    constexpr size_t MaxCodes = 1024;
     constexpr size_t MaxBitLength = 16;
     static size_t bl_count[MaxBitLength];
     static uint16_t next_code[MaxBitLength];
@@ -718,34 +718,45 @@ int main(int argc, char** argv)
                     fatal_error("failed to initialize dynamic huffman tree.");
                 }
 
-                std::vector<uint16_t> clens;
+                std::vector<uint16_t> dynamic_code_lengths;
                 for (size_t i = 0; i < (hlit + hdist); ++i) {
                     uint16_t value = read_huffman_value(&dynamic_huffman_tree[0], reader);
+                    // TEMP TEMP
+                    printf("read dynamic huffman value: %u\n", value);
                     if (value <= 15) {
-                        clens.push_back(value);
+                        dynamic_code_lengths.push_back(value);
+                    } else if (value == 16) {
+                        if (dynamic_code_lengths.empty()) {
+                            fatal_error("received repeat code with no codes.");
+                        }
+                        size_t repeat = reader.read_bits(2) + 3;
+                        uint16_t repeat_value = dynamic_code_lengths.back();
+                        dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat, repeat_value);
                     } else if (value <= 18) {
                         size_t bits = 0;
                         size_t offset;
                         switch (value) {
-                            case 15: bits = 2; offset =  3; break;
                             case 17: bits = 3; offset =  3; break;
                             case 18: bits = 7; offset = 11; break;
-                            default: break;
                         }
                         assert(bits != 0);
                         size_t repeat = reader.read_bits(bits) + offset;
-                        if (clens.empty()) {
-                            fatal_error("received repeat code with no codes.");
-                        }
-                        printf("Repeating the value %u %zu times\n", clens.back(), repeat);
-                        clens.insert(clens.end(), repeat, clens.back());
+                        dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat, 0);
                     } else {
                         fatal_error("invalid value: %u", value);
                     }
                 }
-                printf("Read %zu code lengths\n", clens.size());
+                printf("Read %zu code lengths\n", dynamic_code_lengths.size());
 
-                fatal_error("dynamic huffman not supported yet.");
+                if (!init_huffman_tree(dynamic_huffman_tree, dynamic_code_lengths.data(), dynamic_code_lengths.size())) {
+                    fatal_error("failed to initialize dynamic huffman tree");
+                }
+                huffman_tree = dynamic_code_lengths.data();
+                // TODO: not sure about this??
+                extra_bits = g_ExtraBits.data();
+                base_lengths = g_BaseLengths.data();
+
+                printf("Finished reading dynamic huffman tree for section\n");
             }
 
             for (;;) {
