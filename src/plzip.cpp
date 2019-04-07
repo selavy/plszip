@@ -8,6 +8,9 @@
 #include <cassert>
 
 #define fatal_error(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
+
+#define xassert(c, fmt, ...) do { auto r = (c); if (!r) { fprintf(stderr, "ASSERT: " fmt "\n", ##__VA_ARGS__); assert(0); } } while(0)
+
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 // TODO: better names?
@@ -329,7 +332,7 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
 
 bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
 {
-    constexpr size_t MaxCodes = 1024;
+    constexpr size_t MaxCodes = 512;
     constexpr size_t MaxBitLength = 16;
     static size_t bl_count[MaxBitLength];
     static uint16_t next_code[MaxBitLength];
@@ -385,6 +388,10 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
             size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
             index = 2*index + isset;
         }
+        // TEMP TEMP
+        if (tree[index] != EmptySentinel) {
+            printf("Repeating value %zu at index %zu, previous value = %u\n", value, index, tree[index]);
+        }
         assert(tree[index] == EmptySentinel && "Assigned multiple values to same index");
         tree[index] = value;
     }
@@ -393,12 +400,13 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
 }
 
 // XXX: pass length to verify index is safe
-uint16_t read_huffman_value(const uint16_t* huffman_tree, BitReader& reader)
+uint16_t read_huffman_value(const uint16_t* huffman_tree, size_t huffman_tree_length, BitReader& reader)
 {
     size_t index = 1;
     do {
         index *= 2;
         index += reader.read_bit() ? 1 : 0;
+        assert(index < huffman_tree_length && "invalid index");
     } while (huffman_tree[index] == EmptySentinel);
     return huffman_tree[index];
 }
@@ -415,6 +423,7 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
     size_t hlit = reader.read_bits(5) + 257;
     size_t hdist = reader.read_bits(5) + 1;
     size_t hclen = reader.read_bits(4) + 4;
+    size_t ncodes = hlit + hdist;
 
     printf("hlit:  %zu\n", hlit);
     printf("hdist: %zu\n", hdist);
@@ -422,15 +431,8 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
 
     for (size_t i = 0; i < hclen; ++i) {
         uint8_t codelen = reader.read_bits(3);
-        printf("\tcodelen = %u\n", codelen);
         code_lengths[code_lengths_order[i]] = codelen;
     }
-
-    printf("Code Lengths Table:\n");
-    for (size_t i = 0; i < NumCodeLengths; ++i) {
-        printf("%zu\t%u\n", i, code_lengths[i]);
-    }
-    printf("\n");
 
     if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], NumCodeLengths)) {
         fatal_error("failed to initialize dynamic huffman tree.");
@@ -439,10 +441,12 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
     printf("Successfully decoded first dynamic encoding.\n");
 
     std::vector<uint16_t> dynamic_code_lengths;
-    for (size_t i = 0; i < (hlit + hdist); ++i) {
-        uint16_t value = read_huffman_value(&dynamic_huffman_tree[0], reader);
+    for (size_t i = 0; i < ncodes; /*++i*/) {
+        uint16_t value = read_huffman_value(dynamic_huffman_tree.data(), dynamic_huffman_tree.size(), reader);
         if (value <= 15) {
             dynamic_code_lengths.push_back(value);
+            printf("\ti = %zu, advancing by 1 to %zu vs. %zu\n", i, i + 1, ncodes);
+            i += 1;
         } else if (value <= 18) {
             size_t nbits;
             size_t offset;
@@ -466,11 +470,16 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
                 assert(0 && "branch should never be hit");
             }
             size_t repeat_times = reader.read_bits(nbits) + offset;
+            printf("Repeating value %u %zu times.\n", repeat_value, repeat_times);
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
+            i += repeat_times;
+            printf("\ti = %zu, advancing by %zu to %zu vs. %zu\n", i, repeat_times, i + repeat_times, ncodes);
         } else {
             fatal_error("invalid value: %u", value);
         }
     }
+
+    printf("Read %zu codes for dynamic huffman tree. nodes = %zu\n", dynamic_code_lengths.size(), ncodes);
 
     if (!init_huffman_tree(dynamic_huffman_tree, dynamic_code_lengths.data(), dynamic_code_lengths.size())) {
         fatal_error("failed to initialize dynamic huffman tree");
@@ -753,13 +762,15 @@ int main(int argc, char** argv)
             //          position to the output stream.
             // end loop
 
-            const uint16_t* huffman_tree = nullptr; // TEMP: error about unitialized huffman_tree
+            const uint16_t* huffman_tree;
+            size_t huffman_tree_length;
             const uint16_t* extra_bits;
             const uint16_t* base_lengths;
             copy_buffer.clear();
             if (btype == BType::FIXED_HUFFMAN) {
                 printf("Block Encoding: Fixed Huffman\n");
                 huffman_tree = g_FixedHuffmanTree.data();
+                huffman_tree_length = g_FixedHuffmanTree.size();
                 extra_bits = g_ExtraBits.data();
                 base_lengths = g_BaseLengths.data();
             } else {
@@ -768,12 +779,13 @@ int main(int argc, char** argv)
                     fatal_error("failed to read dynamic huffman tree");
                 }
                 huffman_tree = dynamic_huffman_tree.data();
+                huffman_tree_length = dynamic_huffman_tree.size();
                 extra_bits = g_ExtraBits.data();
                 base_lengths = g_BaseLengths.data();
             }
 
             for (;;) {
-                uint16_t value = read_huffman_value(huffman_tree, reader);
+                uint16_t value = read_huffman_value(huffman_tree, huffman_tree_length, reader);
                 if (value < 256) {
                     copy_buffer.push_back(static_cast<uint8_t>(value));
                 } else if (value == 256) {
@@ -795,6 +807,9 @@ int main(int argc, char** argv)
                     }
                     // TODO: is there a more efficient way to copy from a portion of the buffer
                     //       to another? I could pre-allocate the size, then memcpy the section over?
+                    // TEMP TEMP
+                    printf("Distance code copying from %zu when buffer is currently %zu\n", distance, copy_buffer.size());
+                    assert(copy_buffer.size() >= (distance + 1) && "invalid distance");
                     size_t start_index = copy_buffer.size() - distance - 1;
                     for (size_t i = 0; i < length; ++i) {
                         copy_buffer.push_back(copy_buffer[start_index + i]);
