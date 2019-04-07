@@ -7,6 +7,7 @@
 #include <libgen.h>
 #include <cassert>
 
+#define fatal_error(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 // TODO: better names?
@@ -16,6 +17,62 @@
 //     (0x8b, \213), to identify the file as being in gzip format.
 const uint8_t ID1_GZIP = 31;
 const uint8_t ID2_GZIP = 139;
+
+struct FileHandle
+{
+    FileHandle(FILE* f = nullptr) noexcept : fp(f) {}
+    FileHandle(FileHandle&) noexcept = delete;
+    FileHandle& operator=(FileHandle&) noexcept = delete;
+    FileHandle(FileHandle&& rhs) noexcept : fp(rhs.fp) { rhs.fp = nullptr; }
+    FileHandle& operator=(FileHandle&& rhs) noexcept { fp = rhs.fp; rhs.fp = nullptr; return *this; }
+    ~FileHandle() noexcept { if (fp) { fclose(fp); } }
+    operator FILE* () noexcept { return fp; }
+    explicit operator bool() const noexcept { return fp != nullptr; }
+    FILE* fp;
+};
+
+struct BitReader
+{
+    BitReader(FILE* f) : fp(f), index(bufsize()), buffer(0) {}
+
+    // TODO: error handling
+    bool read_bit()
+    {
+        if (index >= bufsize()) {
+            if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
+                fprintf(stderr, "BitReader: ERR: short read\n");
+                exit(1);
+            }
+            index = 0;
+        }
+        bool result = (buffer & (1u << index)) != 0;
+        ++index;
+        return result;
+    }
+
+    uint8_t read_bits(size_t nbits)
+    {
+        assert(nbits <= 8);
+        uint8_t result = 0;
+#if 0
+        for (size_t i = 0; i < nbits; ++i) {
+            result <<= 1;
+            result |= read_bit() ? 1 : 0;
+        }
+#else
+        for (size_t i = 0; i < nbits; ++i) {
+            result |= (read_bit() ? 1 : 0) << i;
+        }
+#endif
+        return result;
+    }
+
+    size_t bufsize() const noexcept { return sizeof(buffer)*8; }
+
+    FILE*   fp;
+    uint8_t index;
+    uint8_t buffer;
+};
 
 //  +---+---+---+---+---+---+---+---+---+---+
 //  |ID1|ID2|CM |FLG|     MTIME     |XFL|OS | (more-->)
@@ -335,62 +392,6 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     return true;
 }
 
-struct FileHandle
-{
-    FileHandle(FILE* f = nullptr) noexcept : fp(f) {}
-    FileHandle(FileHandle&) noexcept = delete;
-    FileHandle& operator=(FileHandle&) noexcept = delete;
-    FileHandle(FileHandle&& rhs) noexcept : fp(rhs.fp) { rhs.fp = nullptr; }
-    FileHandle& operator=(FileHandle&& rhs) noexcept { fp = rhs.fp; rhs.fp = nullptr; return *this; }
-    ~FileHandle() noexcept { if (fp) { fclose(fp); } }
-    operator FILE* () noexcept { return fp; }
-    explicit operator bool() const noexcept { return fp != nullptr; }
-    FILE* fp;
-};
-
-struct BitReader
-{
-    BitReader(FILE* f) : fp(f), index(bufsize()), buffer(0) {}
-
-    // TODO: error handling
-    bool read_bit()
-    {
-        if (index >= bufsize()) {
-            if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
-                fprintf(stderr, "BitReader: ERR: short read\n");
-                exit(1);
-            }
-            index = 0;
-        }
-        bool result = (buffer & (1u << index)) != 0;
-        ++index;
-        return result;
-    }
-
-    uint8_t read_bits(size_t nbits)
-    {
-        assert(nbits <= 8);
-        uint8_t result = 0;
-#if 0
-        for (size_t i = 0; i < nbits; ++i) {
-            result <<= 1;
-            result |= read_bit() ? 1 : 0;
-        }
-#else
-        for (size_t i = 0; i < nbits; ++i) {
-            result |= (read_bit() ? 1 : 0) << i;
-        }
-#endif
-        return result;
-    }
-
-    size_t bufsize() const noexcept { return sizeof(buffer)*8; }
-
-    FILE*   fp;
-    uint8_t index;
-    uint8_t buffer;
-};
-
 uint16_t read_huffman_value(const uint16_t* huffman_tree, BitReader& reader)
 {
     size_t index = 1;
@@ -399,6 +400,81 @@ uint16_t read_huffman_value(const uint16_t* huffman_tree, BitReader& reader)
         index += reader.read_bit() ? 1 : 0;
     } while (huffman_tree[index] == EmptySentinel);
     return huffman_tree[index];
+}
+
+bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic_huffman_tree)
+{
+    constexpr size_t NumCodeLengths = 19;
+    static uint16_t code_lengths_order[NumCodeLengths] = {
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
+    };
+    static uint16_t code_lengths[NumCodeLengths];
+    memset(&code_lengths[0], 0, sizeof(code_lengths));
+
+    size_t hlit = reader.read_bits(5) + 257;
+    size_t hdist = reader.read_bits(5) + 1;
+    size_t hclen = reader.read_bits(4) + 4;
+
+    printf("hlit:  %zu\n", hlit);
+    printf("hdist: %zu\n", hdist);
+    printf("hclen: %zu\n", hclen);
+
+    for (size_t i = 0; i < hclen; ++i) {
+        uint8_t codelen = reader.read_bits(3);
+        printf("\tcodelen = %u\n", codelen);
+        code_lengths[code_lengths_order[i]] = codelen;
+    }
+
+    printf("Code Lengths Table:\n");
+    for (size_t i = 0; i < NumCodeLengths; ++i) {
+        printf("%zu\t%u\n", i, code_lengths[i]);
+    }
+    printf("\n");
+
+    if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], NumCodeLengths)) {
+        fatal_error("failed to initialize dynamic huffman tree.");
+    }
+
+    std::vector<uint16_t> dynamic_code_lengths;
+    for (size_t i = 0; i < (hlit + hdist); ++i) {
+        uint16_t value = read_huffman_value(&dynamic_huffman_tree[0], reader);
+        // TEMP TEMP
+        printf("read dynamic huffman value: %u\n", value);
+        if (value <= 15) {
+            dynamic_code_lengths.push_back(value);
+        } else if (value == 16) {
+            if (dynamic_code_lengths.empty()) {
+                fatal_error("received repeat code with no codes.");
+            }
+            size_t repeat = reader.read_bits(2) + 3;
+            uint16_t repeat_value = dynamic_code_lengths.back();
+            dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat, repeat_value);
+        } else if (value <= 18) {
+            size_t bits = 0;
+            size_t offset;
+            switch (value) {
+                case 17: bits = 3; offset =  3; break;
+                case 18: bits = 7; offset = 11; break;
+            }
+            assert(bits != 0);
+            size_t repeat = reader.read_bits(bits) + offset;
+            dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat, 0);
+        } else {
+            fatal_error("invalid value: %u", value);
+        }
+    }
+    printf("Read %zu code lengths\n", dynamic_code_lengths.size());
+
+    if (!init_huffman_tree(dynamic_huffman_tree, dynamic_code_lengths.data(), dynamic_code_lengths.size())) {
+        fatal_error("failed to initialize dynamic huffman tree");
+    }
+    // huffman_tree = dynamic_code_lengths.data();
+    // // TODO: not sure about this??
+    // extra_bits = g_ExtraBits.data();
+    // base_lengths = g_BaseLengths.data();
+
+    printf("Finished reading dynamic huffman tree for section\n");
+    return true;
 }
 
 void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths)
@@ -446,7 +522,6 @@ bool init_fixed_huffman_data()
     return true;
 }
 
-#define fatal_error(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
 int main(int argc, char** argv)
 {
@@ -686,77 +761,12 @@ int main(int argc, char** argv)
                 base_lengths = g_BaseLengths.data();
             } else {
                 printf("Block Encoding: Dynamic Huffman\n");
-
-                constexpr size_t NumCodeLengths = 19;
-                static uint16_t code_lengths_order[NumCodeLengths] = {
-                    16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
-                };
-                static uint16_t code_lengths[NumCodeLengths];
-                memset(&code_lengths[0], 0, sizeof(code_lengths));
-
-                size_t hlit = reader.read_bits(5) + 257;
-                size_t hdist = reader.read_bits(5) + 1;
-                size_t hclen = reader.read_bits(4) + 4;
-
-                printf("hlit:  %zu\n", hlit);
-                printf("hdist: %zu\n", hdist);
-                printf("hclen: %zu\n", hclen);
-
-                for (size_t i = 0; i < hclen; ++i) {
-                    uint8_t codelen = reader.read_bits(3);
-                    printf("\tcodelen = %u\n", codelen);
-                    code_lengths[code_lengths_order[i]] = codelen;
+                if (!read_dynamic_huffman_tree(reader, dynamic_huffman_tree)) {
+                    fatal_error("failed to read dynamic huffman tree");
                 }
-
-                printf("Code Lengths Table:\n");
-                for (size_t i = 0; i < NumCodeLengths; ++i) {
-                    printf("%zu\t%u\n", i, code_lengths[i]);
-                }
-                printf("\n");
-
-                if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], NumCodeLengths)) {
-                    fatal_error("failed to initialize dynamic huffman tree.");
-                }
-
-                std::vector<uint16_t> dynamic_code_lengths;
-                for (size_t i = 0; i < (hlit + hdist); ++i) {
-                    uint16_t value = read_huffman_value(&dynamic_huffman_tree[0], reader);
-                    // TEMP TEMP
-                    printf("read dynamic huffman value: %u\n", value);
-                    if (value <= 15) {
-                        dynamic_code_lengths.push_back(value);
-                    } else if (value == 16) {
-                        if (dynamic_code_lengths.empty()) {
-                            fatal_error("received repeat code with no codes.");
-                        }
-                        size_t repeat = reader.read_bits(2) + 3;
-                        uint16_t repeat_value = dynamic_code_lengths.back();
-                        dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat, repeat_value);
-                    } else if (value <= 18) {
-                        size_t bits = 0;
-                        size_t offset;
-                        switch (value) {
-                            case 17: bits = 3; offset =  3; break;
-                            case 18: bits = 7; offset = 11; break;
-                        }
-                        assert(bits != 0);
-                        size_t repeat = reader.read_bits(bits) + offset;
-                        dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat, 0);
-                    } else {
-                        fatal_error("invalid value: %u", value);
-                    }
-                }
-                printf("Read %zu code lengths\n", dynamic_code_lengths.size());
-
-                if (!init_huffman_tree(dynamic_huffman_tree, dynamic_code_lengths.data(), dynamic_code_lengths.size())) {
-                    fatal_error("failed to initialize dynamic huffman tree");
-                }
-                huffman_tree = dynamic_code_lengths.data();
-                // TODO: not sure about this??
+                huffman_tree = dynamic_huffman_tree.data();
                 extra_bits = g_ExtraBits.data();
                 base_lengths = g_BaseLengths.data();
-
-                printf("Finished reading dynamic huffman tree for section\n");
             }
 
             for (;;) {
