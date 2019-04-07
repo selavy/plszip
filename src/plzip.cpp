@@ -446,6 +446,8 @@ bool init_fixed_huffman_data()
     return true;
 }
 
+#define fatal_error(fmt, ...) do { fprintf(stderr, (fmt "\n"), ##__VA_ARGS__); exit(1); } while(0)
+
 int main(int argc, char** argv)
 {
     const char* output_filename;
@@ -481,8 +483,7 @@ int main(int argc, char** argv)
 
     GzipHeader hdr;
     if (fread(&hdr, sizeof(hdr), 1, fp) != 1) {
-        fprintf(stderr, "fread: short read\n");
-        exit(1);
+        fatal_error("fread: short read");
     }
     // TODO: handle big endian platform
 
@@ -508,12 +509,10 @@ int main(int argc, char** argv)
     printf("\tos    = %u\n", hdr.os);
 
     if (hdr.id1 != ID1_GZIP) {
-        fprintf(stderr, "Unsupported identifier #1: %u\n", hdr.id1);
-        exit(0);
+        fatal_error("Unsupported identifier #1: %u", hdr.id1);
     }
     if (hdr.id2 != ID2_GZIP) {
-        fprintf(stderr, "Unsupported identifier #2: %u\n", hdr.id2);
-        exit(0);
+        fatal_error("Unsupported identifier #2: %u", hdr.id2);
     }
 
     print_flags_debug(hdr.flg);
@@ -526,14 +525,13 @@ int main(int argc, char** argv)
     if ((hdr.flg & static_cast<uint8_t>(Flags::FEXTRA)) != 0) {
         uint16_t xlen;
         if (fread(&xlen, sizeof(xlen), 1, fp) != 1) {
-            fprintf(stderr, "ERR: short read on xlen\n");
-            exit(1);
+            fatal_error("ERR: short read on xlen");
         }
         printf("XLEN = %u\n", xlen);
         std::vector<uint8_t> buffer;
         buffer.assign(xlen, 0u);
         if (fread(buffer.data(), xlen, 1, fp) != 1) {
-            fprintf(stderr, "ERR: short read on FEXTRA bytes\n");
+            fatal_error("ERR: short read on FEXTRA bytes");
         }
         fprintf(stderr, "ERR: FEXTRA flag not supported.\n");
         exit(1);
@@ -547,8 +545,7 @@ int main(int argc, char** argv)
     std::string fname = "<none>";
     if ((hdr.flg & static_cast<uint8_t>(Flags::FNAME)) != 0) {
         if (!read_null_terminated_string(fp, fname)) {
-            fprintf(stderr, "ERR: failed to read FNAME\n");
-            exit(1);
+            fatal_error("ERR: failed to read FNAME");
         }
     }
     printf("Original Filename: '%s'\n", fname.c_str());
@@ -561,8 +558,7 @@ int main(int argc, char** argv)
     std::string fcomment = "<none>";
     if ((hdr.flg & static_cast<uint8_t>(Flags::FCOMMENT)) != 0) {
         if (!read_null_terminated_string(fp, fcomment)) {
-            fprintf(stderr, "ERR: failed to read FCOMMENT\n");
-            exit(1);
+            fatal_error("ERR: failed to read FCOMMENT");
         }
     }
     printf("File comment: '%s'\n", fcomment.c_str());
@@ -584,8 +580,7 @@ int main(int argc, char** argv)
     uint16_t crc16 = 0;
     if ((hdr.flg & static_cast<uint8_t>(Flags::FHCRC)) != 0) {
         if (fread(&crc16, sizeof(crc16), 1, fp) != 1) {
-            fprintf(stderr, "ERR: failed to read CRC16\n");
-            exit(1);
+            fatal_error("ERR: failed to read CRC16");
         }
     }
     printf("CRC16: %u (0x%04X)\n", crc16, crc16);
@@ -595,8 +590,7 @@ int main(int argc, char** argv)
                    static_cast<uint8_t>(Flags::RESERV2) |
                    static_cast<uint8_t>(Flags::RESERV3);
     if ((hdr.flg & mask) != 0) {
-        fprintf(stderr, "ERR: reserved bits are not 0\n");
-        exit(1);
+        fatal_error("ERR: reserved bits are not 0");
     }
 
     // TODO: read time
@@ -649,24 +643,20 @@ int main(int argc, char** argv)
             uint16_t len;
             uint16_t nlen;
             if (fread(&len, sizeof(len), 1, fp) != 1) {
-                fprintf(stderr, "ERR: short read on len\n");
-                exit(1);
+                fatal_error("ERR: short read on len");
             }
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
-                fprintf(stderr, "ERR: short read on nlen\n");
-                exit(1);
+                fatal_error("ERR: short read on nlen");
             }
 
             // TODO: faster API for copying from input to output? Might be on non-aligned though.
             // copy `len` bytes directly to output
             copy_buffer.assign('\0', len);
             if (fread(copy_buffer.data(), len, 1, fp) != 1) {
-                fprintf(stderr, "ERR: short read on uncompressed data\n");
-                exit(1);
+                fatal_error("ERR: short read on uncompressed data");
             }
             if (fwrite(copy_buffer.data(), len, 1, output) != 1) {
-                fprintf(stderr, "ERR: short write of uncompressed data\n");
-                exit(1);
+                fatal_error("ERR: short write of uncompressed data");
             }
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
@@ -726,40 +716,37 @@ int main(int argc, char** argv)
                 printf("\n");
 
                 if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], NumCodeLengths)) {
-                    fprintf(stderr, "ERR: unable to initialize huffman tree for dynamic huffman encoding.\n");
+                    fatal_error("ERR: failed to initialize dynamic huffman tree.\n");
                 }
-
-                auto repeat_value = [](std::vector<uint16_t>& v, uint16_t value, size_t repeat) {
-                    for (size_t i = 0; i < repeat; ++i) {
-                        v.push_back(value);
-                    }
-                };
 
                 std::vector<uint16_t> clens;
                 for (size_t i = 0; i < (hlit + hdist); ++i) {
-                    uint16_t value = read_huffman_value(huffman_tree, reader);
+                    uint16_t value = read_huffman_value(&dynamic_huffman_tree[0], reader);
                     if (value <= 15) {
                         clens.push_back(value);
-                    } else if (value == 16) {
-                        size_t repeat = reader.read_bits(2) + 3;
-                        if (!clens.empty()) {
-                            fprintf(stderr, "ERR: received repeat code with no codes.\n");
-                            exit(1);
+                    } else {
+                        size_t bits = 0;
+                        size_t offset;
+                        switch (value) {
+                            case 15: bits = 2; offset =  3; break;
+                            case 16: bits = 3; offset =  3; break;
+                            case 17: bits = 7; offset = 11; break;
+                            default: break;
                         }
-                        repeat_value(clens, clens.back(), repeat);
-                    } else if (value == 17) {
-                        size_t repeat = reader.read_bits(3) + 3;
-                        repeat_value(clens, 0, repeat);
-                    } else if (value == 18) {
-                        size_t repeat = reader.read_bits(7) + 11;
-                        repeat_value(clens, 0, repeat);
+                        if (bits == 0) {
+                            fatal_error("ERR: invalid value read: %u", value);
+                        }
+                        size_t repeat = reader.read_bits(bits) + offset;
+                        if (clens.empty()) {
+                            fatal_error("ERR: received repeat code with no codes.");
+                        }
+                        printf("Repeating the value %u %zu times\n", clens.back(), repeat);
+                        clens.insert(clens.end(), repeat, clens.back());
                     }
                 }
-
                 printf("Read %zu code lengths\n", clens.size());
 
-                fprintf(stderr, "ERR: dynamic huffman not supported yet\n");
-                exit(1);
+                fatal_error("ERR: dynamic huffman not supported yet");
             }
 
             for (;;) {
