@@ -367,36 +367,49 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
 //   266   1  13,14      276   3   59-66
 
     // TODO: can subtract 257
-    constexpr size_t Elements = 285;
-    extra_bits.assign(Elements, 0);
-    base_lengths.assign(Elements, 0);
-    for (size_t i = 257; i <= 264; ++i) {
-        extra_bits[i] = 0;
-        base_lengths[i] = i - 257 + 3;
-    }
-    for (size_t i = 265; i <= 268; ++i) {
-        extra_bits[i] = 1;
-        base_lengths[i] = (i - 265 + 11) + (i - 256)*2;
-    }
-    for (size_t i = 269; i <= 272; ++i) {
-        extra_bits[i] = 2;
-        base_lengths[i] = (i - 269 + 19) + (i - 269)*4;
-    }
-    for (size_t i = 273; i <= 276; ++i) {
-        extra_bits[i] = 3;
-        base_lengths[i] = (i - 273 + 35) + (i - 273)*8;
-    }
-    for (size_t i = 277; i <= 280; ++i) {
-        extra_bits[i] = 4;
-        base_lengths[i] = (i - 277 + 67) + (i - 273)*16;
-    }
-    for (size_t i = 281; i <= 284; ++i) {
-        extra_bits[i] = 5;
-        base_lengths[i] = (i - 281 + 131) + (i - 281)*32;
-    }
-    for (size_t i = 285; i <= 285; ++i) {
-        extra_bits[i] = 0;
-        base_lengths[i] = 258;
+    // constexpr size_t NumElements = 28;
+    constexpr size_t NumElements = 29;
+    extra_bits.assign(257+NumElements, 0);
+    base_lengths.assign(257+NumElements, 0);
+
+    struct {
+        size_t extra_bits;
+        size_t base_length;
+    } entries[NumElements] = {
+        /*257*/ { 0,   3 },
+        /*258*/ { 0,   4 },
+        /*259*/ { 0,   5 },
+        /*260*/ { 0,   6 },
+        /*261*/ { 0,   7 },
+        /*262*/ { 0,   8 },
+        /*263*/ { 0,   9 },
+        /*264*/ { 0,  10 },
+        /*265*/ { 1,  11 },
+        /*266*/ { 1,  13 },
+        /*267*/ { 1,  15 },
+        /*268*/ { 1,  17 },
+        /*269*/ { 2,  19 },
+        /*270*/ { 2,  23 },
+        /*271*/ { 2,  27 },
+        /*272*/ { 2,  31 },
+        /*273*/ { 3,  35 },
+        /*274*/ { 3,  43 },
+        /*275*/ { 3,  51 },
+        /*276*/ { 3,  59 },
+        /*277*/ { 4,  67 },
+        /*278*/ { 4,  83 },
+        /*279*/ { 4,  99 },
+        /*280*/ { 5, 115 },
+        /*281*/ { 5, 131 },
+        /*282*/ { 5, 163 },
+        /*283*/ { 5, 195 },
+        /*284*/ { 5, 227 },
+        /*285*/ { 0, 258 },
+    };
+
+    for (size_t i = 0; i < NumElements; ++i) {
+        extra_bits[i+257] = entries[i].extra_bits;
+        base_lengths[i+257] = entries[i].base_length;
     }
 
     return true;
@@ -542,7 +555,6 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
                 assert(0 && "branch should never be hit");
             }
             size_t repeat_times = reader.read_bits(nbits) + offset;
-            printf("Repeating value %u %zu times.\n", repeat_value, repeat_times);
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
             i += repeat_times;
         } else {
@@ -841,8 +853,8 @@ int main(int argc, char** argv)
 
             const uint16_t* huffman_tree;
             size_t huffman_tree_length;
-            const uint16_t* extra_bits;
-            const uint16_t* base_lengths;
+            const uint16_t* extra_bits = g_ExtraLengthBits.data();
+            const uint16_t* base_lengths = g_BaseLengths.data();
             const uint16_t* extra_distance_bits = g_ExtraDistanceBits.data();
             const uint16_t* base_distance_lengths = g_BaseDistanceLengths.data();
             copy_buffer.clear();
@@ -850,8 +862,6 @@ int main(int argc, char** argv)
                 printf("Block Encoding: Fixed Huffman\n");
                 huffman_tree = g_FixedHuffmanTree.data();
                 huffman_tree_length = g_FixedHuffmanTree.size();
-                extra_bits = g_ExtraLengthBits.data();
-                base_lengths = g_BaseLengths.data();
             } else {
                 printf("Block Encoding: Dynamic Huffman\n");
                 if (!read_dynamic_huffman_tree(reader, dynamic_huffman_tree)) {
@@ -859,12 +869,11 @@ int main(int argc, char** argv)
                 }
                 huffman_tree = dynamic_huffman_tree.data();
                 huffman_tree_length = dynamic_huffman_tree.size();
-                extra_bits = g_ExtraLengthBits.data();
-                base_lengths = g_BaseLengths.data();
             }
 
             for (;;) {
                 uint16_t value = read_huffman_value(huffman_tree, huffman_tree_length, reader);
+                printf("Read huffman value: %u\n", value);
                 if (value < 256) {
                     copy_buffer.push_back(static_cast<uint8_t>(value));
                 } else if (value == 256) {
@@ -875,6 +884,8 @@ int main(int argc, char** argv)
                     size_t base_length = base_lengths[value];
                     size_t extra_length = reader.read_bits(extra_bits[value]);
                     size_t length = base_length + extra_length;
+                    printf("Length Code = %u, Base Length = %zu, Extra Bits = %u, Extra Length = %zu, Length = %zu\n",
+                            value, base_length, extra_bits[value], extra_length, length);
                     size_t distance_code = reader.read_distance_code();
                     size_t base_distance = base_distance_lengths[distance_code];
                     size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code]);
