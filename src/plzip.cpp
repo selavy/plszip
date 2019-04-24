@@ -519,6 +519,14 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
         code_lengths[code_lengths_order[i]] = codelen;
     }
 
+    /* BEGIN TEMP */
+    printf("INITIAL TABLE LENGTHS\n");
+    for (size_t i = 0; i < 19; ++i) {
+        printf("%zu -> %u\n", i, code_lengths[i]);
+    }
+    printf("\n");
+    /* END TEMP */
+
     if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], NumCodeLengths)) {
         fatal_error("failed to initialize dynamic huffman tree.");
     }
@@ -531,6 +539,7 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
         uint16_t value = read_huffman_value(dynamic_huffman_tree.data(), dynamic_huffman_tree.size(), reader);
         if (value <= 15) {
             dynamic_code_lengths.push_back(value);
+            // printf("i = %zu, i = %zu, repeat = %d, hlit = %zu\n", i, i + 1, 1, hlit);
             i += 1;
         } else if (value <= 18) {
             size_t nbits;
@@ -556,12 +565,18 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
             }
             size_t repeat_times = reader.read_bits(nbits) + offset;
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
+            // printf("i = %zu, i = %zu, repeat = %zu, hlit = %zu\n", i, i + repeat_times, repeat_times, hlit);
             i += repeat_times;
         } else {
             fatal_error("invalid value: %u", value);
         }
     }
     assert(i == ncodes && "Went over the number of expected codes");
+    assert(dynamic_code_lengths.size() > 256 && dynamic_code_lengths[256] != 0 && "invalid code -- missing end-of-block");
+
+    /* BEGIN TEMP */
+    printf("state[256] = %u\n", dynamic_code_lengths[256]);
+    /* END TEMP */
 
     printf("Read %zu codes for dynamic huffman tree. nodes = %zu\n", dynamic_code_lengths.size(), ncodes);
 
@@ -875,6 +890,8 @@ int main(int argc, char** argv)
                 uint16_t value = read_huffman_value(huffman_tree, huffman_tree_length, reader);
                 printf("Read huffman value: %u\n", value);
                 if (value < 256) {
+                    // TEMP TEMP
+                    printf("Read value: %c\n", (char)value);
                     copy_buffer.push_back(static_cast<uint8_t>(value));
                 } else if (value == 256) {
                     // TEMP TEMP
