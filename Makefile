@@ -26,6 +26,7 @@ test2: debug
 clean:
 	ninja -C build/debug clean
 	ninja -C build/release clean
+	rm -f test5.txt.gz
 
 .PHONY: fullclean
 fullclean:
