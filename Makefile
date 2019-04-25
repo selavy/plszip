@@ -27,11 +27,20 @@ test3.txt.gz: ./tests/test3.txt
 test3: debug test3.txt.gz
 	./build/debug/bin/plzip test3.txt.gz output
 
+# test7.txt:
+test7.txt.gz: ./tests/test7.txt
+	gzip -c ./tests/test7.txt > test7.txt.gz
+
+test7: debug test7.txt.gz
+	./build/debug/bin/plzip test7.txt.gz output
+
 .PHONY: clean
 clean:
 	ninja -C build/debug clean
 	ninja -C build/release clean
 	rm -f test5.txt.gz
+	rm -f test3.txt.gz
+	rm -f test7.txt.gz
 
 .PHONY: fullclean
 fullclean:
