@@ -2,13 +2,14 @@
 
 PLZIP=../build/debug/bin/plzip
 
-TESTS=(test1 test2 test3 test4)
+TESTS=(test1 test2 test3 test4 test5)
 for TEST in ${TESTS[@]};
 do
     ORIG=${TEST}.txt
     COMPRESSED=${TEST}.txt.gz
     OUTPUT=${TEST}.output
-    echo -n "$TEST... " && gzip -c $ORIG > $COMPRESSED && $PLZIP $COMPRESSED $OUTPUT > /dev/null && diff $ORIG $OUTPUT && echo "Passed." || (echo "Failed" && exit 1)
+    # echo -n "$TEST... " && gzip -c $ORIG > $COMPRESSED && $PLZIP $COMPRESSED $OUTPUT > /dev/null && diff $ORIG $OUTPUT && echo "Passed." || (echo "Failed" && exit 1)
+    echo -n "$TEST... " && gzip -c $ORIG > $COMPRESSED && $PLZIP $COMPRESSED $OUTPUT > /dev/null 2> /dev/null && diff $ORIG $OUTPUT && echo "Passed." || (echo "Failed" && exit 1)
     rm -f $COMPRESSED
     rm -f $OUTPUT
 done
