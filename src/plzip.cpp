@@ -318,7 +318,7 @@ bool init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint1
         /*16*/ {  7,   257 },
         /*17*/ {  7,   385 },
         /*18*/ {  8,   513 },
-        /*19*/ {  8,   796 },
+        /*19*/ {  8,   769 },
         /*20*/ {  9,  1025 },
         /*21*/ {  9,  1537 },
         /*22*/ { 10,  2049 },
@@ -901,14 +901,14 @@ int main(int argc, char** argv)
                     size_t base_length = base_lengths[value];
                     size_t extra_length = reader.read_bits(extra_bits[value]);
                     size_t length = base_length + extra_length;
-                    DEBUG("Length Code = %u, Base Length = %zu, Extra Bits = %u, Extra Length = %zu, Length = %zu",
-                            value, base_length, extra_bits[value], extra_length, length);
                     size_t distance_code = read_huffman_value(distance_tree, distance_tree_length, reader);
                     assert((distance_code < 32) && "invalid distance code");
                     size_t base_distance = base_distance_lengths[distance_code];
                     size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code]);
                     size_t distance = base_distance + extra_distance;
                     DEBUG("inflate: distance %zu", distance);
+                    DEBUG("Length Code = %u, Base Length = %zu, Extra Bits = %u, Extra Length = %zu, Length = %zu, Base Distance = %zu, Extra Distance = %zu, Distance Code = %zu, Extra Distance Bits = %d",
+                            value, base_length, extra_bits[value], extra_length, length, base_distance, extra_distance, distance_code, extra_distance_bits[distance_code]);
                     // TODO: is there a more efficient way to copy from a portion of the buffer
                     //       to another? I could pre-allocate the size, then memcpy the section over?
                     // TEMP TEMP
