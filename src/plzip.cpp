@@ -6,6 +6,7 @@
 #include <vector>
 #include <libgen.h>
 #include <cassert>
+#include <algorithm> // TEMP TEMP
 
 #define fatal_error(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
@@ -280,6 +281,7 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
 
 constexpr uint16_t EmptySentinel = UINT16_MAX;
 std::vector<uint16_t> g_FixedHuffmanTree;
+std::vector<uint16_t> g_FixedDistanceTree;
 std::vector<uint16_t> g_ExtraLengthBits;
 std::vector<uint16_t> g_BaseLengths;
 std::vector<uint16_t> g_ExtraDistanceBits;
@@ -435,9 +437,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     for (size_t i = 0; i < n; ++i) {
         assert(code_lengths[i] <= MaxBitLength && "Unsupported bit length");
         ++bl_count[code_lengths[i]];
-        if (code_lengths[i] > max_bit_length) {
-            max_bit_length = code_lengths[i];
-        }
+        max_bit_length = std::max<uint16_t>(code_lengths[i], max_bit_length);
     }
     bl_count[0] = 0;
 
@@ -473,30 +473,50 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
             size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
             index = 2*index + isset;
         }
-        // TEMP TEMP
-        if (tree[index] != EmptySentinel) {
-            printf("Repeating value %zu at index %zu, previous value = %u\n", value, index, tree[index]);
-        }
-        assert(tree[index] == EmptySentinel && "Assigned multiple values to same index");
+        assert((tree[index] == EmptySentinel) && "Assigned multiple values to same index");
         tree[index] = value;
     }
 
     return true;
 }
 
-// XXX: pass length to verify index is safe
 uint16_t read_huffman_value(const uint16_t* huffman_tree, size_t huffman_tree_length, BitReader& reader)
 {
+    // printf("read_huffman_value\n");
     size_t index = 1;
     do {
         index *= 2;
-        index += reader.read_bit() ? 1 : 0;
+        // TEMP TEMP
+        bool biton = reader.read_bit();
+        // printf("\tBIT: %d\n", biton);
+        index += biton ? 1 : 0;
+        // index += reader.read_bit() ? 1 : 0;
         assert(index < huffman_tree_length && "invalid index");
     } while (huffman_tree[index] == EmptySentinel);
     return huffman_tree[index];
 }
 
-bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic_huffman_tree)
+// TEMP TEMP
+bool get_huffman_bits(uint16_t value, const uint16_t* tree, size_t length, char* buffer) {
+    char* out = buffer;
+    auto* it = std::find(tree, tree+length, value);
+    if (it == (tree + length)) {
+        return false;
+    }
+    size_t index = it - tree;
+    while (index > 1) {
+        *out++ = (index & 1) ? '1' : '0';
+        index /= 2;
+    }
+    *out = '\0';
+    --out;
+    while (buffer < out) {
+        std::iter_swap(buffer++, out--);
+    }
+    return true;
+}
+
+bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& literal_tree, std::vector<uint16_t>& distance_tree)
 {
     constexpr size_t NumCodeLengths = 19;
     static const uint16_t code_lengths_order[NumCodeLengths] = {
@@ -519,28 +539,15 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
         code_lengths[code_lengths_order[i]] = codelen;
     }
 
-    /* BEGIN TEMP */
-    printf("INITIAL TABLE LENGTHS\n");
-    for (size_t i = 0; i < 19; ++i) {
-        printf("%zu -> %u\n", i, code_lengths[i]);
-    }
-    printf("\n");
-    /* END TEMP */
-
-    if (!init_huffman_tree(dynamic_huffman_tree, &code_lengths[0], NumCodeLengths)) {
+    if (!init_huffman_tree(literal_tree, &code_lengths[0], NumCodeLengths)) {
         fatal_error("failed to initialize dynamic huffman tree.");
     }
-    // TEMP TEMP
-    printf("Successfully decoded first dynamic encoding.\n");
 
     std::vector<uint16_t> dynamic_code_lengths;
-    size_t i = 0;
-    while (i < ncodes) {
-        uint16_t value = read_huffman_value(dynamic_huffman_tree.data(), dynamic_huffman_tree.size(), reader);
+    while (dynamic_code_lengths.size() < ncodes) {
+        uint16_t value = read_huffman_value(literal_tree.data(), literal_tree.size(), reader);
         if (value <= 15) {
             dynamic_code_lengths.push_back(value);
-            // printf("i = %zu, i = %zu, repeat = %d, hlit = %zu\n", i, i + 1, 1, hlit);
-            i += 1;
         } else if (value <= 18) {
             size_t nbits;
             size_t offset;
@@ -565,24 +572,41 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& dynamic
             }
             size_t repeat_times = reader.read_bits(nbits) + offset;
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
-            // printf("i = %zu, i = %zu, repeat = %zu, hlit = %zu\n", i, i + repeat_times, repeat_times, hlit);
-            i += repeat_times;
         } else {
             fatal_error("invalid value: %u", value);
         }
     }
-    assert(i == ncodes && "Went over the number of expected codes");
+    // // TEMP TEMP
+    // for (unsigned ii = 0; ii < dynamic_code_lengths.size(); ++ii) {
+    //     printf("lens[%3u] = %u\n", ii, dynamic_code_lengths[ii]);
+    // }
+    assert(dynamic_code_lengths.size() == ncodes && "Went over the number of expected codes");
     assert(dynamic_code_lengths.size() > 256 && dynamic_code_lengths[256] != 0 && "invalid code -- missing end-of-block");
-
-    /* BEGIN TEMP */
-    printf("state[256] = %u\n", dynamic_code_lengths[256]);
-    /* END TEMP */
-
     printf("Read %zu codes for dynamic huffman tree. nodes = %zu\n", dynamic_code_lengths.size(), ncodes);
 
-    if (!init_huffman_tree(dynamic_huffman_tree, dynamic_code_lengths.data(), dynamic_code_lengths.size())) {
+    if (!init_huffman_tree(literal_tree, dynamic_code_lengths.data(), hlit)) {
         fatal_error("failed to initialize dynamic huffman tree");
     }
+
+    if (!init_huffman_tree(distance_tree, dynamic_code_lengths.data() + hlit, dynamic_code_lengths.size() - hlit)) {
+        fatal_error("failed to initialize dynamic distance tree");
+    }
+
+    // // TEMP TEMP
+    // static char bbb[24];
+    // memset(&bbb[0], 0, sizeof(bbb));
+
+    // auto mydebug = [&](char val) {
+    //     if (!get_huffman_bits(val, literal_tree.data(), literal_tree.size(), &bbb[0])) {
+    //         fatal_error("unable to find huffman value");
+    //     }
+    //     printf("Literal(%3u) = '%c', code length = %u, bits = %s\n", val, val, dynamic_code_lengths[val], &bbb[0]);
+    // };
+    // mydebug('L');
+    // mydebug('o');
+    // mydebug('r');
+    // mydebug('e');
+    // mydebug('m');
 
     printf("Finished reading dynamic huffman tree for section\n");
     return true;
@@ -623,6 +647,11 @@ bool init_fixed_huffman_data()
     if (!init_huffman_tree(g_FixedHuffmanTree, code_lengths.data(), code_lengths.size())) {
         fatal_error("failed to initialize fixed huffman tree.");
         return false;
+    }
+
+    code_lengths.assign(32, 5);
+    if (!init_huffman_tree(g_FixedDistanceTree, code_lengths.data(), code_lengths.size())) {
+        fatal_error("failed to initialize fixed distance huffman tree.");
     }
 
     if (!init_huffman_lengths(g_ExtraLengthBits, g_BaseLengths)) {
@@ -815,6 +844,7 @@ int main(int argc, char** argv)
     //------------------------------------------------
 
     std::vector<uint16_t> dynamic_huffman_tree;
+    std::vector<uint16_t> dynamic_distance_tree;
     std::vector<uint8_t> copy_buffer;
     for (;;) {
         BitReader reader(fp);
@@ -868,6 +898,8 @@ int main(int argc, char** argv)
 
             const uint16_t* huffman_tree;
             size_t huffman_tree_length;
+            const uint16_t* distance_tree;
+            size_t distance_tree_length;
             const uint16_t* extra_bits = g_ExtraLengthBits.data();
             const uint16_t* base_lengths = g_BaseLengths.data();
             const uint16_t* extra_distance_bits = g_ExtraDistanceBits.data();
@@ -877,21 +909,27 @@ int main(int argc, char** argv)
                 printf("Block Encoding: Fixed Huffman\n");
                 huffman_tree = g_FixedHuffmanTree.data();
                 huffman_tree_length = g_FixedHuffmanTree.size();
+                distance_tree = g_FixedDistanceTree.data();
+                distance_tree_length = g_FixedDistanceTree.size();
             } else {
                 printf("Block Encoding: Dynamic Huffman\n");
-                if (!read_dynamic_huffman_tree(reader, dynamic_huffman_tree)) {
+                if (!read_dynamic_huffman_tree(reader, dynamic_huffman_tree, dynamic_distance_tree)) {
                     fatal_error("failed to read dynamic huffman tree");
                 }
                 huffman_tree = dynamic_huffman_tree.data();
                 huffman_tree_length = dynamic_huffman_tree.size();
+                distance_tree = dynamic_distance_tree.data();
+                distance_tree_length = dynamic_distance_tree.size();
             }
 
             for (;;) {
                 uint16_t value = read_huffman_value(huffman_tree, huffman_tree_length, reader);
-                printf("Read huffman value: %u\n", value);
+                // printf("Read huffman value: %u\n", value);
+                // inflate: literal( 76): 'L'
+                printf("inflate: literal(%3u): '%c'\n", value, (char)value);
                 if (value < 256) {
                     // TEMP TEMP
-                    printf("Read value: %c\n", (char)value);
+                    // printf("Read value: %c\n", (char)value);
                     copy_buffer.push_back(static_cast<uint8_t>(value));
                 } else if (value == 256) {
                     // TEMP TEMP
@@ -903,7 +941,15 @@ int main(int argc, char** argv)
                     size_t length = base_length + extra_length;
                     printf("Length Code = %u, Base Length = %zu, Extra Bits = %u, Extra Length = %zu, Length = %zu\n",
                             value, base_length, extra_bits[value], extra_length, length);
-                    size_t distance_code = reader.read_distance_code();
+                    // size_t distance_code = reader.read_distance_code();
+                    size_t distance_code = read_huffman_value(distance_tree, distance_tree_length, reader);
+                    assert((distance_code < 32) && "invalid distance code");
+                    // if (btype == BType::FIXED_HUFFMAN) {
+                    //     // distance_code = reader.read_distance_code();
+                    //     distance_code = read_huffman_value(distance_tree, distance_tree_length, reader);
+                    // } else {
+                    //     fatal_error("Distance codes not supported for dynamic huffman yet");
+                    // }
                     size_t base_distance = base_distance_lengths[distance_code];
                     size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code]);
                     size_t distance = base_distance + extra_distance;
