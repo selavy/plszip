@@ -55,12 +55,17 @@ struct BitReader
         return result;
     }
 
-    uint16_t read_bits(size_t nbits)
+    uint16_t read_bits(size_t nbits, bool verbose=false)
     {
         assert(nbits <= 16);
-        uint8_t result = 0;
+        uint16_t result = 0;
         for (size_t i = 0; i < nbits; ++i) {
-            result |= (read_bit() ? 1 : 0) << i;
+            // uint8_t bit = read_bit() ? 1u : 0u;
+            // if (verbose) {
+            //     printf("\tBIT: %u\n", bit);
+            // }
+            // result |= bit << i;
+            result |= (read_bit() ? 1u : 0u) << i;
         }
         return result;
     }
@@ -904,19 +909,27 @@ int main(int argc, char** argv)
                     size_t distance_code = read_huffman_value(distance_tree, distance_tree_length, reader);
                     assert((distance_code < 32) && "invalid distance code");
                     size_t base_distance = base_distance_lengths[distance_code];
-                    size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code]);
+                    size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code], /*verbose*/true);
                     size_t distance = base_distance + extra_distance;
                     DEBUG("inflate: distance %zu", distance);
-                    DEBUG("Length Code = %u, Base Length = %zu, Extra Bits = %u, Extra Length = %zu, Length = %zu, Base Distance = %zu, Extra Distance = %zu, Distance Code = %zu, Extra Distance Bits = %d",
-                            value, base_length, extra_bits[value], extra_length, length, base_distance, extra_distance, distance_code, extra_distance_bits[distance_code]);
+                    DEBUG("Length Code = %u, Base Length = %zu, Extra Bits = %u, Extra Length = %zu, "
+                          "Length = %zu, Base Distance = %zu, Extra Distance = %zu, "
+                          "Distance Code = %zu, Extra Distance Bits = %d",
+                           value, base_length, extra_bits[value], extra_length, length,
+                           base_distance, extra_distance, distance_code,
+                           extra_distance_bits[distance_code]);
                     // TODO: is there a more efficient way to copy from a portion of the buffer
                     //       to another? I could pre-allocate the size, then memcpy the section over?
                     // TEMP TEMP
                     assert(copy_buffer.size() >= distance && "invalid distance");
+                    std::vector<uint8_t> temptemp;
                     size_t start_index = copy_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
+                        temptemp.push_back(copy_buffer[start_index + i]);
                         copy_buffer.push_back(copy_buffer[start_index + i]);
                     }
+                    temptemp.push_back('\0');
+                    DEBUG("Copied data: '%s'", temptemp.data());
                 } else {
                     fprintf(stderr, "ERR: invalid fixed huffman value: %u\n", value);
                     exit(1);
