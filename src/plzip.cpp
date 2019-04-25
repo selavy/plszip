@@ -6,7 +6,6 @@
 #include <vector>
 #include <libgen.h>
 #include <cassert>
-#include <algorithm> // TEMP TEMP
 
 #define fatal_error(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
@@ -474,34 +473,10 @@ uint16_t read_huffman_value(const uint16_t* huffman_tree, size_t huffman_tree_le
     size_t index = 1;
     do {
         index *= 2;
-        // // TEMP TEMP
-        // bool biton = reader.read_bit();
-        // // printf("\tBIT: %d\n", biton);
-        // index += biton ? 1 : 0;
         index += reader.read_bit() ? 1 : 0;
         assert(index < huffman_tree_length && "invalid index");
     } while (huffman_tree[index] == EmptySentinel);
     return huffman_tree[index];
-}
-
-// TEMP TEMP
-bool get_huffman_bits(uint16_t value, const uint16_t* tree, size_t length, char* buffer) {
-    char* out = buffer;
-    auto* it = std::find(tree, tree+length, value);
-    if (it == (tree + length)) {
-        return false;
-    }
-    size_t index = it - tree;
-    while (index > 1) {
-        *out++ = (index & 1) ? '1' : '0';
-        index /= 2;
-    }
-    *out = '\0';
-    --out;
-    while (buffer < out) {
-        std::iter_swap(buffer++, out--);
-    }
-    return true;
 }
 
 bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& literal_tree, std::vector<uint16_t>& distance_tree)
@@ -893,8 +868,6 @@ int main(int argc, char** argv)
                     DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
                     copy_buffer.push_back(static_cast<uint8_t>(value));
                 } else if (value == 256) {
-                    // TEMP TEMP
-                    DEBUG("Found end of compressed block!");
                     break;
                 } else if (value < 285) {
                     DEBUG("inflate: length %u", value);
@@ -915,16 +888,11 @@ int main(int argc, char** argv)
                            extra_distance_bits[distance_code]);
                     // TODO: is there a more efficient way to copy from a portion of the buffer
                     //       to another? I could pre-allocate the size, then memcpy the section over?
-                    // TEMP TEMP
                     assert(copy_buffer.size() >= distance && "invalid distance");
-                    std::vector<uint8_t> temptemp;
                     size_t start_index = copy_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
-                        temptemp.push_back(copy_buffer[start_index + i]);
                         copy_buffer.push_back(copy_buffer[start_index + i]);
                     }
-                    temptemp.push_back('\0');
-                    DEBUG("Copied data: '%s'", temptemp.data());
                 } else {
                     fprintf(stderr, "ERR: invalid fixed huffman value: %u\n", value);
                     exit(1);
