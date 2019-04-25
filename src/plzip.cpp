@@ -60,11 +60,6 @@ struct BitReader
         assert(nbits <= 16);
         uint16_t result = 0;
         for (size_t i = 0; i < nbits; ++i) {
-            // uint8_t bit = read_bit() ? 1u : 0u;
-            // if (verbose) {
-            //     printf("\tBIT: %u\n", bit);
-            // }
-            // result |= bit << i;
             result |= (read_bit() ? 1u : 0u) << i;
         }
         return result;
