@@ -903,13 +903,13 @@ int main(int argc, char** argv)
                     //       to another? I could pre-allocate the size, then memcpy the section over?
                     // TEMP TEMP
                     std::string copy_value;
-                    assert(copy_buffer.size() >= distance && "invalid distance");
+                    assert((copy_buffer.size() > distance) && "invalid distance");
                     size_t start_index = copy_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
                         copy_value += copy_buffer[start_index + i];
                         copy_buffer.push_back(copy_buffer[start_index + i]);
                     }
-                    printf("COPIED VALUE: %s\n", copy_value.c_str());
+                    printf("COPIED VALUE: '%s'\n", copy_value.c_str());
                     // const char* ss = "    s->head[s->ins_h] = (Pos)(str))\n#else\n=====================================================================";
                     // const char* ss = "s->max_lazy_match";
                     // if (memmem(copy_buffer.data(), copy_buffer.size(), ss, strlen(ss)) != nullptr) {
