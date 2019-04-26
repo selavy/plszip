@@ -389,7 +389,7 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
         /*277*/ { 4,  67 },
         /*278*/ { 4,  83 },
         /*279*/ { 4,  99 },
-        /*280*/ { 5, 115 },
+        /*280*/ { 4, 115 },
         /*281*/ { 5, 131 },
         /*282*/ { 5, 163 },
         /*283*/ { 5, 195 },
@@ -545,6 +545,7 @@ bool read_dynamic_huffman_tree(BitReader& reader, std::vector<uint16_t>& literal
     if (!init_huffman_tree(literal_tree, dynamic_code_lengths.data(), hlit)) {
         fatal_error("failed to initialize dynamic huffman tree");
     }
+    assert((dynamic_code_lengths.size() - hlit) == hdist);
     if (!init_huffman_tree(distance_tree, dynamic_code_lengths.data() + hlit, dynamic_code_lengths.size() - hlit)) {
         fatal_error("failed to initialize dynamic distance tree");
     }
@@ -870,7 +871,7 @@ int main(int argc, char** argv)
                 } else if (value == 256) {
                     break;
                 } else if (value < 285) {
-                    DEBUG("inflate: length %u", value);
+                    DEBUG("inflate: code %u", value);
                     size_t base_length = base_lengths[value];
                     size_t extra_length = reader.read_bits(extra_bits[value]);
                     size_t length = base_length + extra_length;
@@ -880,19 +881,41 @@ int main(int argc, char** argv)
                     size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code], /*verbose*/true);
                     size_t distance = base_distance + extra_distance;
                     DEBUG("inflate: distance %zu", distance);
-                    DEBUG("Length Code = %u, Base Length = %zu, Extra Bits = %u, Extra Length = %zu, "
-                          "Length = %zu, Base Distance = %zu, Extra Distance = %zu, "
-                          "Distance Code = %zu, Extra Distance Bits = %d",
-                           value, base_length, extra_bits[value], extra_length, length,
-                           base_distance, extra_distance, distance_code,
-                           extra_distance_bits[distance_code]);
+                    DEBUG("Length Code = %u, "
+                          "Base Length = %zu, "
+                          "Extra Bits = %u, "
+                          "Extra Length = %zu, "
+                          "Length = %zu, "
+                          "Base Distance = %zu, "
+                          "Extra Distance = %zu, "
+                          "Distance Code = %zu, "
+                          "Extra Distance Bits = %d",
+                           value,                             // Length Code
+                           base_length,                       // Base Length
+                           extra_bits[value],                 // Extra Bits
+                           extra_length,                      // Extra Length
+                           length,                            // Length
+                           base_distance,                     // Base Distance
+                           extra_distance,                    // Extra Distance
+                           distance_code,                     // Distance Code
+                           extra_distance_bits[distance_code] // Extra Distance Bits
+                           );
                     // TODO: is there a more efficient way to copy from a portion of the buffer
                     //       to another? I could pre-allocate the size, then memcpy the section over?
+                    // TEMP TEMP
+                    std::string copy_value;
                     assert(copy_buffer.size() >= distance && "invalid distance");
                     size_t start_index = copy_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
+                        copy_value += copy_buffer[start_index + i];
                         copy_buffer.push_back(copy_buffer[start_index + i]);
                     }
+                    printf("COPIED VALUE: %s\n", copy_value.c_str());
+                    // const char* ss = "    s->head[s->ins_h] = (Pos)(str))\n#else\n=====================================================================";
+                    // if (memmem(copy_buffer.data(), copy_buffer.size(), ss, strlen(ss)) != nullptr) {
+                    //     printf("BUFFER CONTENTS:\n%.*s\n", 600, copy_buffer.data() + copy_buffer.size() - 600);
+                    //     fatal_error("FOUND IT!");
+                    // }
                 } else {
                     fprintf(stderr, "ERR: invalid fixed huffman value: %u\n", value);
                     exit(1);

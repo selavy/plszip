@@ -32,7 +32,7 @@ test7.txt.gz: ./tests/test7.txt
 	gzip -c ./tests/test7.txt > test7.txt.gz
 
 test7: debug test7.txt.gz
-	./build/debug/bin/plzip test7.txt.gz output
+	./build/debug/bin/plzip test7.txt.gz output2
 
 .PHONY: clean
 clean:
