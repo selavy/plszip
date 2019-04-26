@@ -4,7 +4,7 @@ PLZIP=../build/debug/bin/plzip
 
 ninja -C ../build/debug/
 
-TESTS=(test1 test2 test3 test4 test5 test6 test7 test8 test9)
+TESTS=(test1 test2 test3 test4 test5 test6 test7 test8 test9 test10)
 for TEST in ${TESTS[@]};
 do
     ORIG=${TEST}.txt

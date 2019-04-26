@@ -812,15 +812,9 @@ int main(int argc, char** argv)
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
                 fatal_error("short read on nlen.");
             }
-
-            // TODO: faster API for copying from input to output? Might be on non-aligned though.
-            // copy `len` bytes directly to output
-            copy_buffer.assign('\0', len);
+            copy_buffer.assign(len, '\0');
             if (fread(copy_buffer.data(), len, 1, fp) != 1) {
                 fatal_error("short read on uncompressed data.");
-            }
-            if (fwrite(copy_buffer.data(), len, 1, output) != 1) {
-                fatal_error("short write of uncompressed data.");
             }
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
