@@ -61,7 +61,7 @@ struct BitReader
         for (size_t i = 0; i < nbits; ++i) {
             result |= (read_bit() ? 1u : 0u) << i;
             if (verbose) {
-                printf("\t0x%02u\n", result);
+                printf("\t%d --> 0x%02u\n", (result & (1u << i)) != 0 ? 1 : 0, result);
             }
         }
         return result;
@@ -794,6 +794,7 @@ int main(int argc, char** argv)
         BitReader reader(fp);
         uint8_t bfinal = reader.read_bit();
         BType btype = static_cast<BType>(reader.read_bits(2, /*verbose*/true));
+        // TODO: need to handle if reference extends to previous block
         copy_buffer.clear();
 
         printf("BlockHeader:\n");
@@ -922,6 +923,9 @@ int main(int argc, char** argv)
             }
         } else {
             fprintf(stderr, "ERR: unsupported block encoding: %u\n", (uint8_t)btype);
+            // TEMP TEMP
+            fprintf(stderr, "ERR: flushing copy_buffer after error\n");
+            fwrite(copy_buffer.data(), copy_buffer.size(), 1, output);
             exit(1);
         }
 
