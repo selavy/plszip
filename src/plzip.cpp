@@ -60,6 +60,9 @@ struct BitReader
         uint16_t result = 0;
         for (size_t i = 0; i < nbits; ++i) {
             result |= (read_bit() ? 1u : 0u) << i;
+            if (verbose) {
+                printf("\t0x%02u\n", result);
+            }
         }
         return result;
     }
@@ -790,7 +793,7 @@ int main(int argc, char** argv)
     for (;;) {
         BitReader reader(fp);
         uint8_t bfinal = reader.read_bit();
-        BType btype = static_cast<BType>(reader.read_bits(2));
+        BType btype = static_cast<BType>(reader.read_bits(2, /*verbose*/true));
         copy_buffer.clear();
 
         printf("BlockHeader:\n");
@@ -869,8 +872,9 @@ int main(int argc, char** argv)
                     DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
                     copy_buffer.push_back(static_cast<uint8_t>(value));
                 } else if (value == 256) {
+                    DEBUG("inflate: end of block found");
                     break;
-                } else if (value < 285) {
+                } else if (value <= 285) {
                     DEBUG("inflate: code %u", value);
                     size_t base_length = base_lengths[value];
                     size_t extra_length = reader.read_bits(extra_bits[value]);
@@ -878,7 +882,7 @@ int main(int argc, char** argv)
                     size_t distance_code = read_huffman_value(distance_tree, distance_tree_length, reader);
                     assert((distance_code < 32) && "invalid distance code");
                     size_t base_distance = base_distance_lengths[distance_code];
-                    size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code], /*verbose*/true);
+                    size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code]);
                     size_t distance = base_distance + extra_distance;
                     DEBUG("inflate: distance %zu", distance);
                     DEBUG("Length Code = %u, "
@@ -912,6 +916,7 @@ int main(int argc, char** argv)
                     }
                     printf("COPIED VALUE: %s\n", copy_value.c_str());
                     // const char* ss = "    s->head[s->ins_h] = (Pos)(str))\n#else\n=====================================================================";
+                    // const char* ss = "s->max_lazy_match";
                     // if (memmem(copy_buffer.data(), copy_buffer.size(), ss, strlen(ss)) != nullptr) {
                     //     printf("BUFFER CONTENTS:\n%.*s\n", 600, copy_buffer.data() + copy_buffer.size() - 600);
                     //     fatal_error("FOUND IT!");
