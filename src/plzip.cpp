@@ -46,6 +46,15 @@ struct RingBuffer
         return _mask + 1;
     }
 
+    bool empty() const noexcept {
+        return _length == 0;
+    }
+
+    T back() const noexcept {
+        assert(!empty());
+        return operator[](size() - 1);
+    }
+
     void push_front(T value) noexcept {
         // TODO: check if `(_head - 1) & _mask` works; n.b. will wrap
         _head = _head == 0 ? _mask : _head - 1;
@@ -66,6 +75,7 @@ struct RingBuffer
         assert((0 < _length) && (_length <= capacity()));
     }
 
+    // TODO: optimize
     template <class Iter>
     void push_back(Iter begin, Iter end) noexcept {
         while (begin < end) {
@@ -83,6 +93,16 @@ struct RingBuffer
         return _buffer[_get_index(_head + index)];
     }
 
+    // TODO: make this interface easier to use
+    const T* data() const noexcept {
+        return _buffer.get();
+    }
+
+    size_t start_index() const noexcept {
+        return _head;
+    }
+
+private:
     static uint32_t _next_power_of_two(uint32_t x) noexcept {
         x = std::max(x, 8u);
         x--;
@@ -97,7 +117,6 @@ struct RingBuffer
         return x;
     }
 
-private:
     uint32_t _get_index(uint32_t index) const noexcept {
         uint32_t rv = index & _mask;
         assert(rv < capacity());
@@ -885,19 +904,14 @@ int main(int argc, char** argv)
 
     std::vector<uint16_t> dynamic_huffman_tree;
     std::vector<uint16_t> dynamic_distance_tree;
-    // XXX: instead of copy_buffer, just keep ring buffer + length of data to
-    // write; need to increase lookback_buffer length by max length code so
-    // looking back won't adjust stuff at start of buffer in case that
-    // distance == 32K
-    std::vector<uint8_t> copy_buffer;
-    // XXX: Just mmap this memory instead
-    RingBuffer<uint8_t>  lookback_buffer(1u << 15);
+    // XXX: mmap this memory instead
+    RingBuffer<uint8_t>  lookback(1u << 16);
+    size_t write_length; // amount of lookback to actually write
     for (;;) {
         BitReader reader(fp);
         uint8_t bfinal = reader.read_bit();
         BType btype = static_cast<BType>(reader.read_bits(2, /*verbose*/true));
-        // TODO: need to handle if reference extends to previous block
-        copy_buffer.clear();
+        write_length = 0;
 
         printf("BlockHeader:\n");
         printf("\tbfinal = %u\n", bfinal);
@@ -915,11 +929,15 @@ int main(int argc, char** argv)
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
                 fatal_error("short read on nlen.");
             }
-            copy_buffer.assign(len, '\0');
-            if (fread(copy_buffer.data(), len, 1, fp) != 1) {
+            // XXX: can't use ring buffer because we don't know if space is
+            // contiguous. could test if have enough space and use if possible
+            std::vector<uint8_t> buffer;
+            buffer.assign(len, '\0');
+            if (fread(buffer.data(), len, 1, fp) != 1) {
                 fatal_error("short read on uncompressed data.");
             }
-            lookback_buffer.push_back(&copy_buffer[0], &copy_buffer[len]);
+            lookback.push_back(&buffer[0], &buffer[len]);
+            ++write_length;
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
             //    read representation of code trees (see
@@ -946,7 +964,6 @@ int main(int argc, char** argv)
             const uint16_t* base_lengths = g_BaseLengths.data();
             const uint16_t* extra_distance_bits = g_ExtraDistanceBits.data();
             const uint16_t* base_distance_lengths = g_BaseDistanceLengths.data();
-            copy_buffer.clear();
             if (btype == BType::FIXED_HUFFMAN) {
                 printf("Block Encoding: Fixed Huffman\n");
                 huffman_tree = g_FixedHuffmanTree.data();
@@ -968,8 +985,8 @@ int main(int argc, char** argv)
                 uint16_t value = read_huffman_value(huffman_tree, huffman_tree_length, reader);
                 if (value < 256) {
                     DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
-                    copy_buffer.push_back(static_cast<uint8_t>(value));
-                    lookback_buffer.push_back(copy_buffer.back());
+                    lookback.push_back(static_cast<uint8_t>(value));
+                    ++write_length;
                 } else if (value == 256) {
                     DEBUG("inflate: end of block found");
                     break;
@@ -1003,27 +1020,16 @@ int main(int argc, char** argv)
                            distance_code,                     // Distance Code
                            extra_distance_bits[distance_code] // Extra Distance Bits
                            );
-                    // TODO: is there a more efficient way to copy from a portion of the buffer
-                    //       to another? I could pre-allocate the size, then memcpy the section over?
-                    // TEMP TEMP
-                    std::string copy_value_string;
-                    // assert((copy_buffer.size() >= distance) && "invalid distance");
-                    assert((lookback_buffer.size() >= distance) && "invalid distance");
-                    assert((lookback_buffer.size() - distance + length) <= lookback_buffer.size());
-                    // size_t start_index = copy_buffer.size() - distance;
-                    size_t start_index = lookback_buffer.size() - distance;
-                    size_t copy_buffer_start_index = copy_buffer.size();
+                    std::string copy_value; // TEMP TEMP
+                    assert(lookback.size() >= distance);
+                    // assert((lookback.size() - distance + length) <= lookback.size());
+                    size_t start = lookback.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
-                        uint8_t copy_value = lookback_buffer[start_index + i];
-                        copy_value_string += copy_value;
-                        copy_buffer.push_back(copy_value);
+                        lookback.push_back(lookback[start + i]);
+                        copy_value += lookback.back();
                     }
-                    // XXX: check this
-                    // NOTE: trying to guard against case where lookback is literally 32K so
-                    // pushing onto look_back changes the values that are being referenced
-                    assert(copy_buffer_start_index + length == copy_buffer.size());
-                    lookback_buffer.push_back(&copy_buffer[copy_buffer_start_index], &copy_buffer[copy_buffer.size()]);
-                    printf("COPIED VALUE: '%s'\n", copy_value_string.c_str());
+                    write_length += length;
+                    printf("COPIED VALUE: '%s'\n", copy_value.c_str());
                 } else {
                     fprintf(stderr, "ERR: invalid fixed huffman value: %u\n", value);
                     exit(1);
@@ -1031,15 +1037,30 @@ int main(int argc, char** argv)
             }
         } else {
             fprintf(stderr, "ERR: unsupported block encoding: %u\n", (uint8_t)btype);
-            // TEMP TEMP
-            fprintf(stderr, "ERR: flushing copy_buffer after error\n");
-            fwrite(copy_buffer.data(), copy_buffer.size(), 1, output);
             exit(1);
         }
 
-        if (fwrite(copy_buffer.data(), copy_buffer.size(), 1, output) != 1) {
-            fprintf(stderr, "ERR: short write\n");
-            exit(1);
+        // XXX: technically compressed blocks can be any size, so need to force
+        //      a flush if write_length >= 32K.
+
+        // Since lookback is a ring buffer, have to handle the case that
+        // the data is not contiguous, but instead wraps around the end.
+        auto* buffer = lookback.data();
+        size_t start1 = lookback.start_index();
+        size_t start2 = 0;
+        size_t length1 = lookback.size() - lookback.start_index();
+        size_t length2 = write_length - length1;
+        if (length1 > 0) {
+            if (fwrite(&buffer[start1], length1, 1, output) != 1) {
+                fprintf(stderr, "ERR: short write\n");
+                exit(1);
+            }
+        }
+        if (length2 > 0) {
+            if (fwrite(&buffer[start2], length2, 1, output) != 1) {
+                fprintf(stderr, "ERR: short write\n");
+                exit(1);
+            }
         }
 
         if (bfinal) {
