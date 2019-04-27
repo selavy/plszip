@@ -6,6 +6,7 @@
 #include <vector>
 #include <libgen.h>
 #include <cassert>
+#include <memory>
 
 #define fatal_error(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
@@ -21,6 +22,93 @@
 //     (0x8b, \213), to identify the file as being in gzip format.
 const uint8_t ID1_GZIP = 31;
 const uint8_t ID2_GZIP = 139;
+
+template <class T>
+struct RingBuffer
+{
+    using value_type = T;
+    static_assert(std::is_pod<T>::value, "RingBuffer only supports POD values.");
+
+    RingBuffer(uint32_t maxlen) noexcept
+        : _mask(_next_power_of_two(maxlen) - 1)
+        , _head(0)
+        , _buffer(std::make_unique<T[]>(capacity()))
+        , _length(0)
+    {
+        assert((capacity() & _mask) == 0);
+    }
+
+    size_t size() const noexcept {
+        return _length;
+    }
+
+    size_t capacity() const noexcept {
+        return _mask + 1;
+    }
+
+    void push_front(T value) noexcept {
+        // TODO: check if `(_head - 1) & _mask` works; n.b. will wrap
+        _head = _head == 0 ? _mask : _head - 1;
+        _buffer[_head] = value;
+        if (_length <= _mask) {
+            ++_length;
+        }
+        assert((0 < _length) && (_length <= capacity()));
+    }
+
+    void push_back(T value) noexcept {
+        _buffer[_get_index(_head + _length)] = value;
+        if (_length <= _mask) {
+            ++_length;
+        } else {
+            _head = _get_index(_head + 1);
+        }
+        assert((0 < _length) && (_length <= capacity()));
+    }
+
+    template <class Iter>
+    void push_back(Iter begin, Iter end) noexcept {
+        while (begin < end) {
+            push_back(*begin++);
+        }
+    }
+
+    T& operator[](size_t index) noexcept {
+        assert(index < _length);
+        return _buffer[_get_index(_head + index)];
+    }
+
+    const T& operator[](size_t index) const noexcept {
+        assert(index < _length);
+        return _buffer[_get_index(_head + index)];
+    }
+
+    static uint32_t _next_power_of_two(uint32_t x) noexcept {
+        x = std::max(x, 8u);
+        x--;
+        x |= x >> 1;
+        x |= x >> 2;
+        x |= x >> 4;
+        x |= x >> 8;
+        x |= x >> 16;
+        x++;
+        assert(x > 0);
+        assert((x & (x -1)) == 0);
+        return x;
+    }
+
+private:
+    uint32_t _get_index(uint32_t index) const noexcept {
+        uint32_t rv = index & _mask;
+        assert(rv < capacity());
+        return rv;
+    }
+
+    uint32_t             _mask; // == capacity - 1
+    uint32_t             _head;
+    std::unique_ptr<T[]> _buffer;
+    uint32_t             _length;
+};
 
 struct FileHandle
 {
@@ -164,6 +252,14 @@ enum class BType : uint8_t
     FIXED_HUFFMAN    = 0x1u,
     DYNAMIC_HUFFMAN  = 0x2u,
     RESERVED         = 0x3u,
+};
+
+const char* BTypeStr[] =
+{
+    "NO COMPRESSION",
+    "FIXED HUFFMAN",
+    "DYNAMIC HUFFMAN",
+    "RESERVED",
 };
 
 void print_operating_system_debug(uint8_t os)
@@ -789,7 +885,13 @@ int main(int argc, char** argv)
 
     std::vector<uint16_t> dynamic_huffman_tree;
     std::vector<uint16_t> dynamic_distance_tree;
+    // XXX: instead of copy_buffer, just keep ring buffer + length of data to
+    // write; need to increase lookback_buffer length by max length code so
+    // looking back won't adjust stuff at start of buffer in case that
+    // distance == 32K
     std::vector<uint8_t> copy_buffer;
+    // XXX: Just mmap this memory instead
+    RingBuffer<uint8_t>  lookback_buffer(1u << 15);
     for (;;) {
         BitReader reader(fp);
         uint8_t bfinal = reader.read_bit();
@@ -799,7 +901,7 @@ int main(int argc, char** argv)
 
         printf("BlockHeader:\n");
         printf("\tbfinal = %u\n", bfinal);
-        printf("\tbtype  = %u\n", (uint8_t)btype);
+        printf("\tbtype  = %u (%s)\n", (uint8_t)btype, BTypeStr[(uint8_t)btype]);
         printf("\n");
 
         if (btype == BType::NO_COMPRESSION) {
@@ -817,6 +919,7 @@ int main(int argc, char** argv)
             if (fread(copy_buffer.data(), len, 1, fp) != 1) {
                 fatal_error("short read on uncompressed data.");
             }
+            lookback_buffer.push_back(&copy_buffer[0], &copy_buffer[len]);
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
             //    read representation of code trees (see
@@ -866,6 +969,7 @@ int main(int argc, char** argv)
                 if (value < 256) {
                     DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
                     copy_buffer.push_back(static_cast<uint8_t>(value));
+                    lookback_buffer.push_back(copy_buffer.back());
                 } else if (value == 256) {
                     DEBUG("inflate: end of block found");
                     break;
@@ -902,20 +1006,24 @@ int main(int argc, char** argv)
                     // TODO: is there a more efficient way to copy from a portion of the buffer
                     //       to another? I could pre-allocate the size, then memcpy the section over?
                     // TEMP TEMP
-                    std::string copy_value;
-                    assert((copy_buffer.size() > distance) && "invalid distance");
-                    size_t start_index = copy_buffer.size() - distance;
+                    std::string copy_value_string;
+                    // assert((copy_buffer.size() >= distance) && "invalid distance");
+                    assert((lookback_buffer.size() >= distance) && "invalid distance");
+                    assert((lookback_buffer.size() - distance + length) <= lookback_buffer.size());
+                    // size_t start_index = copy_buffer.size() - distance;
+                    size_t start_index = lookback_buffer.size() - distance;
+                    size_t copy_buffer_start_index = copy_buffer.size();
                     for (size_t i = 0; i < length; ++i) {
-                        copy_value += copy_buffer[start_index + i];
-                        copy_buffer.push_back(copy_buffer[start_index + i]);
+                        uint8_t copy_value = lookback_buffer[start_index + i];
+                        copy_value_string += copy_value;
+                        copy_buffer.push_back(copy_value);
                     }
-                    printf("COPIED VALUE: '%s'\n", copy_value.c_str());
-                    // const char* ss = "    s->head[s->ins_h] = (Pos)(str))\n#else\n=====================================================================";
-                    // const char* ss = "s->max_lazy_match";
-                    // if (memmem(copy_buffer.data(), copy_buffer.size(), ss, strlen(ss)) != nullptr) {
-                    //     printf("BUFFER CONTENTS:\n%.*s\n", 600, copy_buffer.data() + copy_buffer.size() - 600);
-                    //     fatal_error("FOUND IT!");
-                    // }
+                    // XXX: check this
+                    // NOTE: trying to guard against case where lookback is literally 32K so
+                    // pushing onto look_back changes the values that are being referenced
+                    assert(copy_buffer_start_index + length == copy_buffer.size());
+                    lookback_buffer.push_back(&copy_buffer[copy_buffer_start_index], &copy_buffer[copy_buffer.size()]);
+                    printf("COPIED VALUE: '%s'\n", copy_value_string.c_str());
                 } else {
                     fprintf(stderr, "ERR: invalid fixed huffman value: %u\n", value);
                     exit(1);
