@@ -235,7 +235,6 @@ enum class Flags : uint8_t
 //     12 - QDOS
 //     13 - Acorn RISCOS
 //    255 - unknown
-
 enum class OperatingSystem : uint8_t
 {
     FAT          = 0,
@@ -478,8 +477,6 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
 //   265   1  11,12      275   3   51-58     285   0    258
 //   266   1  13,14      276   3   59-66
 
-    // TODO: can subtract 257
-    // constexpr size_t NumElements = 28;
     constexpr size_t NumElements = 29;
     extra_bits.assign(257+NumElements, 0);
     base_lengths.assign(257+NumElements, 0);
@@ -730,18 +727,25 @@ bool init_fixed_huffman_data()
     return true;
 }
 
-
 int main(int argc, char** argv)
 {
     const char* output_filename;
-    if (argc == 2) {
-        output_filename = nullptr;
-    } else if (argc == 3) {
-        output_filename = argv[2];
-    } else {
-        fprintf(stderr, "Usage: %s [FILE] [OUT]\n", argv[0]);
+    const char* orig_filename; // TEMP TEMP
+    if (argc != 4) {
+        fprintf(stderr, "Usage: %s [FILE] [OUT] [ORIG]\n", argv[0]);
         exit(0);
     }
+    output_filename = argv[2];
+    orig_filename   = argv[3]; // TEMP TEMP
+
+    // if (argc == 2) {
+    //     output_filename = nullptr;
+    // } else if (argc == 3) {
+    //     output_filename = argv[2];
+    // } else {
+    //     fprintf(stderr, "Usage: %s [FILE] [OUT]\n", argv[0]);
+    //     exit(0);
+    // }
 
     if (!init_fixed_huffman_data()) {
         exit(1);
@@ -759,6 +763,26 @@ int main(int argc, char** argv)
         perror("fopen");
         exit(1);
     }
+
+    // TEMP TEMP
+    FileHandle orig = fopen(orig_filename, "rb");
+    if (!orig) {
+        perror("fopen");
+        exit(1);
+    }
+
+    auto&& ascii = [](uint8_t c) -> char {
+        return c > 0x20 && c < 0x7e ? c : '?';
+    };
+
+    auto&& check_same = [&](uint8_t c_mine) -> void {
+        int c_orig = std::fgetc(orig);
+        if (c_orig == EOF) {
+            fatal_error("Original file EOF, but I decoded %u ('%c')", c_mine, ascii(c_mine));
+        } else if (c_orig != c_mine) {
+            fatal_error("Original File=%u ('%c'), Mine=%u ('%c')", c_orig, ascii(c_orig), c_mine, ascii(c_mine));
+        }
+    };
 
     //------------------------------------------------
     // Header
@@ -941,6 +965,11 @@ int main(int argc, char** argv)
                 fatal_error("short read on uncompressed data.");
             }
             write_length = len;
+
+            // TEMP TEMP
+            for (size_t i = 0; i < write_length; ++i) {
+                check_same(write_buffer[i]);
+            }
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
             //    read representation of code trees (see
@@ -986,6 +1015,7 @@ int main(int argc, char** argv)
                     DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
+                    check_same(write_buffer.back());
                 } else if (value == 256) {
                     DEBUG("inflate: end of block found");
                     break;
@@ -1027,6 +1057,7 @@ int main(int argc, char** argv)
                     for (size_t i = 0; i < length; ++i) {
                         write_buffer.push_back(write_buffer[start + i]);
                         copy_value += write_buffer.back(); // TEMP TEMP
+                        check_same(write_buffer.back());
                     }
                     write_length += length;
                     DEBUG("COPIED VALUE: '%s'\n", copy_value.c_str());
