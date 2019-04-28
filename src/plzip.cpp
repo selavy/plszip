@@ -102,6 +102,10 @@ struct RingBuffer
         return _head;
     }
 
+    size_t index_of(size_t index) const noexcept {
+        return _get_index(index);
+    }
+
 private:
     static uint32_t _next_power_of_two(uint32_t x) noexcept {
         x = std::max(x, 8u);
@@ -128,6 +132,48 @@ private:
     std::unique_ptr<T[]> _buffer;
     uint32_t             _length;
 };
+
+bool write_ring_buffer(const RingBuffer<uint8_t>& rb, size_t write_length, FILE* output) noexcept
+{
+    if (write_length == 0) {
+        return true;
+    }
+    // TODO: optimize
+    assert(rb.size() >= write_length);
+    size_t start = rb.size() - write_length;
+    for (size_t i = 0; i < write_length; ++i) {
+        if (fwrite(&rb[start + i], 1, 1, output) != 1) {
+            return false;
+        }
+    }
+    return true;
+
+    // if (write_length == 0) {
+    //     return true;
+    // }
+    // // Since rb is a ring buffer, have to handle the case that
+    // // the data is not contiguous, but instead wraps around the end.
+    // assert(write_length <= rb.capacity());
+    // auto* buffer = rb.data();
+    // size_t start1 = rb.index_of(rb.size() - write_length);
+    // size_t start2 = 0;
+    // size_t length1 = rb.size() - start1;
+    // assert(length1 <= write_length);
+    // size_t length2 = write_length - length1;
+    // DEBUG("write_ring_buffer: write_length=%zu, rb.size=%zu, 1=(%zu, %zu), 2=(%zu, %zu)",
+    //         write_length, rb.size(), start1, length1, start2, length2);
+    // if (length1 > 0) {
+    //     if (fwrite(&buffer[start1], length1, 1, output) != 1) {
+    //         return false;
+    //     }
+    // }
+    // if (length2 > 0) {
+    //     if (fwrite(&buffer[start2], length2, 1, output) != 1) {
+    //         return false;
+    //     }
+    // }
+    // return true;
+}
 
 struct FileHandle
 {
@@ -902,11 +948,11 @@ int main(int argc, char** argv)
     // Read Compressed Data
     //------------------------------------------------
 
+    std::vector<uint8_t> temp_buffer;
     std::vector<uint16_t> dynamic_huffman_tree;
     std::vector<uint16_t> dynamic_distance_tree;
-    // XXX: mmap this memory instead
     RingBuffer<uint8_t>  lookback(1u << 16);
-    size_t write_length; // amount of lookback to actually write
+    size_t write_length = 0;
     for (;;) {
         BitReader reader(fp);
         uint8_t bfinal = reader.read_bit();
@@ -929,15 +975,24 @@ int main(int argc, char** argv)
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
                 fatal_error("short read on nlen.");
             }
-            // XXX: can't use ring buffer because we don't know if space is
-            // contiguous. could test if have enough space and use if possible
-            std::vector<uint8_t> buffer;
-            buffer.assign(len, '\0');
-            if (fread(buffer.data(), len, 1, fp) != 1) {
+            std::vector<uint8_t> write_buffer;
+            write_buffer.assign(len, '\0');
+            if (fread(write_buffer.data(), len, 1, fp) != 1) {
                 fatal_error("short read on uncompressed data.");
             }
-            lookback.push_back(&buffer[0], &buffer[len]);
-            ++write_length;
+            lookback.push_back(write_buffer.begin(), write_buffer.end());
+            temp_buffer.insert(temp_buffer.end(), write_buffer.begin(), write_buffer.end());
+            write_length = len;
+
+            // TEMP TEMP
+            {
+                int lbsize = lookback.size() - 1;
+                int tbsize = temp_buffer.size() - 1;
+                for (int wlen = 0; wlen < (int)write_length; ++wlen) {
+                    assert(lookback[lbsize - wlen] == temp_buffer[tbsize - wlen]);
+                }
+            }
+
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
             //    read representation of code trees (see
@@ -986,6 +1041,7 @@ int main(int argc, char** argv)
                 if (value < 256) {
                     DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
                     lookback.push_back(static_cast<uint8_t>(value));
+                    temp_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
                 } else if (value == 256) {
                     DEBUG("inflate: end of block found");
@@ -1022,50 +1078,88 @@ int main(int argc, char** argv)
                            );
                     std::string copy_value; // TEMP TEMP
                     assert(lookback.size() >= distance);
+                    // XXX: apparently can get <length, distance> pairs that will use the newly
+                    //      inserted values so this assertion doesn't hold:
                     // assert((lookback.size() - distance + length) <= lookback.size());
-                    size_t start = lookback.size() - distance;
-                    for (size_t i = 0; i < length; ++i) {
-                        lookback.push_back(lookback[start + i]);
-                        copy_value += lookback.back();
+                    // size_t start = lookback.size() - distance;
+                    // for (size_t i = 0; i < length; ++i) {
+                    //     lookback.push_back(lookback[start + i]);
+                    //     copy_value += lookback.back();
+                    // }
+
+                    // TEMP TEMP
+                    {
+                        size_t start = temp_buffer.size() - distance;
+                        for (size_t i = 0; i < length; ++i) {
+                            temp_buffer.push_back(temp_buffer[start + i]);
+                        }
                     }
+
                     write_length += length;
+                    size_t start = lookback.size() - distance;
+                    while (length > 0) {
+                        size_t items = std::min(distance, length);
+                        for (size_t i = 0; i < items; ++i) {
+                            lookback.push_back(lookback[start + i]);
+                        }
+                        assert(length >= items);
+                        length -= items;
+                    }
+
                     printf("COPIED VALUE: '%s'\n", copy_value.c_str());
                 } else {
                     fprintf(stderr, "ERR: invalid fixed huffman value: %u\n", value);
                     exit(1);
                 }
+
+                // TEMP TEMP
+                {
+                    int lbsize = lookback.size() - 1;
+                    int tbsize = temp_buffer.size() - 1;
+                    for (int wlen = 0; wlen < (int)write_length; ++wlen) {
+                        assert(lookback[lbsize - wlen] == temp_buffer[tbsize - wlen]);
+                    }
+                }
+
+                // technically compressed blocks can be any size, so may need to force a flush
+                // XXX: re-evaluate if better to just write as soon as possible? or
+                //      some buffer i/o implementation
+                if (write_length >= (1u << 8)) {
+                    DEBUG("Forcing flush of buffer");
+                    if (!write_ring_buffer(lookback, write_length, output)) {
+                        fatal_error("short write: %d", errno);
+                    }
+                    write_length = 0;
+                }
             }
+
         } else {
-            fprintf(stderr, "ERR: unsupported block encoding: %u\n", (uint8_t)btype);
-            exit(1);
+            fatal_error("unsupported block encoding: %u", (uint8_t)btype);
         }
 
-        // XXX: technically compressed blocks can be any size, so need to force
-        //      a flush if write_length >= 32K.
-
-        // Since lookback is a ring buffer, have to handle the case that
-        // the data is not contiguous, but instead wraps around the end.
-        auto* buffer = lookback.data();
-        size_t start1 = lookback.start_index();
-        size_t start2 = 0;
-        size_t length1 = lookback.size() - lookback.start_index();
-        size_t length2 = write_length - length1;
-        if (length1 > 0) {
-            if (fwrite(&buffer[start1], length1, 1, output) != 1) {
-                fprintf(stderr, "ERR: short write\n");
-                exit(1);
+        // TEMP TEMP
+        {
+            int lbsize = lookback.size() - 1;
+            int tbsize = temp_buffer.size() - 1;
+            for (int wlen = 0; wlen < (int)write_length; ++wlen) {
+                assert(lookback[lbsize - wlen] == temp_buffer[tbsize - wlen]);
             }
         }
-        if (length2 > 0) {
-            if (fwrite(&buffer[start2], length2, 1, output) != 1) {
-                fprintf(stderr, "ERR: short write\n");
-                exit(1);
-            }
+        if (!write_ring_buffer(lookback, write_length, output)) {
+            fatal_error("short write: %d", errno);
         }
+        write_length = 0;
 
         if (bfinal) {
             DEBUG("Processed final compressed block.");
             break;
+        }
+    }
+
+    FileHandle output2 = fopen("output2", "wb");
+    if (!temp_buffer.empty()) {
+        if (fwrite(&*temp_buffer.begin(), temp_buffer.size(), 1, output2) != 1) {
+            fatal_error("short write: %d", errno);
         }
     }
 
