@@ -396,7 +396,7 @@ std::vector<uint16_t> g_BaseLengths;
 std::vector<uint16_t> g_ExtraDistanceBits;
 std::vector<uint16_t> g_BaseDistanceLengths;
 
-bool init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& base_lengths)
+bool init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& dists)
 {
 //       Extra           Extra               Extra
 //  Code Bits Dist  Code Bits   Dist     Code Bits Distance
@@ -411,57 +411,57 @@ bool init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint1
 //    7   2  13-16   17   7    385-512   27   12 12289-16384
 //    8   3  17-24   18   8    513-768   28   13 16385-24576
 //    9   3  25-32   19   8   769-1024   29   13 24577-32768
+
     constexpr size_t NumElements = 32;
-    extra_bits.assign(NumElements, 0);
-    base_lengths.assign(NumElements, 0);
-
-    struct {
-        size_t extra_bits;
-        size_t base_length;
-    } entries[NumElements] = {
-        /* 0*/ {  0,     1 },
-        /* 1*/ {  0,     2 },
-        /* 2*/ {  0,     3 },
-        /* 3*/ {  0,     4 },
-        /* 4*/ {  1,     5 },
-        /* 5*/ {  1,     7 },
-        /* 6*/ {  2,     9 },
-        /* 7*/ {  2,    13 },
-        /* 8*/ {  3,    17 },
-        /* 9*/ {  3,    25 },
-        /*10*/ {  4,    33 },
-        /*11*/ {  4,    49 },
-        /*12*/ {  5,    65 },
-        /*13*/ {  5,    97 },
-        /*14*/ {  6,   129 },
-        /*15*/ {  6,   193 },
-        /*16*/ {  7,   257 },
-        /*17*/ {  7,   385 },
-        /*18*/ {  8,   513 },
-        /*19*/ {  8,   769 },
-        /*20*/ {  9,  1025 },
-        /*21*/ {  9,  1537 },
-        /*22*/ { 10,  2049 },
-        /*23*/ { 10,  3073 },
-        /*24*/ { 11,  4097 },
-        /*25*/ { 11,  6145 },
-        /*26*/ { 12,  8193 },
-        /*27*/ { 12, 12289 },
-        /*28*/ { 13, 16385 },
-        /*29*/ { 13, 24577 },
-        /*30*/ {  0,     0 },
-        /*31*/ {  0,     0 },
+    struct TableEntry {
+        size_t code, extra_bits, dist;
+    } es[NumElements] = {
+//             Extra
+//       Code  Bits   Dist
+//       ----  ----   ----
+        {  0,    0,     1, },
+        {  1,    0,     2, },
+        {  2,    0,     3, },
+        {  3,    0,     4, },
+        {  4,    1,     5, },
+        {  5,    1,     7, },
+        {  6,    2,     9, },
+        {  7,    2,    13, },
+        {  8,    3,    17, },
+        {  9,    3,    25, },
+        { 10,    4,    33, },
+        { 11,    4,    49, },
+        { 12,    5,    65, },
+        { 13,    5,    97, },
+        { 14,    6,   129, },
+        { 15,    6,   193, },
+        { 16,    7,   257, },
+        { 17,    7,   385, },
+        { 18,    8,   513, },
+        { 19,    8,   769, },
+        { 20,    9,  1025, },
+        { 21,    9,  1537, },
+        { 22,   10,  2049, },
+        { 23,   10,  3073, },
+        { 24,   11,  4097, },
+        { 25,   11,  6145, },
+        { 26,   12,  8193, },
+        { 27,   12, 12289, },
+        { 28,   13, 16385, },
+        { 29,   13, 24577, },
+        { 30,    0,     0, },
+        { 31,    0,     0, },
     };
-
-    for (size_t i = 0; i < NumElements; ++i) {
-        extra_bits[i] = entries[i].extra_bits;
-        base_lengths[i] = entries[i].base_length;
+    extra_bits.assign(NumElements, 0);
+    dists.assign(NumElements, 0);
+    for (size_t i = 0; i < ARRSIZE(es); ++i) {
+        extra_bits[es[i].code] = es[i].extra_bits;
+        dists     [es[i].code] = es[i].dist;
     }
-
     return true;
 }
 
-bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& base_lengths)
+bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& lengths)
 {
 //       Extra               Extra               Extra
 //  Code Bits Length(s) Code Bits Lengths   Code Bits Length(s)
@@ -477,50 +477,48 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
 //   265   1  11,12      275   3   51-58     285   0    258
 //   266   1  13,14      276   3   59-66
 
-    constexpr size_t NumElements = 29;
-    extra_bits.assign(257+NumElements, 0);
-    base_lengths.assign(257+NumElements, 0);
-
-    struct {
-        size_t extra_bits;
-        size_t base_length;
-    } entries[NumElements] = {
-        /*257*/ { 0,   3 },
-        /*258*/ { 0,   4 },
-        /*259*/ { 0,   5 },
-        /*260*/ { 0,   6 },
-        /*261*/ { 0,   7 },
-        /*262*/ { 0,   8 },
-        /*263*/ { 0,   9 },
-        /*264*/ { 0,  10 },
-        /*265*/ { 1,  11 },
-        /*266*/ { 1,  13 },
-        /*267*/ { 1,  15 },
-        /*268*/ { 1,  17 },
-        /*269*/ { 2,  19 },
-        /*270*/ { 2,  23 },
-        /*271*/ { 2,  27 },
-        /*272*/ { 2,  31 },
-        /*273*/ { 3,  35 },
-        /*274*/ { 3,  43 },
-        /*275*/ { 3,  51 },
-        /*276*/ { 3,  59 },
-        /*277*/ { 4,  67 },
-        /*278*/ { 4,  83 },
-        /*279*/ { 4,  99 },
-        /*280*/ { 4, 115 },
-        /*281*/ { 5, 131 },
-        /*282*/ { 5, 163 },
-        /*283*/ { 5, 195 },
-        /*284*/ { 5, 227 },
-        /*285*/ { 0, 258 },
+    struct TableEntry {
+        size_t code, extra_bits, length;
+    } es[] = {
+        //       Extra
+        //  Code Bits Length(s)
+        //  ---- ---- ------
+        {   257,   0,     3, },
+        {   258,   0,     4, },
+        {   259,   0,     5, },
+        {   260,   0,     6, },
+        {   261,   0,     7, },
+        {   262,   0,     8, },
+        {   263,   0,     9, },
+        {   264,   0,    10, },
+        {   265,   1,    11, },
+        {   266,   1,    13, },
+        {   267,   1,    15, },
+        {   268,   1,    17, },
+        {   269,   2,    19, },
+        {   270,   2,    23, },
+        {   271,   2,    27, },
+        {   272,   2,    31, },
+        {   273,   3,    35, },
+        {   274,   3,    43, },
+        {   275,   3,    51, },
+        {   276,   3,    59, },
+        {   277,   4,    67, },
+        {   278,   4,    83, },
+        {   279,   4,    99, },
+        {   280,   4,   115, },
+        {   281,   5,   131, },
+        {   282,   5,   163, },
+        {   283,   5,   195, },
+        {   284,   5,   227, },
+        {   285,   0,   258, },
     };
-
-    for (size_t i = 0; i < NumElements; ++i) {
-        extra_bits[i+257] = entries[i].extra_bits;
-        base_lengths[i+257] = entries[i].base_length;
+    extra_bits.assign(285, 0);
+    lengths.assign(285, 0);
+    for (size_t i = 0; i < ARRSIZE(es); ++i) {
+        extra_bits[es[i].code] = es[i].extra_bits;
+        lengths   [es[i].code] = es[i].length;
     }
-
     return true;
 }
 
@@ -533,7 +531,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     static uint16_t codes[MaxCodes];
 
     if (!(n < MaxCodes)) {
-        assert(false && "code lengths too long");
+        assert((n < MaxCodes) && "code lengths too long");
         return false;
     }
 
@@ -547,6 +545,15 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
         max_bit_length = std::max<uint16_t>(code_lengths[i], max_bit_length);
     }
     bl_count[0] = 0;
+
+    // TMEP TEMP
+    DEBUG("init_huffman_tree:\n");
+    for (size_t i = 0; i < n; ++i) {
+        DEBUG("\tLENLENS: %2zu = %2u", i, code_lengths[i]);
+    }
+    for (size_t i = 0; i < MaxBitLength; ++i) {
+        DEBUG("\tcount[%zu] = %zu", i, bl_count[i]);
+    }
 
     // 2) Find the numerical value of the smallest code for each code length:
     memset(&next_code[0], 0, sizeof(next_code));
@@ -563,6 +570,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     for (size_t i = 0; i < n; ++i) {
         if (code_lengths[i] != 0) {
             codes[i] = next_code[code_lengths[i]]++;
+            assert((16 - __builtin_clz(codes[i])) <= code_lengths[i]);
         }
     }
 
@@ -583,6 +591,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
         assert((tree[index] == EmptySentinel) && "Assigned multiple values to same index");
         tree[index] = value;
     }
+    assert(tree.size() == table_size);
 
     return true;
 }
@@ -685,17 +694,19 @@ void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths)
     //   280 - 287     8          11000000 through
     //                            11000111
     code_lengths.assign(288, 0);
-    for (size_t i = 0; i <= 143; ++i) {
-        code_lengths[i] = 8;
-    }
-    for (size_t i = 144; i <= 255; ++i) {
-        code_lengths[i] = 9;
-    }
-    for (size_t i = 256; i <= 279; ++i) {
-        code_lengths[i] = 7;
-    }
-    for (size_t i = 280; i <= 287; ++i) {
-        code_lengths[i] = 8;
+    struct TableEntry {
+        size_t start, stop, bits;
+    } xs[] = {
+        // start, stop, bits
+        {      0,  143,    8, },
+        {    144,  255,    9, },
+        {    256,  279,    7, },
+        {    280,  287,    8, },
+    };
+    for (size_t j = 0; j < ARRSIZE(xs); ++j) {
+        for (size_t i = xs[j].start; i <= xs[j].stop; ++i) {
+            code_lengths[i] = xs[j].bits;
+        }
     }
 }
 
@@ -938,8 +949,8 @@ int main(int argc, char** argv)
     std::vector<uint16_t> dynamic_distance_tree;
     std::vector<uint8_t> write_buffer;
     size_t               write_length = 0;
+    BitReader reader(fp);
     for (;;) {
-        BitReader reader(fp);
         uint8_t bfinal = reader.read_bit();
         BType btype = static_cast<BType>(reader.read_bits(2, /*verbose*/true));
         write_length = 0;
@@ -960,6 +971,7 @@ int main(int argc, char** argv)
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
                 fatal_error("short read on nlen.");
             }
+            DEBUG("No compression block: len=%u, nlen=%u\n", len, nlen);
             write_buffer.insert(write_buffer.end(), len, '\0');
             if (fread(&write_buffer[write_buffer.size() - len], len, 1, fp) != 1) {
                 fatal_error("short read on uncompressed data.");
