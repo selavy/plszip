@@ -180,6 +180,9 @@ struct BitReader
 
     size_t bufsize() const noexcept { return sizeof(buffer)*8; }
 
+    // force the next call to read_bit/s to grab another byte
+    void flush_byte() { index = bufsize(); }
+
     FILE*   fp;
     uint8_t index;
     uint8_t buffer;
@@ -786,12 +789,13 @@ int main(int argc, char** argv)
         return c > 0x20 && c < 0x7e ? c : '?';
     };
 
-    auto&& check_same = [&](uint8_t c_mine) -> void {
-        int c_orig = std::fgetc(orig);
-        if (c_orig == EOF) {
-            fatal_error("Original file EOF, but I decoded %u ('%c')", c_mine, ascii(c_mine));
+    auto&& check_same = [&](uint8_t c_mine, int pos) -> void {
+        int c_orig2 = std::fgetc(orig);
+        uint8_t c_orig = (uint8_t)c_orig2;
+        if (c_orig2 == EOF) {
+            fatal_error("Original file EOF, but I decoded %u ('%c') (%d)", c_mine, ascii(c_mine), pos);
         } else if (c_orig != c_mine) {
-            fatal_error("Original File=%u ('%c'), Mine=%u ('%c')", c_orig, ascii(c_orig), c_mine, ascii(c_mine));
+            fatal_error("Original File=%u ('%c'), Mine=%u ('%c') (%d)", c_orig, ascii(c_orig), c_mine, ascii(c_mine), pos);
         }
     };
 
@@ -971,17 +975,25 @@ int main(int argc, char** argv)
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
                 fatal_error("short read on nlen.");
             }
+
+            if ((len & 0xffff) != (nlen ^ 0xffff)) {
+                fatal_error("invalid stored block lengths: %u %u", len, nlen);
+            }
+
             DEBUG("No compression block: len=%u, nlen=%u\n", len, nlen);
+            size_t start_index = write_buffer.size();
             write_buffer.insert(write_buffer.end(), len, '\0');
-            if (fread(&write_buffer[write_buffer.size() - len], len, 1, fp) != 1) {
+            if (fread(&write_buffer[start_index], len, 1, fp) != 1) {
                 fatal_error("short read on uncompressed data.");
             }
             write_length = len;
 
             // TEMP TEMP
             for (size_t i = 0; i < write_length; ++i) {
-                check_same(write_buffer[i]);
+                check_same(write_buffer[start_index + i], i);
             }
+
+            reader.flush_byte();
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
             //    read representation of code trees (see
@@ -1027,7 +1039,7 @@ int main(int argc, char** argv)
                     DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
-                    check_same(write_buffer.back());
+                    check_same(write_buffer.back(), -1);
                 } else if (value == 256) {
                     DEBUG("inflate: end of block found");
                     break;
@@ -1069,7 +1081,7 @@ int main(int argc, char** argv)
                     for (size_t i = 0; i < length; ++i) {
                         write_buffer.push_back(write_buffer[start + i]);
                         copy_value += write_buffer.back(); // TEMP TEMP
-                        check_same(write_buffer.back());
+                        check_same(write_buffer.back(), -1);
                     }
                     write_length += length;
                     DEBUG("COPIED VALUE: '%s'\n", copy_value.c_str());
