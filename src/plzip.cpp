@@ -148,15 +148,14 @@ struct FileHandle
 
 struct BitReader
 {
-    BitReader(FILE* f) : fp(f), index(bufsize()), buffer(0) {}
+    BitReader(FILE* f) noexcept : fp(f), index(bufsize()), buffer(0) {}
 
     // TODO: error handling
-    bool read_bit()
+    bool read_bit() noexcept
     {
         if (index >= bufsize()) {
             if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
-                fprintf(stderr, "BitReader: ERR: short read\n");
-                exit(1);
+                fatal_error("BitReader: ERR: short read");
             }
             index = 0;
         }
@@ -165,15 +164,12 @@ struct BitReader
         return result;
     }
 
-    uint16_t read_bits(size_t nbits, bool verbose=false)
+    uint16_t read_bits(size_t nbits) noexcept
     {
         assert(nbits <= 16);
         uint16_t result = 0;
         for (size_t i = 0; i < nbits; ++i) {
             result |= (read_bit() ? 1u : 0u) << i;
-            if (verbose) {
-                printf("\t%d --> 0x%02u\n", (result & (1u << i)) != 0 ? 1 : 0, result);
-            }
         }
         return result;
     }
@@ -181,7 +177,7 @@ struct BitReader
     size_t bufsize() const noexcept { return sizeof(buffer)*8; }
 
     // force the next call to read_bit/s to grab another byte
-    void flush_byte() { index = bufsize(); }
+    void flush_byte() noexcept { index = bufsize(); }
 
     FILE*   fp;
     uint8_t index;
@@ -956,16 +952,15 @@ int main(int argc, char** argv)
     BitReader reader(fp);
     for (;;) {
         uint8_t bfinal = reader.read_bit();
-        BType btype = static_cast<BType>(reader.read_bits(2, /*verbose*/true));
+        BType btype = static_cast<BType>(reader.read_bits(2));
         write_length = 0;
 
-        printf("BlockHeader:\n");
-        printf("\tbfinal = %u\n", bfinal);
-        printf("\tbtype  = %u (%s)\n", (uint8_t)btype, BTypeStr[(uint8_t)btype]);
-        printf("\n");
+        DEBUG("BlockHeader:");
+        DEBUG("\tbfinal = %u", bfinal);
+        DEBUG("\tbtype  = %u (%s)", (uint8_t)btype, BTypeStr[(uint8_t)btype]);
 
         if (btype == BType::NO_COMPRESSION) {
-            printf("Block Encoding: No Compression\n");
+            DEBUG("Block Encoding: No Compression");
             // discard remaining bits in first byte
             uint16_t len;
             uint16_t nlen;
@@ -1017,7 +1012,7 @@ int main(int argc, char** argv)
             const uint16_t* distance_tree;
             size_t distance_tree_length;
             if (btype == BType::FIXED_HUFFMAN) {
-                printf("Block Encoding: Fixed Huffman\n");
+                DEBUG("Block Encoding: Fixed Huffman");
                 huffman_tree = g_FixedHuffmanTree.data();
                 huffman_tree_length = g_FixedHuffmanTree.size();
                 distance_tree = g_FixedDistanceTree.data();
