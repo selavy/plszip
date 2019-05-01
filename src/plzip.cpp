@@ -545,15 +545,6 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     }
     bl_count[0] = 0;
 
-    // TMEP TEMP
-    DEBUG("init_huffman_tree:\n");
-    for (size_t i = 0; i < n; ++i) {
-        DEBUG("\tLENLENS: %2zu = %2u", i, code_lengths[i]);
-    }
-    for (size_t i = 0; i < MaxBitLength; ++i) {
-        DEBUG("\tcount[%zu] = %zu", i, bl_count[i]);
-    }
-
     // 2) Find the numerical value of the smallest code for each code length:
     memset(&next_code[0], 0, sizeof(next_code));
     uint32_t code = 0;
@@ -739,29 +730,21 @@ bool init_fixed_huffman_data()
 
 int main(int argc, char** argv)
 {
+    const char* input_filename = argv[1];
     const char* output_filename;
-    const char* orig_filename; // TEMP TEMP
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s [FILE] [OUT] [ORIG]\n", argv[0]);
+    if (argc == 2) {
+        output_filename = nullptr;
+    } else if (argc == 3) {
+        output_filename = argv[2];
+    } else {
+        fprintf(stderr, "Usage: %s [FILE] [OUT]\n", argv[0]);
         exit(0);
     }
-    output_filename = argv[2];
-    orig_filename   = argv[3]; // TEMP TEMP
-
-    // if (argc == 2) {
-    //     output_filename = nullptr;
-    // } else if (argc == 3) {
-    //     output_filename = argv[2];
-    // } else {
-    //     fprintf(stderr, "Usage: %s [FILE] [OUT]\n", argv[0]);
-    //     exit(0);
-    // }
 
     if (!init_fixed_huffman_data()) {
         exit(1);
     }
 
-    const char* input_filename = argv[1];
     FileHandle fp = fopen(input_filename, "rb");
     if (!fp) {
         perror("fopen");
@@ -774,31 +757,9 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    // TEMP TEMP
-    FileHandle orig = fopen(orig_filename, "rb");
-    if (!orig) {
-        perror("fopen");
-        exit(1);
-    }
-
-    auto&& ascii = [](uint8_t c) -> char {
-        return c > 0x20 && c < 0x7e ? c : '?';
-    };
-
-    auto&& check_same = [&](uint8_t c_mine, int pos) -> void {
-        int c_orig2 = std::fgetc(orig);
-        uint8_t c_orig = (uint8_t)c_orig2;
-        if (c_orig2 == EOF) {
-            fatal_error("Original file EOF, but I decoded %u ('%c') (%d)", c_mine, ascii(c_mine), pos);
-        } else if (c_orig != c_mine) {
-            fatal_error("Original File=%u ('%c'), Mine=%u ('%c') (%d)", c_orig, ascii(c_orig), c_mine, ascii(c_mine), pos);
-        }
-    };
-
     //------------------------------------------------
     // Header
     //------------------------------------------------
-
     GzipHeader hdr;
     if (fread(&hdr, sizeof(hdr), 1, fp) != 1) {
         fatal_error("fread: short read");
@@ -970,11 +931,9 @@ int main(int argc, char** argv)
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
                 fatal_error("short read on nlen.");
             }
-
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
                 fatal_error("invalid stored block lengths: %u %u", len, nlen);
             }
-
             DEBUG("No compression block: len=%u, nlen=%u\n", len, nlen);
             size_t start_index = write_buffer.size();
             write_buffer.insert(write_buffer.end(), len, '\0');
@@ -982,12 +941,6 @@ int main(int argc, char** argv)
                 fatal_error("short read on uncompressed data.");
             }
             write_length = len;
-
-            // TEMP TEMP
-            for (size_t i = 0; i < write_length; ++i) {
-                check_same(write_buffer[start_index + i], i);
-            }
-
             reader.flush_byte();
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
@@ -1034,7 +987,6 @@ int main(int argc, char** argv)
                     DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
-                    check_same(write_buffer.back(), -1);
                 } else if (value == 256) {
                     DEBUG("inflate: end of block found");
                     break;
@@ -1071,15 +1023,11 @@ int main(int argc, char** argv)
                     if (distance >= write_buffer.size()) {
                         fatal_error("invalid distance: %zu >= %zu", distance, write_buffer.size());
                     }
-                    std::string copy_value;                // TEMP TEMP
                     size_t start = write_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
                         write_buffer.push_back(write_buffer[start + i]);
-                        copy_value += write_buffer.back(); // TEMP TEMP
-                        check_same(write_buffer.back(), -1);
                     }
                     write_length += length;
-                    DEBUG("COPIED VALUE: '%s'\n", copy_value.c_str());
                 } else {
                     fatal_error("invalid fixed huffman value: %u", value);
                 }

@@ -15,8 +15,7 @@ do
     ORIG=${TEST}.txt
     COMPRESSED=${TEST}.txt.gz
     OUTPUT=${TEST}.output
-    # echo -n "$TEST... " && gzip -c $ORIG > $COMPRESSED && $PLZIP $COMPRESSED $OUTPUT > /dev/null && diff $ORIG $OUTPUT && echo "Passed." || (echo "Failed" && exit 1)
-    echo -n "$TEST... " && gzip -c $ORIG > $COMPRESSED && $PLZIP $COMPRESSED $OUTPUT $ORIG > /dev/null 2> /dev/null && diff $ORIG $OUTPUT > /dev/null && echo "Passed." || (echo "Failed" && exit 1)
+    echo -n "$TEST... " && gzip -c $ORIG > $COMPRESSED && $PLZIP $COMPRESSED $OUTPUT > /dev/null 2> /dev/null && diff $ORIG $OUTPUT > /dev/null && echo "Passed." || (echo "Failed" && exit 1)
     rm -f $COMPRESSED
     rm -f $OUTPUT
 done
