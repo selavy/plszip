@@ -734,26 +734,26 @@ int main(int argc, char** argv)
             // end loop
 
             const uint16_t* literal_tree;
-            size_t huffman_tree_length;
+            size_t literal_tree_length;
             const uint16_t* distance_tree;
             size_t distance_tree_length;
             if (btype == BType::FIXED_HUFFMAN) {
                 DEBUG("Block Encoding: Fixed Huffman");
                 literal_tree = fixed_literal_tree.data();
-                huffman_tree_length = fixed_literal_tree.size();
+                literal_tree_length = fixed_literal_tree.size();
                 distance_tree = fixed_distance_tree.data();
                 distance_tree_length = fixed_distance_tree.size();
             } else {
                 DEBUG("Block Encoding: Dynamic Huffman");
                 read_dynamic_huffman_trees(reader, dynamic_literal_tree, dynamic_distance_tree);
                 literal_tree = dynamic_literal_tree.data();
-                huffman_tree_length = dynamic_literal_tree.size();
+                literal_tree_length = dynamic_literal_tree.size();
                 distance_tree = dynamic_distance_tree.data();
                 distance_tree_length = dynamic_distance_tree.size();
             }
 
             for (;;) {
-                uint16_t value = read_huffman_value(literal_tree, huffman_tree_length, reader);
+                uint16_t value = read_huffman_value(literal_tree, literal_tree_length, reader);
                 if (value < 256) {
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
