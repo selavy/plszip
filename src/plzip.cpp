@@ -23,116 +23,6 @@
 const uint8_t ID1_GZIP = 31;
 const uint8_t ID2_GZIP = 139;
 
-template <class T>
-struct RingBuffer
-{
-    using value_type = T;
-    static_assert(std::is_pod<T>::value, "RingBuffer only supports POD values.");
-
-    RingBuffer(uint32_t maxlen) noexcept
-        : _mask(_next_power_of_two(maxlen) - 1)
-        , _head(0)
-        , _buffer(std::make_unique<T[]>(capacity()))
-        , _length(0)
-    {
-        assert((capacity() & _mask) == 0);
-    }
-
-    size_t size() const noexcept {
-        return _length;
-    }
-
-    size_t capacity() const noexcept {
-        return _mask + 1;
-    }
-
-    bool empty() const noexcept {
-        return _length == 0;
-    }
-
-    T back() const noexcept {
-        assert(!empty());
-        return operator[](size() - 1);
-    }
-
-    void push_front(T value) noexcept {
-        // TODO: check if `(_head - 1) & _mask` works; n.b. will wrap
-        _head = _head == 0 ? _mask : _head - 1;
-        _buffer[_head] = value;
-        if (_length <= _mask) {
-            ++_length;
-        }
-        assert((0 < _length) && (_length <= capacity()));
-    }
-
-    void push_back(T value) noexcept {
-        _buffer[_get_index(_head + _length)] = value;
-        if (_length <= _mask) {
-            ++_length;
-        } else {
-            _head = _get_index(_head + 1);
-        }
-        assert((0 < _length) && (_length <= capacity()));
-    }
-
-    // TODO: optimize
-    template <class Iter>
-    void push_back(Iter begin, Iter end) noexcept {
-        while (begin < end) {
-            push_back(*begin++);
-        }
-    }
-
-    T& operator[](size_t index) noexcept {
-        assert(index < _length);
-        return _buffer[_get_index(_head + index)];
-    }
-
-    const T& operator[](size_t index) const noexcept {
-        assert(index < _length);
-        return _buffer[_get_index(_head + index)];
-    }
-
-    // TODO: make this interface easier to use
-    const T* data() const noexcept {
-        return _buffer.get();
-    }
-
-    size_t start_index() const noexcept {
-        return _head;
-    }
-
-    size_t index_of(size_t index) const noexcept {
-        return _get_index(index);
-    }
-
-private:
-    static uint32_t _next_power_of_two(uint32_t x) noexcept {
-        x = std::max(x, 8u);
-        x--;
-        x |= x >> 1;
-        x |= x >> 2;
-        x |= x >> 4;
-        x |= x >> 8;
-        x |= x >> 16;
-        x++;
-        assert(x > 0);
-        assert((x & (x -1)) == 0);
-        return x;
-    }
-
-    uint32_t _get_index(uint32_t index) const noexcept {
-        uint32_t rv = index & _mask;
-        assert(rv < capacity());
-        return rv;
-    }
-
-    uint32_t             _mask; // == capacity - 1
-    uint32_t             _head;
-    std::unique_ptr<T[]> _buffer;
-    uint32_t             _length;
-};
-
 struct FileHandle
 {
     FileHandle(FILE* f = nullptr) noexcept : fp(f) {}
@@ -282,93 +172,6 @@ const char* BTypeStr[] =
     "DYNAMIC HUFFMAN",
     "RESERVED",
 };
-
-void print_operating_system_debug(uint8_t os)
-{
-    const char* name;
-    auto oss = static_cast<OperatingSystem>(os);
-    switch (oss) {
-        case OperatingSystem::FAT:
-            name = "FAT";
-            break;
-        case OperatingSystem::AMIGA:
-            name = "AMIGA";
-            break;
-        case OperatingSystem::VMS:
-            name = "VMS";
-            break;
-        case OperatingSystem::UNIX:
-            name = "UNIX";
-            break;
-        case OperatingSystem::VM_CMS:
-            name = "VM_CMS";
-            break;
-        case OperatingSystem::ATARI_TOS:
-            name = "ATARI_TOS";
-            break;
-        case OperatingSystem::HPFS:
-            name = "HPFS";
-            break;
-        case OperatingSystem::MACINTOSH:
-            name = "MACINTOSH";
-            break;
-        case OperatingSystem::Z_SYSTEM:
-            name = "Z_SYSTEM";
-            break;
-        case OperatingSystem::CP_M:
-            name = "CP_M";
-            break;
-        case OperatingSystem::TOPS_20:
-            name = "TOPS_20";
-            break;
-        case OperatingSystem::NTFS:
-            name = "NTFS";
-            break;
-        case OperatingSystem::QDOS:
-            name = "QDOS";
-            break;
-        case OperatingSystem::ACORN_RISCOS:
-            name = "ACORN_RISCOS";
-            break;
-        case OperatingSystem::UNKNOWN:
-            name = "UNKNOWN";
-            break;
-        default:
-            name = "unknown";
-            break;
-    }
-    printf("Operating System: %s (%u)\n", name, os);
-}
-
-void print_flags_debug(uint8_t flags)
-{
-    printf("Flags: ");
-    if ((flags & (uint8_t)Flags::FTEXT) != 0) {
-        printf("FTEXT ");
-    }
-    if ((flags & (uint8_t)Flags::FHCRC) != 0) {
-        printf("FHCRC ");
-    }
-    if ((flags & (uint8_t)Flags::FEXTRA) != 0) {
-        printf("FEXTRA ");
-    }
-    if ((flags & (uint8_t)Flags::FNAME) != 0) {
-        printf("FNAME ");
-    }
-    if ((flags & (uint8_t)Flags::FCOMMENT) != 0) {
-        printf("FCOMMENT ");
-    }
-    if ((flags & (uint8_t)Flags::RESERV1) != 0) {
-        printf("RESERV1 ");
-    }
-    if ((flags & (uint8_t)Flags::RESERV2) != 0) {
-        printf("RESERV2 ");
-    }
-    if ((flags & (uint8_t)Flags::RESERV3) != 0) {
-        printf("RESERV3 ");
-    }
-    printf("\n");
-}
 
 // TODO: get Boost.Outcome
 bool read_null_terminated_string(FILE* fp, std::string& result)
@@ -794,14 +597,10 @@ int main(int argc, char** argv)
         fatal_error("Unsupported identifier #2: %u.", hdr.id2);
     }
 
-    print_flags_debug(hdr.flg);
-
-    // (if FLG.FEXTRA set)
-    //
-    // +---+---+=================================+
-    // | XLEN  |...XLEN bytes of "extra field"...| (more-->)
-    // +---+---+=================================+
     if ((hdr.flg & static_cast<uint8_t>(Flags::FEXTRA)) != 0) {
+        // +---+---+=================================+
+        // | XLEN  |...XLEN bytes of "extra field"...| (more-->)
+        // +---+---+=================================+
         uint16_t xlen;
         if (fread(&xlen, sizeof(xlen), 1, fp) != 1) {
             fatal_error("short read on xlen.");
@@ -815,48 +614,42 @@ int main(int argc, char** argv)
         fatal_error("FEXTRA flag not supported.");
     }
 
-    // (if FLG.FNAME set)
-    //
-    // +=========================================+
-    // |...original file name, zero-terminated...| (more-->)
-    // +=========================================+
     std::string fname = "<none>";
     if ((hdr.flg & static_cast<uint8_t>(Flags::FNAME)) != 0) {
+        // +=========================================+
+        // |...original file name, zero-terminated...| (more-->)
+        // +=========================================+
         if (!read_null_terminated_string(fp, fname)) {
             fatal_error("failed to read FNAME.");
         }
     }
     printf("Original Filename: '%s'\n", fname.c_str());
 
-    // (if FLG.FCOMMENT set)
-    //
-    // +===================================+
-    // |...file comment, zero-terminated...| (more-->)
-    // +===================================+
     std::string fcomment = "<none>";
     if ((hdr.flg & static_cast<uint8_t>(Flags::FCOMMENT)) != 0) {
+        // +===================================+
+        // |...file comment, zero-terminated...| (more-->)
+        // +===================================+
         if (!read_null_terminated_string(fp, fcomment)) {
             fatal_error("failed to read FCOMMENT.");
         }
     }
     printf("File comment: '%s'\n", fcomment.c_str());
 
-    // (if FLG.FHCRC set)
-    //
-    // +---+---+
-    // | CRC16 |
-    // +---+---+
-    //
-    // +=======================+
-    // |...compressed blocks...| (more-->)
-    // +=======================+
-    //
-    // 0   1   2   3   4   5   6   7
-    // +---+---+---+---+---+---+---+---+
-    // |     CRC32     |     ISIZE     |
-    // +---+---+---+---+---+---+---+---+
     uint16_t crc16 = 0;
     if ((hdr.flg & static_cast<uint8_t>(Flags::FHCRC)) != 0) {
+        // +---+---+
+        // | CRC16 |
+        // +---+---+
+        //
+        // +=======================+
+        // |...compressed blocks...| (more-->)
+        // +=======================+
+        //
+        // 0   1   2   3   4   5   6   7
+        // +---+---+---+---+---+---+---+---+
+        // |     CRC32     |     ISIZE     |
+        // +---+---+---+---+---+---+---+---+
         if (fread(&crc16, sizeof(crc16), 1, fp) != 1) {
             fatal_error("failed to read CRC16.");
         }
@@ -896,12 +689,10 @@ int main(int argc, char** argv)
     //    took place.  This may be useful in determining end-of-line
     //    convention for text files.  The currently defined values are
     //    as follows:
-    print_operating_system_debug(hdr.os);
 
     //------------------------------------------------
     // Read Compressed Data
     //------------------------------------------------
-
     const uint16_t* extra_bits = g_ExtraLengthBits.data();
     const uint16_t* base_lengths = g_BaseLengths.data();
     const uint16_t* extra_distance_bits = g_ExtraDistanceBits.data();
@@ -915,11 +706,6 @@ int main(int argc, char** argv)
         uint8_t bfinal = reader.read_bit();
         BType btype = static_cast<BType>(reader.read_bits(2));
         write_length = 0;
-
-        DEBUG("BlockHeader:");
-        DEBUG("\tbfinal = %u", bfinal);
-        DEBUG("\tbtype  = %u (%s)", (uint8_t)btype, BTypeStr[(uint8_t)btype]);
-
         if (btype == BType::NO_COMPRESSION) {
             DEBUG("Block Encoding: No Compression");
             // discard remaining bits in first byte
@@ -984,14 +770,12 @@ int main(int argc, char** argv)
             for (;;) {
                 uint16_t value = read_huffman_value(huffman_tree, huffman_tree_length, reader);
                 if (value < 256) {
-                    DEBUG("inflate: literal(%3u): '%c'", value, (char)value);
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
                 } else if (value == 256) {
                     DEBUG("inflate: end of block found");
                     break;
                 } else if (value <= 285) {
-                    DEBUG("inflate: code %u", value);
                     size_t base_length = base_lengths[value];
                     size_t extra_length = reader.read_bits(extra_bits[value]);
                     size_t length = base_length + extra_length;
@@ -1000,26 +784,6 @@ int main(int argc, char** argv)
                     size_t base_distance = base_distance_lengths[distance_code];
                     size_t extra_distance = reader.read_bits(extra_distance_bits[distance_code]);
                     size_t distance = base_distance + extra_distance;
-                    DEBUG("inflate: distance %zu", distance);
-                    DEBUG("Length Code = %u, "
-                          "Base Length = %zu, "
-                          "Extra Bits = %u, "
-                          "Extra Length = %zu, "
-                          "Length = %zu, "
-                          "Base Distance = %zu, "
-                          "Extra Distance = %zu, "
-                          "Distance Code = %zu, "
-                          "Extra Distance Bits = %d",
-                           value,                             // Length Code
-                           base_length,                       // Base Length
-                           extra_bits[value],                 // Extra Bits
-                           extra_length,                      // Extra Length
-                           length,                            // Length
-                           base_distance,                     // Base Distance
-                           extra_distance,                    // Extra Distance
-                           distance_code,                     // Distance Code
-                           extra_distance_bits[distance_code] // Extra Distance Bits
-                           );
                     if (distance >= write_buffer.size()) {
                         fatal_error("invalid distance: %zu >= %zu", distance, write_buffer.size());
                     }
@@ -1036,7 +800,6 @@ int main(int argc, char** argv)
             fatal_error("unsupported block encoding: %u", (uint8_t)btype);
         }
 
-        DEBUG("buffer flush: write_length = %zu", write_length);
         if (write_length > 0) {
             size_t index = write_buffer.size() - write_length;
             if (fwrite(&write_buffer[index], write_length, 1, output) != 1) {
