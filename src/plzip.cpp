@@ -191,85 +191,33 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
 }
 
 constexpr uint16_t EmptySentinel = UINT16_MAX;
-
-void init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& dists)
-{
-//       Extra           Extra               Extra
-//  Code Bits Dist  Code Bits   Dist     Code Bits Distance
-//  ---- ---- ----  ---- ----  ------    ---- ---- --------
-//    0   0    1     10   4     33-48    20    9   1025-1536
-//    1   0    2     11   4     49-64    21    9   1537-2048
-//    2   0    3     12   5     65-96    22   10   2049-3072
-//    3   0    4     13   5     97-128   23   10   3073-4096
-//    4   1   5,6    14   6    129-192   24   11   4097-6144
-//    5   1   7,8    15   6    193-256   25   11   6145-8192
-//    6   2   9-12   16   7    257-384   26   12  8193-12288
-//    7   2  13-16   17   7    385-512   27   12 12289-16384
-//    8   3  17-24   18   8    513-768   28   13 16385-24576
-//    9   3  25-32   19   8   769-1024   29   13 24577-32768
-
-    constexpr size_t NumElements = 32;
-    struct TableEntry {
-        size_t code, extra_bits, dist;
-    } es[NumElements] = {
-//             Extra
-//       Code  Bits   Dist
-//       ----  ----   ----
-        {  0,    0,     1, },
-        {  1,    0,     2, },
-        {  2,    0,     3, },
-        {  3,    0,     4, },
-        {  4,    1,     5, },
-        {  5,    1,     7, },
-        {  6,    2,     9, },
-        {  7,    2,    13, },
-        {  8,    3,    17, },
-        {  9,    3,    25, },
-        { 10,    4,    33, },
-        { 11,    4,    49, },
-        { 12,    5,    65, },
-        { 13,    5,    97, },
-        { 14,    6,   129, },
-        { 15,    6,   193, },
-        { 16,    7,   257, },
-        { 17,    7,   385, },
-        { 18,    8,   513, },
-        { 19,    8,   769, },
-        { 20,    9,  1025, },
-        { 21,    9,  1537, },
-        { 22,   10,  2049, },
-        { 23,   10,  3073, },
-        { 24,   11,  4097, },
-        { 25,   11,  6145, },
-        { 26,   12,  8193, },
-        { 27,   12, 12289, },
-        { 28,   13, 16385, },
-        { 29,   13, 24577, },
-        { 30,    0,     0, },
-        { 31,    0,     0, },
-    };
-    extra_bits.assign(NumElements, 0);
-    dists.assign(NumElements, 0);
-    for (size_t i = 0; i < ARRSIZE(es); ++i) {
-        extra_bits[es[i].code] = es[i].extra_bits;
-        dists     [es[i].code] = es[i].dist;
-    }
-}
-
 const size_t LENGTH_BASE_CODE = 257;
-const size_t LENGTH_EXTRA_BITS[] = {
+const size_t LENGTH_EXTRA_BITS[29] = {
     0, 0, 0, 0, 0, 0, 0, 0,
     1, 1, 1, 1, 2, 2, 2, 2,
     3, 3, 3, 3, 4, 4, 4, 4,
     5, 5, 5, 5, 0,
 };
-const size_t LENGTH_BASES[] = {
+const size_t LENGTH_BASES[29] = {
       3,   4,   5,   6,   7,   8,   9,  10,
      11,  13,  15,  17,  19,  23,  27,  31,
      35,  43,  51,  59,  67,  83,  99, 115,
     131, 163, 195, 227, 258,
 };
 static_assert(ARRSIZE(LENGTH_EXTRA_BITS) == ARRSIZE(LENGTH_BASES), "");
+
+const size_t DISTANCE_EXTRA_BITS[32] = {
+     0,  0,  0,  0,  1,  1,  2,  2,
+     3,  3,  4,  4,  5,  5,  6,  6,
+     7,  7,  8,  8,  9,  9, 10, 10,
+    11, 11, 12, 12, 13, 13,  0,  0,
+};
+const size_t DISTANCE_BASES[32] = {
+       1,    2,    3,     4,     5,     7,    9,   13,
+      17,   25,   33,    49,    65,    97,  129,  193,
+     257,  385,  513,   769,  1025,  1537, 2049, 3073,
+    4097, 6145, 8193, 12289, 16385, 24577,    0,    0,
+};
 
 bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
 {
@@ -478,9 +426,6 @@ int main(int argc, char** argv)
 
     std::vector<uint16_t> literal_tree;
     std::vector<uint16_t> distance_tree;
-    std::vector<uint16_t> distance_extra_bits;
-    std::vector<uint16_t> base_distance_lengths;
-    init_huffman_distances(distance_extra_bits, base_distance_lengths);
 
     FileHandle fp = fopen(input_filename, "rb");
     if (!fp) {
@@ -702,9 +647,9 @@ int main(int argc, char** argv)
                                             distance_tree.size(),
                                             reader);
                     assert((distance_code < 32) && "invalid distance code");
-                    size_t base_distance = base_distance_lengths[distance_code];
+                    size_t base_distance = DISTANCE_BASES[distance_code];
                     size_t extra_distance = reader.read_bits(
-                            distance_extra_bits[distance_code]);
+                            DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
                     if (distance >= write_buffer.size()) {
                         panic("invalid distance: %zu >= %zu",
