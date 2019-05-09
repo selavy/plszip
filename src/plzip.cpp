@@ -8,7 +8,7 @@
 #include <cassert>
 #include <memory>
 
-#define fatal_error(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
+#define panic(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
 #define xassert(c, fmt, ...) do { auto r = (c); if (!r) { fprintf(stderr, "ASSERT: " fmt "\n", ##__VA_ARGS__); assert(0); } } while(0)
 
@@ -45,7 +45,7 @@ struct BitReader
     {
         if (index >= bufsize()) {
             if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
-                fatal_error("BitReader: ERR: short read");
+                panic("BitReader: ERR: short read");
             }
             index = 0;
         }
@@ -419,7 +419,7 @@ void read_dynamic_huffman_trees(BitReader& reader,
 
     std::vector<uint16_t> header_tree;
     if (!read_dynamic_header_tree(reader, hclen, header_tree)) {
-        fatal_error("failed to initialize dynamic huffman tree header.");
+        panic("failed to initialize dynamic huffman tree header.");
     }
 
     std::vector<uint16_t> dynamic_code_lengths;
@@ -435,7 +435,7 @@ void read_dynamic_huffman_trees(BitReader& reader,
                 nbits = 2;
                 offset = 3;
                 if (dynamic_code_lengths.empty()) {
-                    fatal_error("received repeat code 16 with no codes to repeat.");
+                    panic("received repeat code 16 with no codes to repeat.");
                 }
                 repeat_value = dynamic_code_lengths.back();
             } else if (value == 17) {
@@ -452,18 +452,18 @@ void read_dynamic_huffman_trees(BitReader& reader,
             size_t repeat_times = reader.read_bits(nbits) + offset;
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
         } else {
-            fatal_error("invalid value: %u", value);
+            panic("invalid value: %u", value);
         }
     }
     assert(dynamic_code_lengths.size() == ncodes && "Went over the number of expected codes");
     assert(dynamic_code_lengths.size() > 256 && dynamic_code_lengths[256] != 0 && "invalid code -- missing end-of-block");
 
     if (!init_huffman_tree(literal_tree, dynamic_code_lengths.data(), hlit)) {
-        fatal_error("failed to initialize dynamic huffman tree");
+        panic("failed to initialize dynamic huffman tree");
     }
     assert((dynamic_code_lengths.size() - hlit) == hdist);
     if (!init_huffman_tree(distance_tree, dynamic_code_lengths.data() + hlit, dynamic_code_lengths.size() - hlit)) {
-        fatal_error("failed to initialize dynamic distance tree");
+        panic("failed to initialize dynamic distance tree");
     }
 }
 
@@ -501,11 +501,11 @@ bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16
     std::vector<uint16_t> code_lengths;
     get_fixed_huffman_lengths(code_lengths);
     if (!init_huffman_tree(lit_tree, code_lengths.data(), code_lengths.size())) {
-        fatal_error("failed to initialize fixed huffman tree.");
+        panic("failed to initialize fixed huffman tree.");
     }
     code_lengths.assign(32, 5);
     if (!init_huffman_tree(dist_tree, code_lengths.data(), code_lengths.size())) {
-        fatal_error("failed to initialize fixed distance huffman tree.");
+        panic("failed to initialize fixed distance huffman tree.");
     }
     return true;
 }
@@ -530,11 +530,11 @@ int main(int argc, char** argv)
     std::vector<uint16_t> distance_extra_bits;
     std::vector<uint16_t> base_distance_lengths;
     if (!init_huffman_lengths(length_extra_bits, base_lengths)) {
-        fatal_error("failed to initialize huffman length data.");
+        panic("failed to initialize huffman length data.");
         return false;
     }
     if (!init_huffman_distances(distance_extra_bits, base_distance_lengths)) {
-        fatal_error("failed to initialize huffman distance data.");
+        panic("failed to initialize huffman distance data.");
         return false;
     }
 
@@ -555,7 +555,7 @@ int main(int argc, char** argv)
     //------------------------------------------------
     GzipHeader hdr;
     if (fread(&hdr, sizeof(hdr), 1, fp) != 1) {
-        fatal_error("fread: short read");
+        panic("fread: short read");
     }
     // TODO: handle big endian platform
 
@@ -581,10 +581,10 @@ int main(int argc, char** argv)
     printf("\tos    = %u\n", hdr.os);
 
     if (hdr.id1 != ID1_GZIP) {
-        fatal_error("Unsupported identifier #1: %u.", hdr.id1);
+        panic("Unsupported identifier #1: %u.", hdr.id1);
     }
     if (hdr.id2 != ID2_GZIP) {
-        fatal_error("Unsupported identifier #2: %u.", hdr.id2);
+        panic("Unsupported identifier #2: %u.", hdr.id2);
     }
 
     if ((hdr.flg & static_cast<uint8_t>(Flags::FEXTRA)) != 0) {
@@ -593,15 +593,15 @@ int main(int argc, char** argv)
         // +---+---+=================================+
         uint16_t xlen;
         if (fread(&xlen, sizeof(xlen), 1, fp) != 1) {
-            fatal_error("short read on xlen.");
+            panic("short read on xlen.");
         }
         printf("XLEN = %u\n", xlen);
         std::vector<uint8_t> buffer;
         buffer.assign(xlen, 0u);
         if (fread(buffer.data(), xlen, 1, fp) != 1) {
-            fatal_error("short read on FEXTRA bytes.");
+            panic("short read on FEXTRA bytes.");
         }
-        fatal_error("FEXTRA flag not supported.");
+        panic("FEXTRA flag not supported.");
     }
 
     std::string fname = "<none>";
@@ -610,7 +610,7 @@ int main(int argc, char** argv)
         // |...original file name, zero-terminated...| (more-->)
         // +=========================================+
         if (!read_null_terminated_string(fp, fname)) {
-            fatal_error("failed to read FNAME.");
+            panic("failed to read FNAME.");
         }
     }
     printf("Original Filename: '%s'\n", fname.c_str());
@@ -621,7 +621,7 @@ int main(int argc, char** argv)
         // |...file comment, zero-terminated...| (more-->)
         // +===================================+
         if (!read_null_terminated_string(fp, fcomment)) {
-            fatal_error("failed to read FCOMMENT.");
+            panic("failed to read FCOMMENT.");
         }
     }
     printf("File comment: '%s'\n", fcomment.c_str());
@@ -641,7 +641,7 @@ int main(int argc, char** argv)
         // |     CRC32     |     ISIZE     |
         // +---+---+---+---+---+---+---+---+
         if (fread(&crc16, sizeof(crc16), 1, fp) != 1) {
-            fatal_error("failed to read CRC16.");
+            panic("failed to read CRC16.");
         }
     }
     printf("CRC16: %u (0x%04X)\n", crc16, crc16);
@@ -651,7 +651,7 @@ int main(int argc, char** argv)
                    static_cast<uint8_t>(Flags::RESERV2) |
                    static_cast<uint8_t>(Flags::RESERV3);
     if ((hdr.flg & mask) != 0) {
-        fatal_error("reserved bits are not 0.");
+        panic("reserved bits are not 0.");
     }
 
     // TODO: read time
@@ -695,18 +695,18 @@ int main(int argc, char** argv)
             uint16_t len;
             uint16_t nlen;
             if (fread(&len, sizeof(len), 1, fp) != 1) {
-                fatal_error("short read on len.");
+                panic("short read on len.");
             }
             if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
-                fatal_error("short read on nlen.");
+                panic("short read on nlen.");
             }
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
-                fatal_error("invalid stored block lengths: %u %u", len, nlen);
+                panic("invalid stored block lengths: %u %u", len, nlen);
             }
             size_t start_index = write_buffer.size();
             write_buffer.insert(write_buffer.end(), len, '\0');
             if (fread(&write_buffer[start_index], len, 1, fp) != 1) {
-                fatal_error("short read on uncompressed data.");
+                panic("short read on uncompressed data.");
             }
             write_length = len;
             reader.flush_byte();
@@ -757,10 +757,12 @@ int main(int argc, char** argv)
                                             reader);
                     assert((distance_code < 32) && "invalid distance code");
                     size_t base_distance = base_distance_lengths[distance_code];
-                    size_t extra_distance = reader.read_bits(distance_extra_bits[distance_code]);
+                    size_t extra_distance = reader.read_bits(
+                            distance_extra_bits[distance_code]);
                     size_t distance = base_distance + extra_distance;
                     if (distance >= write_buffer.size()) {
-                        fatal_error("invalid distance: %zu >= %zu", distance, write_buffer.size());
+                        panic("invalid distance: %zu >= %zu",
+                                distance, write_buffer.size());
                     }
                     size_t start = write_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
@@ -768,17 +770,17 @@ int main(int argc, char** argv)
                     }
                     write_length += length;
                 } else {
-                    fatal_error("invalid fixed huffman value: %u", value);
+                    panic("invalid fixed huffman value: %u", value);
                 }
             }
         } else {
-            fatal_error("unsupported block encoding: %u", (uint8_t)btype);
+            panic("unsupported block encoding: %u", (uint8_t)btype);
         }
 
         if (write_length > 0) {
             size_t index = write_buffer.size() - write_length;
             if (fwrite(&write_buffer[index], write_length, 1, output) != 1) {
-                fatal_error("short write");
+                panic("short write");
             }
         }
         constexpr size_t MaxLookbackDistance = (1u << 15);
