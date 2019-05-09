@@ -256,65 +256,20 @@ void init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint1
     }
 }
 
-void init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& lengths)
-{
-//       Extra               Extra               Extra
-//  Code Bits Length(s) Code Bits Lengths   Code Bits Length(s)
-//  ---- ---- ------     ---- ---- -------   ---- ---- -------
-//   257   0     3       267   1   15,16     277   4   67-82
-//   258   0     4       268   1   17,18     278   4   83-98
-//   259   0     5       269   2   19-22     279   4   99-114
-//   260   0     6       270   2   23-26     280   4  115-130
-//   261   0     7       271   2   27-30     281   5  131-162
-//   262   0     8       272   2   31-34     282   5  163-194
-//   263   0     9       273   3   35-42     283   5  195-226
-//   264   0    10       274   3   43-50     284   5  227-257
-//   265   1  11,12      275   3   51-58     285   0    258
-//   266   1  13,14      276   3   59-66
-
-    struct TableEntry {
-        size_t code, extra_bits, length;
-    } es[] = {
-        //       Extra
-        //  Code Bits Length(s)
-        //  ---- ---- ------
-        {   257,   0,     3, },
-        {   258,   0,     4, },
-        {   259,   0,     5, },
-        {   260,   0,     6, },
-        {   261,   0,     7, },
-        {   262,   0,     8, },
-        {   263,   0,     9, },
-        {   264,   0,    10, },
-        {   265,   1,    11, },
-        {   266,   1,    13, },
-        {   267,   1,    15, },
-        {   268,   1,    17, },
-        {   269,   2,    19, },
-        {   270,   2,    23, },
-        {   271,   2,    27, },
-        {   272,   2,    31, },
-        {   273,   3,    35, },
-        {   274,   3,    43, },
-        {   275,   3,    51, },
-        {   276,   3,    59, },
-        {   277,   4,    67, },
-        {   278,   4,    83, },
-        {   279,   4,    99, },
-        {   280,   4,   115, },
-        {   281,   5,   131, },
-        {   282,   5,   163, },
-        {   283,   5,   195, },
-        {   284,   5,   227, },
-        {   285,   0,   258, },
-    };
-    extra_bits.assign(285, 0);
-    lengths.assign(285, 0);
-    for (size_t i = 0; i < ARRSIZE(es); ++i) {
-        extra_bits[es[i].code] = es[i].extra_bits;
-        lengths   [es[i].code] = es[i].length;
-    }
-}
+const size_t LENGTH_BASE_CODE = 257;
+const size_t LENGTH_EXTRA_BITS[] = {
+    0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 1, 2, 2, 2, 2,
+    3, 3, 3, 3, 4, 4, 4, 4,
+    5, 5, 5, 5, 0,
+};
+const size_t LENGTH_BASES[] = {
+      3,   4,   5,   6,   7,   8,   9,  10,
+     11,  13,  15,  17,  19,  23,  27,  31,
+     35,  43,  51,  59,  67,  83,  99, 115,
+    131, 163, 195, 227, 258,
+};
+static_assert(ARRSIZE(LENGTH_EXTRA_BITS) == ARRSIZE(LENGTH_BASES), "");
 
 bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
 {
@@ -523,11 +478,8 @@ int main(int argc, char** argv)
 
     std::vector<uint16_t> literal_tree;
     std::vector<uint16_t> distance_tree;
-    std::vector<uint16_t> length_extra_bits;
-    std::vector<uint16_t> base_lengths;
     std::vector<uint16_t> distance_extra_bits;
     std::vector<uint16_t> base_distance_lengths;
-    init_huffman_lengths(length_extra_bits, base_lengths);
     init_huffman_distances(distance_extra_bits, base_distance_lengths);
 
     FileHandle fp = fopen(input_filename, "rb");
@@ -740,8 +692,10 @@ int main(int argc, char** argv)
                     DEBUG("inflate: end of block found");
                     break;
                 } else if (value <= 285) {
-                    size_t base_length = base_lengths[value];
-                    size_t extra_length = reader.read_bits(length_extra_bits[value]);
+                    value -= LENGTH_BASE_CODE;
+                    assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
+                    size_t base_length = LENGTH_BASES[value];
+                    size_t extra_length = reader.read_bits(LENGTH_EXTRA_BITS[value]);
                     size_t length = base_length + extra_length;
                     size_t distance_code = read_huffman_value(
                                             distance_tree.data(),
