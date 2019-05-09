@@ -19,3 +19,6 @@ do
     rm -f $COMPRESSED
     rm -f $OUTPUT
 done
+
+echo "Passed all tests!"
+exit 0
