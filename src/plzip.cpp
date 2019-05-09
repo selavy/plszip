@@ -192,7 +192,7 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
 
 constexpr uint16_t EmptySentinel = UINT16_MAX;
 
-bool init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& dists)
+void init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& dists)
 {
 //       Extra           Extra               Extra
 //  Code Bits Dist  Code Bits   Dist     Code Bits Distance
@@ -254,10 +254,9 @@ bool init_huffman_distances(std::vector<uint16_t>& extra_bits, std::vector<uint1
         extra_bits[es[i].code] = es[i].extra_bits;
         dists     [es[i].code] = es[i].dist;
     }
-    return true;
 }
 
-bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& lengths)
+void init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_t>& lengths)
 {
 //       Extra               Extra               Extra
 //  Code Bits Length(s) Code Bits Lengths   Code Bits Length(s)
@@ -315,7 +314,6 @@ bool init_huffman_lengths(std::vector<uint16_t>& extra_bits, std::vector<uint16_
         extra_bits[es[i].code] = es[i].extra_bits;
         lengths   [es[i].code] = es[i].length;
     }
-    return true;
 }
 
 bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
@@ -529,14 +527,8 @@ int main(int argc, char** argv)
     std::vector<uint16_t> base_lengths;
     std::vector<uint16_t> distance_extra_bits;
     std::vector<uint16_t> base_distance_lengths;
-    if (!init_huffman_lengths(length_extra_bits, base_lengths)) {
-        panic("failed to initialize huffman length data.");
-        return false;
-    }
-    if (!init_huffman_distances(distance_extra_bits, base_distance_lengths)) {
-        panic("failed to initialize huffman distance data.");
-        return false;
-    }
+    init_huffman_lengths(length_extra_bits, base_lengths);
+    init_huffman_distances(distance_extra_bits, base_distance_lengths);
 
     FileHandle fp = fopen(input_filename, "rb");
     if (!fp) {
