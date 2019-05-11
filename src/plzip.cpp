@@ -173,7 +173,6 @@ const char* BTypeStr[] =
     "RESERVED",
 };
 
-// TODO: get Boost.Outcome
 bool read_null_terminated_string(FILE* fp, std::string& result)
 {
     char c;
@@ -193,10 +192,8 @@ bool read_null_terminated_string(FILE* fp, std::string& result)
 constexpr uint16_t EmptySentinel = UINT16_MAX;
 const size_t LENGTH_BASE_CODE = 257;
 const size_t LENGTH_EXTRA_BITS[29] = {
-    0, 0, 0, 0, 0, 0, 0, 0,
-    1, 1, 1, 1, 2, 2, 2, 2,
-    3, 3, 3, 3, 4, 4, 4, 4,
-    5, 5, 5, 5, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+    3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
 };
 const size_t LENGTH_BASES[29] = {
       3,   4,   5,   6,   7,   8,   9,  10,
@@ -627,9 +624,9 @@ int main(int argc, char** argv)
 
             for (;;) {
                 uint16_t value = read_huffman_value(
-                                    literal_tree.data(),
-                                    literal_tree.size(),
-                                    reader);
+                        literal_tree.data(),
+                        literal_tree.size(),
+                        reader);
                 if (value < 256) {
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
@@ -643,9 +640,9 @@ int main(int argc, char** argv)
                     size_t extra_length = reader.read_bits(LENGTH_EXTRA_BITS[value]);
                     size_t length = base_length + extra_length;
                     size_t distance_code = read_huffman_value(
-                                            distance_tree.data(),
-                                            distance_tree.size(),
-                                            reader);
+                            distance_tree.data(),
+                            distance_tree.size(),
+                            reader);
                     assert((distance_code < 32) && "invalid distance code");
                     size_t base_distance = DISTANCE_BASES[distance_code];
                     size_t extra_distance = reader.read_bits(
