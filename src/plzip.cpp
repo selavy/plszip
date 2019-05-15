@@ -65,6 +65,20 @@ struct BitReader
         return result;
     }
 
+    void read_aligned_to_buffer(uint8_t* buf, size_t bytes) noexcept
+    {
+        // precondition: either should know are aligned to byte boundary, or
+        //               need to have called flush_byte() before calling this
+        assert(index % 8 == 0);
+        // XXX: could call flush_byte() if not aligned... does hide that it is
+        //      throwing away bits potentially.
+
+        // VERSION 0
+        for (size_t i = 0; i < bytes; ++i) {
+            buf[i] = read_bits(8);
+        }
+    }
+
     size_t bufsize() const noexcept { return sizeof(buffer)*8; }
 
     // force the next call to read_bit/s to grab another byte
@@ -602,11 +616,8 @@ int main(int argc, char** argv)
             }
             size_t start_index = write_buffer.size();
             write_buffer.insert(write_buffer.end(), len, '\0');
-            for (size_t i = 0; i < len; ++i) {
-                write_buffer[start_index + i] = reader.read_bits(8);
-            }
+            reader.read_aligned_to_buffer(&write_buffer[start_index], len);
             write_length = len;
-            reader.flush_byte();
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
             //    read representation of code trees (see
