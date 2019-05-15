@@ -44,6 +44,7 @@ struct BitReader
     bool read_bit() noexcept
     {
         if (index >= bufsize()) {
+            assert(index == bufsize());
             if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
                 panic("BitReader: ERR: short read");
             }
@@ -69,33 +70,18 @@ struct BitReader
     // force the next call to read_bit/s to grab another byte
     void flush_byte() noexcept
     {
-#define ORIG
-#ifdef ORIG
-        // index = bufsize();
-
         // XXX: not sure if this is right, if we are already on a byte boundary
         //      then don't advance `index`
         if (index % 8 == 0) {
             return;
         }
-        index += 8 - (index % 8);
-#else
-        if (index % 8 == 0) {
-            return;
-        }
-        size_t left = 8 - (index % 8);
-        fprintf(stderr, "FLUSHING BYTE: left = %zu, index = %u, new_index=%zu\n", left, index, index + left);
-        index += left;
-#endif
+        auto adv = 8 - (index % 8);
+        index     += adv;
     }
 
     FILE*    fp;
-    uint8_t  index;
-#ifdef ORIG
-    uint8_t buffer;
-#else
+    uint32_t index;
     uint32_t buffer;
-#endif
 };
 
 //  +---+---+---+---+---+---+---+---+---+---+
@@ -607,28 +593,17 @@ int main(int argc, char** argv)
                 uint16_t b1 = reader.read_bits(8);
                 uint16_t b2 = reader.read_bits(8);
                 return (b2 << 8) | b1;
-            };
-            // uint16_t len = reader.read_bits(16);
-            // uint16_t nlen = reader.read_bits(16);
 
+            };
             uint16_t len  = read2B_le();
             uint16_t nlen = read2B_le();
-
-            // uint16_t len;
-            // uint16_t nlen;
-            // if (fread(&len, sizeof(len), 1, fp) != 1) {
-            //     panic("short read on len.");
-            // }
-            // if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
-            //     panic("short read on nlen.");
-            // }
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
                 panic("invalid stored block lengths: %u %u", len, nlen);
             }
             size_t start_index = write_buffer.size();
             write_buffer.insert(write_buffer.end(), len, '\0');
-            if (fread(&write_buffer[start_index], len, 1, fp) != 1) {
-                panic("short read on uncompressed data.");
+            for (size_t i = 0; i < len; ++i) {
+                write_buffer[start_index + i] = reader.read_bits(8);
             }
             write_length = len;
             reader.flush_byte();
