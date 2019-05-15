@@ -67,11 +67,28 @@ struct BitReader
     size_t bufsize() const noexcept { return sizeof(buffer)*8; }
 
     // force the next call to read_bit/s to grab another byte
-    void flush_byte() noexcept { index = bufsize(); }
+    void flush_byte() noexcept
+    {
+#define ORIG
+#ifdef ORIG
+        index = bufsize();
+#else
+        if (index % 8 == 0) {
+            return;
+        }
+        size_t left = 8 - (index % 8);
+        fprintf(stderr, "FLUSHING BYTE: left = %zu, index = %u, new_index=%zu\n", left, index, index + left);
+        index += left;
+#endif
+    }
 
-    FILE*   fp;
-    uint8_t index;
+    FILE*    fp;
+    uint8_t  index;
+#ifdef ORIG
     uint8_t buffer;
+#else
+    uint32_t buffer;
+#endif
 };
 
 //  +---+---+---+---+---+---+---+---+---+---+
@@ -578,14 +595,27 @@ int main(int argc, char** argv)
         if (btype == BType::NO_COMPRESSION) {
             DEBUG("Block Encoding: No Compression");
             // discard remaining bits in first byte
-            uint16_t len;
-            uint16_t nlen;
-            if (fread(&len, sizeof(len), 1, fp) != 1) {
-                panic("short read on len.");
-            }
-            if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
-                panic("short read on nlen.");
-            }
+            reader.flush_byte();
+            auto rr = [&]() {
+                uint16_t b1 = reader.read_bits(8);
+                uint16_t b2 = reader.read_bits(8);
+                // return (b1 << 8u) | b2;
+                return (b2 << 8) | b1;
+            };
+            // uint16_t len = reader.read_bits(16);
+            // uint16_t nlen = reader.read_bits(16);
+
+            uint16_t len = rr();
+            uint16_t nlen = rr();
+
+            // uint16_t len;
+            // uint16_t nlen;
+            // if (fread(&len, sizeof(len), 1, fp) != 1) {
+            //     panic("short read on len.");
+            // }
+            // if (fread(&nlen, sizeof(nlen), 1, fp) != 1) {
+            //     panic("short read on nlen.");
+            // }
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
                 panic("invalid stored block lengths: %u %u", len, nlen);
             }
