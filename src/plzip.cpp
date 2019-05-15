@@ -71,7 +71,14 @@ struct BitReader
     {
 #define ORIG
 #ifdef ORIG
-        index = bufsize();
+        // index = bufsize();
+
+        // XXX: not sure if this is right, if we are already on a byte boundary
+        //      then don't advance `index`
+        if (index % 8 == 0) {
+            return;
+        }
+        index += 8 - (index % 8);
 #else
         if (index % 8 == 0) {
             return;
@@ -596,17 +603,16 @@ int main(int argc, char** argv)
             DEBUG("Block Encoding: No Compression");
             // discard remaining bits in first byte
             reader.flush_byte();
-            auto rr = [&]() {
+            auto read2B_le = [&]() {
                 uint16_t b1 = reader.read_bits(8);
                 uint16_t b2 = reader.read_bits(8);
-                // return (b1 << 8u) | b2;
                 return (b2 << 8) | b1;
             };
             // uint16_t len = reader.read_bits(16);
             // uint16_t nlen = reader.read_bits(16);
 
-            uint16_t len = rr();
-            uint16_t nlen = rr();
+            uint16_t len  = read2B_le();
+            uint16_t nlen = read2B_le();
 
             // uint16_t len;
             // uint16_t nlen;
