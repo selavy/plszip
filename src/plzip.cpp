@@ -38,7 +38,7 @@ struct FileHandle
 
 struct BitReader
 {
-    BitReader(FILE* f) noexcept : fp(f), index(bufsize()), buffer(0) {}
+    BitReader(FILE* f) noexcept : fp(f), buffer(0), index(bufsize()) {}
 
     // TODO: error handling
     bool read_bit() noexcept
@@ -92,8 +92,8 @@ struct BitReader
     }
 
     FILE*    fp;
-    uint32_t index;
     uint32_t buffer;
+    uint32_t index;
 };
 
 //  +---+---+---+---+---+---+---+---+---+---+
