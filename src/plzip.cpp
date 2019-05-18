@@ -84,13 +84,11 @@ struct BitReader
     // force the next call to read_bit/s to grab another byte
     void flush_byte() noexcept
     {
-        // XXX: not sure if this is right, if we are already on a byte boundary
-        //      then don't advance `index`
-        if (index % 8 == 0) {
-            return;
+        auto bits_used_in_byte = index % 8;
+        if (bits_used_in_byte > 0) {
+            index += 8 - bits_used_in_byte;
         }
-        auto adv = 8 - (index % 8);
-        index     += adv;
+        assert((index % 8 == 0) && "index should be on byte boundary");
     }
 
     FILE*    fp;
