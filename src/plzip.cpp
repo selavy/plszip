@@ -607,7 +607,6 @@ int main(int argc, char** argv)
                 uint16_t b1 = reader.read_bits(8);
                 uint16_t b2 = reader.read_bits(8);
                 return (b2 << 8) | b1;
-
             };
             uint16_t len  = read2B_le();
             uint16_t nlen = read2B_le();
