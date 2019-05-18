@@ -65,18 +65,33 @@ struct BitReader
         return result;
     }
 
-    void read_aligned_to_buffer(uint8_t* buf, size_t bytes) noexcept
+    void read_aligned_to_buffer(uint8_t* buf, size_t nbytes) noexcept
     {
         // precondition: either should know are aligned to byte boundary, or
         //               need to have called flush_byte() before calling this
-        assert(index % 8 == 0);
+        assert((index % 8 == 0) && "index should be byte-aligned");
         // XXX: could call flush_byte() if not aligned... does hide that it is
         //      throwing away bits potentially.
 
+#if VERSION_0
         // VERSION 0
-        for (size_t i = 0; i < bytes; ++i) {
+        for (size_t i = 0; i < nbytes; ++i) {
             buf[i] = read_bits(8);
         }
+#else
+        assert((index <= 32) && "invalid index");
+        size_t bytes_left = (32 - index) / 8;
+        bytes_left = std::min(bytes_left, nbytes);
+        for (size_t i = 0; i < bytes_left; ++i) {
+            *buf++ = read_bits(8);
+        }
+        nbytes -= bytes_left;
+        if (nbytes > 0) {
+            if (fread(buf, nbytes, 1, fp) != 1) {
+                panic("BitReader: ERR: short read, tried to read %zu bytes", nbytes);
+            }
+        }
+#endif
     }
 
     size_t bufsize() const noexcept { return sizeof(buffer)*8; }
@@ -88,7 +103,7 @@ struct BitReader
         if (bits_used_in_byte > 0) {
             index += 8 - bits_used_in_byte;
         }
-        assert((index % 8 == 0) && "index should be on byte boundary");
+        assert((index % 8 == 0) && "index should be byte-aligned");
     }
 
     FILE*    fp;
