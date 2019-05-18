@@ -57,7 +57,7 @@ struct BitReader
 
     uint16_t read_bits(size_t nbits) noexcept
     {
-        assert(nbits <= 16);
+        xassert(nbits <= 16, "can't read more than 16 bits at a time");
         uint16_t result = 0;
         for (size_t i = 0; i < nbits; ++i) {
             result |= (read_bit() ? 1u : 0u) << i;
@@ -69,7 +69,7 @@ struct BitReader
     {
         // precondition: either should know are aligned to byte boundary, or
         //               need to have called flush_byte() before calling this
-        assert((index % 8 == 0) && "index should be byte-aligned");
+        xassert(index % 8 == 0, "index should be byte-aligned");
 
 #if VERSION_0
         // VERSION 0
@@ -77,7 +77,7 @@ struct BitReader
             buf[i] = read_bits(8);
         }
 #else
-        assert((index <= 32) && "invalid index");
+        xassert(index <= 32, "invalid index");
         size_t bytes_left = (32 - index) / 8;
         bytes_left = std::min(bytes_left, nbytes);
         for (size_t i = 0; i < bytes_left; ++i) {
@@ -101,7 +101,7 @@ struct BitReader
         if (bits_used_in_byte > 0) {
             index += 8 - bits_used_in_byte;
         }
-        assert((index % 8 == 0) && "index should be byte-aligned");
+        xassert(index % 8 == 0, "index should be byte-aligned");
     }
 
     FILE*    fp;
@@ -260,7 +260,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     static uint16_t codes[MaxCodes];
 
     if (!(n < MaxCodes)) {
-        assert((n < MaxCodes) && "code lengths too long");
+        xassert(n < MaxCodes, "code lengths too long");
         return false;
     }
 
@@ -269,7 +269,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     memset(&bl_count[0], 0, sizeof(bl_count));
     size_t max_bit_length = 0;
     for (size_t i = 0; i < n; ++i) {
-        assert(code_lengths[i] <= MaxBitLength && "Unsupported bit length");
+        xassert(code_lengths[i] <= MaxBitLength, "Unsupported bit length");
         ++bl_count[code_lengths[i]];
         max_bit_length = std::max<uint16_t>(code_lengths[i], max_bit_length);
     }
@@ -290,7 +290,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     for (size_t i = 0; i < n; ++i) {
         if (code_lengths[i] != 0) {
             codes[i] = next_code[code_lengths[i]]++;
-            assert((16 - __builtin_clz(codes[i])) <= code_lengths[i]);
+            xassert((16 - __builtin_clz(codes[i])) <= code_lengths[i], "overflowed code length");
         }
     }
 
@@ -308,7 +308,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
             size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
             index = 2*index + isset;
         }
-        assert((tree[index] == EmptySentinel) && "Assigned multiple values to same index");
+        xassert(tree[index] == EmptySentinel, "Assigned multiple values to same index");
         tree[index] = value;
     }
     assert(tree.size() == table_size);
@@ -322,7 +322,7 @@ uint16_t read_huffman_value(const uint16_t* tree, size_t length, BitReader& read
     do {
         index *= 2;
         index += reader.read_bit() ? 1 : 0;
-        assert(index < length && "invalid index");
+        xassert(index < length, "invalid index");
     } while (tree[index] == EmptySentinel);
     return tree[index];
 }
@@ -380,7 +380,7 @@ void read_dynamic_huffman_trees(BitReader& reader,
                 offset = 11;
                 repeat_value = 0;
             } else {
-                assert(0 && "branch should never be hit");
+                xassert(0, "branch should never be hit");
             }
             size_t repeat_times = reader.read_bits(nbits) + offset;
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
@@ -388,13 +388,15 @@ void read_dynamic_huffman_trees(BitReader& reader,
             panic("invalid value: %u", value);
         }
     }
-    assert(dynamic_code_lengths.size() == ncodes && "Went over the number of expected codes");
-    assert(dynamic_code_lengths.size() > 256 && dynamic_code_lengths[256] != 0 && "invalid code -- missing end-of-block");
+    xassert(dynamic_code_lengths.size() == ncodes, "Went over the number of expected codes");
+    xassert(dynamic_code_lengths.size() > 256 && dynamic_code_lengths[256] != 0, "invalid code -- missing end-of-block");
 
     if (!init_huffman_tree(literal_tree, dynamic_code_lengths.data(), hlit)) {
         panic("failed to initialize dynamic huffman tree");
     }
-    assert((dynamic_code_lengths.size() - hlit) == hdist);
+    xassert((dynamic_code_lengths.size() - hlit) == hdist,
+            "invalid number distance codes: received %zu, expected %zu",
+            dynamic_code_lengths.size() - hlit, hdist);
     if (!init_huffman_tree(distance_tree, dynamic_code_lengths.data() + hlit, dynamic_code_lengths.size() - hlit)) {
         panic("failed to initialize dynamic distance tree");
     }
@@ -672,11 +674,12 @@ int main(int argc, char** argv)
                     size_t base_length = LENGTH_BASES[value];
                     size_t extra_length = reader.read_bits(LENGTH_EXTRA_BITS[value]);
                     size_t length = base_length + extra_length;
+                    xassert(length <= 258, "invalid length");
                     size_t distance_code = read_huffman_value(
                             distance_tree.data(),
                             distance_tree.size(),
                             reader);
-                    assert((distance_code < 32) && "invalid distance code");
+                    xassert(distance_code < 32, "invalid distance code");
                     size_t base_distance = DISTANCE_BASES[distance_code];
                     size_t extra_distance = reader.read_bits(
                             DISTANCE_EXTRA_BITS[distance_code]);
