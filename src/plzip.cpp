@@ -8,6 +8,8 @@
 #include <cassert>
 #include <memory>
 
+#define BUFFERSZ size_t(1u << 15)
+
 #define panic(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
 #define xassert(c, fmt, ...) do { auto r = (c); if (!r) { fprintf(stderr, "ASSERT: " fmt "\n", ##__VA_ARGS__); assert(0); } } while(0)
@@ -627,10 +629,31 @@ int main(int argc, char** argv)
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
                 panic("invalid stored block lengths: %u %u", len, nlen);
             }
+
+#if 1
+            while (len >= BUFFERSZ) {
+                size_t index = write_buffer.size();
+                write_buffer.insert(write_buffer.end(), BUFFERSZ, '\0');
+                reader.read_aligned_to_buffer(&write_buffer[index], BUFFERSZ);
+                if (fwrite(&write_buffer[index], BUFFERSZ, 1, output) != 1) {
+                    panic("short write");
+                }
+                len -= BUFFERSZ;
+            }
+            xassert(len < BUFFERSZ, "invalid length: %u", len);
+
+            if (len > 0) {
+                size_t index = write_buffer.size();
+                write_buffer.insert(write_buffer.end(), len, '\0');
+                reader.read_aligned_to_buffer(&write_buffer[index], len);
+            }
+            write_length = len;
+#else
             size_t start_index = write_buffer.size();
             write_buffer.insert(write_buffer.end(), len, '\0');
             reader.read_aligned_to_buffer(&write_buffer[start_index], len);
             write_length = len;
+#endif
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             // if compressed with dynamic Huffman codes
             //    read representation of code trees (see
