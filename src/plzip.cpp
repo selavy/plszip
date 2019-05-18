@@ -595,9 +595,10 @@ int main(int argc, char** argv)
     //------------------------------------------------
     std::vector<uint8_t>  write_buffer;
     BitReader reader(fp);
-    for (;;) {
+    uint8_t bfinal = 0;
+    do {
         size_t write_length = 0;
-        uint8_t bfinal = reader.read_bit();
+        bfinal = reader.read_bit();
         BType btype = static_cast<BType>(reader.read_bits(2));
         if (btype == BType::NO_COMPRESSION) {
             DEBUG("Block Encoding: No Compression");
@@ -698,11 +699,7 @@ int main(int argc, char** argv)
             write_buffer.erase(write_buffer.begin(), write_buffer.begin() + overflow);
         }
 
-        if (bfinal) {
-            DEBUG("Processed final compressed block.");
-            break;
-        }
-    }
+    } while (bfinal == 0);
 
     //------------------------------------------------
     // Footer
