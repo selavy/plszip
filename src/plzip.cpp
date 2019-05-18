@@ -70,8 +70,6 @@ struct BitReader
         // precondition: either should know are aligned to byte boundary, or
         //               need to have called flush_byte() before calling this
         assert((index % 8 == 0) && "index should be byte-aligned");
-        // XXX: could call flush_byte() if not aligned... does hide that it is
-        //      throwing away bits potentially.
 
 #if VERSION_0
         // VERSION 0
