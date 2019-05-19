@@ -311,6 +311,7 @@ const size_t LENGTH_EXTRA_BITS[29] = {
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
     3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
 };
+
 const size_t LENGTH_BASES[29] = {
       3,   4,   5,   6,   7,   8,   9,  10,
      11,  13,  15,  17,  19,  23,  27,  31,
@@ -325,6 +326,7 @@ const size_t DISTANCE_EXTRA_BITS[32] = {
      7,  7,  8,  8,  9,  9, 10, 10,
     11, 11, 12, 12, 13, 13,  0,  0,
 };
+
 const size_t DISTANCE_BASES[32] = {
        1,    2,    3,     4,     5,     7,    9,   13,
       17,   25,   33,    49,    65,    97,  129,  193,
@@ -484,8 +486,10 @@ void read_dynamic_huffman_trees(BitReader& reader,
     }
 }
 
-void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths) noexcept
+bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16_t>& dist_tree) noexcept
 {
+    static uint16_t codes[288];
+
     //   Lit Value    Bits        Codes
     //   ---------    ----        -----
     //     0 - 143     8          00110000 through
@@ -496,7 +500,6 @@ void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths) noexcept
     //                            0010111
     //   280 - 287     8          11000000 through
     //                            11000111
-    code_lengths.assign(288, 0);
     struct TableEntry {
         size_t start, stop, bits;
     } xs[] = {
@@ -506,22 +509,23 @@ void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths) noexcept
         {    256,  279,    7, },
         {    280,  287,    8, },
     };
+
     for (size_t j = 0; j < ARRSIZE(xs); ++j) {
         for (size_t i = xs[j].start; i <= xs[j].stop; ++i) {
-            code_lengths[i] = xs[j].bits;
+            codes[i] = xs[j].bits;
         }
     }
-}
 
-bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16_t>& dist_tree) noexcept
-{
-    std::vector<uint16_t> code_lengths;
-    get_fixed_huffman_lengths(code_lengths);
-    if (!init_huffman_tree(lit_tree, code_lengths.data(), code_lengths.size())) {
+    if (!init_huffman_tree(lit_tree, &codes[0], 288)) {
         panic("failed to initialize fixed huffman tree.");
     }
-    code_lengths.assign(32, 5);
-    if (!init_huffman_tree(dist_tree, code_lengths.data(), code_lengths.size())) {
+
+
+    for (size_t i = 0; i < 32; ++i) {
+        codes[i] = 5;
+    }
+
+    if (!init_huffman_tree(dist_tree, &codes[0], 32)) {
         panic("failed to initialize fixed distance huffman tree.");
     }
     return true;
