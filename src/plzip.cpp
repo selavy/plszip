@@ -437,6 +437,7 @@ void read_dynamic_huffman_trees(BitReader& reader,
     }
 
     std::vector<uint16_t> dynamic_code_lengths;
+    dynamic_code_lengths.reserve(ncodes);
     while (dynamic_code_lengths.size() < ncodes) {
         uint16_t value = read_huffman_value(header_tree.data(), header_tree.size(), reader);
         if (value <= 15) {
