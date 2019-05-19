@@ -486,21 +486,13 @@ void read_dynamic_huffman_trees(BitReader& reader,
     }
 }
 
-bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16_t>& dist_tree) noexcept
+void init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16_t>& dist_tree) noexcept
 {
     static uint16_t codes[288];
 
-    //   Lit Value    Bits        Codes
-    //   ---------    ----        -----
-    //     0 - 143     8          00110000 through
-    //                            10111111
-    //   144 - 255     9          110010000 through
-    //                            111111111
-    //   256 - 279     7          0000000 through
-    //                            0010111
-    //   280 - 287     8          11000000 through
-    //                            11000111
-    struct TableEntry {
+    // Literal Tree
+
+    struct LiteralCodeTableEntry {
         size_t start, stop, bits;
     } xs[] = {
         // start, stop, bits
@@ -520,6 +512,7 @@ bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16
         panic("failed to initialize fixed huffman tree.");
     }
 
+    // Distance Tree
 
     for (size_t i = 0; i < 32; ++i) {
         codes[i] = 5;
@@ -528,7 +521,6 @@ bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16
     if (!init_huffman_tree(dist_tree, &codes[0], 32)) {
         panic("failed to initialize fixed distance huffman tree.");
     }
-    return true;
 }
 
 void flush_buffer(FILE* fp, const WriteBuffer& buffer, size_t nbytes) noexcept
