@@ -156,6 +156,14 @@ public:
         return _buffer[_get_index(_head + index)];
     }
 
+    const uint8_t* data() const noexcept {
+        return _buffer.get();
+    }
+
+    size_t index_of(size_t index) const noexcept {
+        return _get_index(_head + index);
+    }
+
 private:
     static uint32_t _force_power_of_two(uint32_t x) noexcept {
         x = std::max(x, 8u);
@@ -520,9 +528,16 @@ bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16
 
 void flush_buffer(FILE* fp, const WriteBuffer& buffer, size_t nbytes) noexcept
 {
-    // XXX: do in 2 writes
-    for (size_t i = buffer.size() - nbytes; i < buffer.size(); ++i) {
-        if (fwrite(&buffer[i], 1, 1, fp) != 1) {
+    size_t start_index = buffer.index_of(buffer.size() - nbytes);
+    size_t length1 = std::min(buffer.size() - start_index, nbytes);
+    size_t length2 = nbytes - length1;
+    if (length1 > 0) {
+        if (fwrite(buffer.data() + start_index, length1, 1, fp) != 1) {
+            panic("short write");
+        }
+    }
+    if (length2 > 0) {
+        if (fwrite(buffer.data(),               length2, 1, fp) != 1) {
             panic("short write");
         }
     }
@@ -689,7 +704,6 @@ int main(int argc, char** argv)
     //------------------------------------------------
     // Read Compressed Data
     //------------------------------------------------
-    // std::vector<uint8_t>  write_buffer;
     WriteBuffer write_buffer(1u << 16);
     BitReader reader(fp);
     uint8_t bfinal = 0;
@@ -699,7 +713,6 @@ int main(int argc, char** argv)
         BType btype = static_cast<BType>(reader.read_bits(2));
         if (btype == BType::NO_COMPRESSION) {
             DEBUG("Block Encoding: No Compression");
-            // discard remaining bits in first byte
             reader.flush_byte();
             auto read2B_le = [&]() {
                 uint16_t b1 = reader.read_bits(8);
@@ -712,7 +725,6 @@ int main(int argc, char** argv)
                 panic("invalid stored block lengths: %u %u", len, nlen);
             }
 
-#if 1
             std::vector<uint8_t> temp_buffer;
             while (len >= BUFFERSZ) {
                 temp_buffer.assign(BUFFERSZ, '\0');
@@ -731,30 +743,7 @@ int main(int argc, char** argv)
                 write_buffer.insert_at_end(temp_buffer.begin(), temp_buffer.end());
             }
             write_length = len;
-#else
-            size_t start_index = write_buffer.size();
-            write_buffer.insert(write_buffer.end(), len, '\0');
-            reader.read_aligned_to_buffer(&write_buffer[start_index], len);
-            write_length = len;
-#endif
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
-            // if compressed with dynamic Huffman codes
-            //    read representation of code trees (see
-            //       subsection below)
-            // loop (until end of block code recognized)
-            //    decode literal/length value from input stream
-            //    if value < 256
-            //       copy value (literal byte) to output stream
-            //    otherwise
-            //       if value = end of block (256)
-            //          break from loop
-            //       otherwise (value = 257..285)
-            //          decode distance from input stream
-            //          move backwards distance bytes in the output
-            //          stream, and copy length bytes from this
-            //          position to the output stream.
-            // end loop
-
             if (btype == BType::FIXED_HUFFMAN) {
                 DEBUG("Block Encoding: Fixed Huffman");
                 init_fixed_huffman_data(literal_tree, distance_tree);
@@ -804,16 +793,9 @@ int main(int argc, char** argv)
                     }
                     write_length += length;
 
-                    // flush buffer if getting sufficiently full
+                    // flush buffer if sufficiently full
                     if (write_length > (1u << 12)) {
                         flush_buffer(output, write_buffer, write_length);
-                        // // XXX: do this in 2 writes
-                        // size_t index = write_buffer.size() - write_length;
-                        // for (size_t i = index; i < write_buffer.size(); ++i) {
-                        //     if (fwrite(&write_buffer[i], 1, 1, output) != 1) {
-                        //         panic("short write");
-                        //     }
-                        // }
                         write_length = 0;
                     }
                 } else {
@@ -826,22 +808,7 @@ int main(int argc, char** argv)
 
         if (write_length > 0) {
             flush_buffer(output, write_buffer, write_length);
-            // XXX: do this in 2 writes
-//             size_t index = write_buffer.size() - write_length;
-//             for (size_t i = index; i < write_buffer.size(); ++i) {
-//                 if (fwrite(&write_buffer[i], 1, 1, output) != 1) {
-//                     panic("short write");
-//                 }
-//             }
-//             // if (fwrite(&write_buffer[index], write_length, 1, output) != 1) {
-//             //     panic("short write");
-//             // }
         }
-        // constexpr size_t MaxLookbackDistance = (1u << 15);
-        // int64_t overflow = write_buffer.size() - MaxLookbackDistance;
-        // if (overflow > 0) {
-        //     write_buffer.erase(write_buffer.begin(), write_buffer.begin() + overflow);
-        // }
 
     } while (bfinal == 0);
 
