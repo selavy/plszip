@@ -528,6 +528,9 @@ bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16
 
 void flush_buffer(FILE* fp, const WriteBuffer& buffer, size_t nbytes) noexcept
 {
+    // the data in write buffer could wrap around the end of the ring buffer,
+    // so do 2 writes, 1 for the data from the start_index to the end, and
+    // 1 write for the rest at the beginning of the buffer.
     size_t start_index = buffer.index_of(buffer.size() - nbytes);
     size_t length1 = std::min(buffer.size() - start_index, nbytes);
     size_t length2 = nbytes - length1;
