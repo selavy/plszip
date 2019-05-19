@@ -140,14 +140,6 @@ public:
         }
     }
 
-    uint8_t& rindex(size_t index) noexcept {
-        return _buffer[_get_index(_head + _mask - index)];
-    }
-
-    uint8_t rindex(size_t index) const noexcept {
-        return _buffer[_get_index(_head + _mask - index)];
-    }
-
     uint8_t& operator[](size_t index) noexcept {
         return _buffer[_get_index(_head + index)];
     }
