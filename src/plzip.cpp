@@ -111,6 +111,77 @@ struct BitReader
     uint32_t index;
 };
 
+class WriteBuffer {
+public:
+    WriteBuffer(uint32_t size)
+        : _mask(_force_power_of_two(size) - 1)
+        , _head(0)
+        , _buffer(std::make_unique<uint8_t[]>(capacity()))
+    {
+        assert((capacity() & _mask) == 0);
+    }
+
+    size_t capacity() const noexcept { return _mask + 1; }
+
+    size_t size() const noexcept { return capacity(); }
+
+    void push_back(uint8_t value) noexcept {
+        // NOTE: the back location would normally be `(_head + size()) % capacity`,
+        // but the buffer is always "full", in this case that will always be _head.
+        _buffer[_head] = value;
+        _head = _get_index(_head + 1);
+    }
+
+    template <class Iter>
+    void insert_at_end(Iter first, Iter last) noexcept {
+        // TODO: optimize
+        while (first != last) {
+            push_back(*first++);
+        }
+    }
+
+    uint8_t& rindex(size_t index) noexcept {
+        return _buffer[_get_index(_head + _mask - index)];
+    }
+
+    uint8_t rindex(size_t index) const noexcept {
+        return _buffer[_get_index(_head + _mask - index)];
+    }
+
+    uint8_t& operator[](size_t index) noexcept {
+        return _buffer[_get_index(_head + index)];
+    }
+
+    const uint8_t& operator[](size_t index) const noexcept {
+        return _buffer[_get_index(_head + index)];
+    }
+
+private:
+    static uint32_t _force_power_of_two(uint32_t x) noexcept {
+        x = std::max(x, 8u);
+        x--;
+        x |= x >> 1;
+        x |= x >> 2;
+        x |= x >> 4;
+        x |= x >> 8;
+        x |= x >> 16;
+        x++;
+        assert(x > 0);
+        assert((x & (x -1)) == 0);
+        return x;
+    }
+
+    uint32_t _get_index(uint32_t index) const noexcept {
+        uint32_t rv = index & _mask;
+        assert(rv < capacity());
+        return rv;
+    }
+
+    uint32_t                   _mask; // == capacity - 1
+    uint32_t                   _head;
+    std::unique_ptr<uint8_t[]> _buffer;
+};
+
 //  +---+---+---+---+---+---+---+---+---+---+
 //  |ID1|ID2|CM |FLG|     MTIME     |XFL|OS | (more-->)
 //  +---+---+---+---+---+---+---+---+---+---+
@@ -404,7 +475,7 @@ void read_dynamic_huffman_trees(BitReader& reader,
     }
 }
 
-void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths)
+void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths) noexcept
 {
     //   Lit Value    Bits        Codes
     //   ---------    ----        -----
@@ -433,7 +504,7 @@ void get_fixed_huffman_lengths(std::vector<uint16_t>& code_lengths)
     }
 }
 
-bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16_t>& dist_tree)
+bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16_t>& dist_tree) noexcept
 {
     std::vector<uint16_t> code_lengths;
     get_fixed_huffman_lengths(code_lengths);
@@ -445,6 +516,16 @@ bool init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16
         panic("failed to initialize fixed distance huffman tree.");
     }
     return true;
+}
+
+void flush_buffer(FILE* fp, const WriteBuffer& buffer, size_t nbytes) noexcept
+{
+    // XXX: do in 2 writes
+    for (size_t i = buffer.size() - nbytes; i < buffer.size(); ++i) {
+        if (fwrite(&buffer[i], 1, 1, fp) != 1) {
+            panic("short write");
+        }
+    }
 }
 
 int main(int argc, char** argv)
@@ -608,7 +689,8 @@ int main(int argc, char** argv)
     //------------------------------------------------
     // Read Compressed Data
     //------------------------------------------------
-    std::vector<uint8_t>  write_buffer;
+    // std::vector<uint8_t>  write_buffer;
+    WriteBuffer write_buffer(1u << 16);
     BitReader reader(fp);
     uint8_t bfinal = 0;
     do {
@@ -631,21 +713,22 @@ int main(int argc, char** argv)
             }
 
 #if 1
+            std::vector<uint8_t> temp_buffer;
             while (len >= BUFFERSZ) {
-                size_t index = write_buffer.size();
-                write_buffer.insert(write_buffer.end(), BUFFERSZ, '\0');
-                reader.read_aligned_to_buffer(&write_buffer[index], BUFFERSZ);
-                if (fwrite(&write_buffer[index], BUFFERSZ, 1, output) != 1) {
+                temp_buffer.assign(BUFFERSZ, '\0');
+                reader.read_aligned_to_buffer(&temp_buffer[0], BUFFERSZ);
+                if (fwrite(&temp_buffer[0], BUFFERSZ, 1, output) != 1) {
                     panic("short write");
                 }
+                write_buffer.insert_at_end(temp_buffer.begin(), temp_buffer.end());
                 len -= BUFFERSZ;
             }
             xassert(len < BUFFERSZ, "invalid length: %u", len);
 
             if (len > 0) {
-                size_t index = write_buffer.size();
-                write_buffer.insert(write_buffer.end(), len, '\0');
-                reader.read_aligned_to_buffer(&write_buffer[index], len);
+                temp_buffer.assign(len, '\0');
+                reader.read_aligned_to_buffer(&temp_buffer[0], len);
+                write_buffer.insert_at_end(temp_buffer.begin(), temp_buffer.end());
             }
             write_length = len;
 #else
@@ -682,9 +765,9 @@ int main(int argc, char** argv)
 
             for (;;) {
                 uint16_t value = read_huffman_value(
-                        literal_tree.data(),
-                        literal_tree.size(),
-                        reader);
+                                    literal_tree.data(),
+                                    literal_tree.size(),
+                                    reader);
                 if (value < 256) {
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
@@ -711,11 +794,28 @@ int main(int argc, char** argv)
                         panic("invalid distance: %zu >= %zu",
                                 distance, write_buffer.size());
                     }
-                    size_t start = write_buffer.size() - distance;
+                    size_t index = write_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
-                        write_buffer.push_back(write_buffer[start + i]);
+                        // NOTE: because the ring buffer is always full, the
+                        // head is getting updated on every push_back, which
+                        // means that it naturally increments the index that we
+                        // are accessing.
+                        write_buffer.push_back(write_buffer[index]);
                     }
                     write_length += length;
+
+                    // flush buffer if getting sufficiently full
+                    if (write_length > (1u << 12)) {
+                        flush_buffer(output, write_buffer, write_length);
+                        // // XXX: do this in 2 writes
+                        // size_t index = write_buffer.size() - write_length;
+                        // for (size_t i = index; i < write_buffer.size(); ++i) {
+                        //     if (fwrite(&write_buffer[i], 1, 1, output) != 1) {
+                        //         panic("short write");
+                        //     }
+                        // }
+                        write_length = 0;
+                    }
                 } else {
                     panic("invalid fixed huffman value: %u", value);
                 }
@@ -725,16 +825,23 @@ int main(int argc, char** argv)
         }
 
         if (write_length > 0) {
-            size_t index = write_buffer.size() - write_length;
-            if (fwrite(&write_buffer[index], write_length, 1, output) != 1) {
-                panic("short write");
-            }
+            flush_buffer(output, write_buffer, write_length);
+            // XXX: do this in 2 writes
+//             size_t index = write_buffer.size() - write_length;
+//             for (size_t i = index; i < write_buffer.size(); ++i) {
+//                 if (fwrite(&write_buffer[i], 1, 1, output) != 1) {
+//                     panic("short write");
+//                 }
+//             }
+//             // if (fwrite(&write_buffer[index], write_length, 1, output) != 1) {
+//             //     panic("short write");
+//             // }
         }
-        constexpr size_t MaxLookbackDistance = (1u << 15);
-        int64_t overflow = write_buffer.size() - MaxLookbackDistance;
-        if (overflow > 0) {
-            write_buffer.erase(write_buffer.begin(), write_buffer.begin() + overflow);
-        }
+        // constexpr size_t MaxLookbackDistance = (1u << 15);
+        // int64_t overflow = write_buffer.size() - MaxLookbackDistance;
+        // if (overflow > 0) {
+        //     write_buffer.erase(write_buffer.begin(), write_buffer.begin() + overflow);
+        // }
 
     } while (bfinal == 0);
 
