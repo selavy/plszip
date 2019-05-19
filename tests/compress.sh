@@ -1,3 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
-gzip -c $1 > $1.gz
+ninja -C ../build/debug/ compress || exit 1
+../build/debug/bin/compress $@
