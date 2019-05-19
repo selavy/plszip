@@ -801,7 +801,6 @@ int main(int argc, char** argv)
         if (write_length > 0) {
             flush_buffer(output, write_buffer, write_length);
         }
-
     } while (bfinal == 0);
 
     //------------------------------------------------

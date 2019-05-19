@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #define panic(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
@@ -33,6 +34,19 @@ enum class Flags : uint8_t
     RESERV1  = 1u << 5,
     RESERV2  = 1u << 6,
     RESERV3  = 1u << 7,
+};
+
+// BTYPE specifies how the data are compressed, as follows:
+// 00 - no compression
+// 01 - compressed with fixed Huffman codes
+// 10 - compressed with dynamic Huffman codes
+// 11 - reserved (error)
+enum class BType : uint8_t
+{
+    NO_COMPRESSION   = 0x0u,
+    FIXED_HUFFMAN    = 0x1u,
+    DYNAMIC_HUFFMAN  = 0x2u,
+    RESERVED         = 0x3u,
 };
 
 void xwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
@@ -93,11 +107,30 @@ int main(int argc, char** argv)
     // data modulo 2^32.
     uint32_t isize = 0;
 
+    uint8_t blkhdr;
+    uint8_t bfinal;
+    uint8_t btype;
+    uint16_t len;
+    uint16_t nlen;
+
+    std::vector<uint8_t> buffer;
     int c;
     while ((c = fgetc(fp)) != EOF) {
-        // uint8_t byte = static_cast<uint8_t>(c);
+        uint8_t byte = static_cast<uint8_t>(c);
+        buffer.push_back(byte);
         ++isize;
     }
+
+    bfinal = 1;
+    btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
+    // blkhdr = (bfinal << 7) | (btype << 6);
+    blkhdr = bfinal | (btype << 1);
+    len = buffer.size();
+    nlen = len ^ 0xffff;
+    xwrite(&blkhdr, sizeof(blkhdr), 1, out); // BLOCK HEADER
+    xwrite(&len,    sizeof(len),    1, out); // LEN
+    xwrite(&nlen,   sizeof(nlen),   1, out); // NLEN
+    xwrite(buffer.data(), buffer.size(), 1, out);
 
 //   0   1   2   3   4   5   6   7
 // +---+---+---+---+---+---+---+---+
