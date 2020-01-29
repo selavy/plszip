@@ -48,7 +48,7 @@ struct BitReader
         if (index >= bufsize()) {
             assert(index == bufsize());
             if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
-                panic("BitReader: ERR: short read");
+                panic("short read");
             }
             index = 0;
         }
@@ -72,15 +72,8 @@ struct BitReader
         // precondition: either should know are aligned to byte boundary, or
         //               need to have called flush_byte() before calling this
         xassert(index % 8 == 0, "index should be byte-aligned");
-
-#if VERSION_0
-        // VERSION 0
-        for (size_t i = 0; i < nbytes; ++i) {
-            buf[i] = read_bits(8);
-        }
-#else
-        xassert(index <= 32, "invalid index");
-        size_t bytes_left = (32 - index) / 8;
+        xassert(index <= bufsize(), "invalid index");
+        size_t bytes_left = (bufsize() - index) / 8;
         bytes_left = std::min(bytes_left, nbytes);
         for (size_t i = 0; i < bytes_left; ++i) {
             *buf++ = read_bits(8);
@@ -91,12 +84,11 @@ struct BitReader
                 panic("BitReader: ERR: short read, tried to read %zu bytes", nbytes);
             }
         }
-#endif
     }
 
     size_t bufsize() const noexcept { return sizeof(buffer)*8; }
 
-    // force the next call to read_bit/s to grab another byte
+    // force the next call to read_bit(s) to grab another byte
     void flush_byte() noexcept
     {
         auto bits_used_in_byte = index % 8;
