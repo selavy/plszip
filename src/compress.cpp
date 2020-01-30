@@ -7,6 +7,8 @@
 
 #define panic(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
+#define BUFSIZE 2056
+
 uint32_t crc_table[256];
 
 void init_crc_table()
@@ -141,13 +143,24 @@ int main(int argc, char** argv)
     uint32_t isize = 0;
 
     std::vector<uint8_t> buffer;
-    int c;
-    while ((c = fgetc(fp)) != EOF) {
-        uint8_t byte = static_cast<uint8_t>(c);
-        buffer.push_back(byte);
-        crc = calc_crc32(crc, (const char*)&byte, 1);
-        ++isize;
+    char readbuf[BUFSIZE];
+    size_t read;
+    // size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
+    while ((read = fread(&readbuf[0], 1, sizeof(readbuf), fp)) > 0) {
+        buffer.insert(buffer.end(), &readbuf[0], &readbuf[read]);
+        crc = calc_crc32(crc, &readbuf[0], read);
+        isize += read;
     }
+    if (ferror(fp)) {
+        panic("error reading from file");
+    }
+    // int c;
+    // while ((c = fgetc(fp)) != EOF) {
+    //     uint8_t byte = static_cast<uint8_t>(c);
+    //     buffer.push_back(byte);
+    //     crc = calc_crc32(crc, (const char*)&byte, 1);
+    //     ++isize;
+    // }
 
     uint8_t bfinal = 1;
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
