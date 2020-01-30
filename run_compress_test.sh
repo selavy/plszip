@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
 
-if [[ $# -gt 0 ]];
-then
-    FILE=$1
-else
-    echo "Usage $0 [FILE]"
-    exit 0
-fi;
+die() {
+	echo $1
+	exit 1
+}
 
-FILENAME=$(basename $(realpath $FILE))
-OUTPUT=${FILENAME}.gz
+if [[ $# -eq 0 ]];
+then
+    echo "Usage $0 [FILE]...";
+    exit 0;
+fi;
 
 make debug || (echo "Failed to build." && exit 1)
-./build/debug/compress $FILE $OUTPUT
-gzip -d -k -c $OUTPUT
+rm -f *.txt.gz *.check
 
-if [[ $? -ne 0 ]];
-then
-    echo "!!! FAILED !!!"
-    exit 1
-fi;
+for file in "$@";
+do
+    filename=$(basename $(realpath $file))
+    output1=${filename}.gz
+    output2=${filename}.check
+    ./build/debug/compress $file $output1 || die "error: compress failed";
+    gzip -d -k -c $output1 > $output2 || die "error: gzip failed";
+    diff $output2 $file || die "!!! FAILED !!!";
+    echo "Passed."
+done
