@@ -4,10 +4,13 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <cassert>
 
 #define panic(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
-#define BUFSIZE 2056
+#define BUFSIZE   2056
+#define READSIZE  32
+#define BLOCKSIZE 1024
 
 uint32_t crc_table[256];
 
@@ -142,36 +145,52 @@ int main(int argc, char** argv)
     // data modulo 2^32.
     uint32_t isize = 0;
 
-    std::vector<uint8_t> buffer;
-    char readbuf[BUFSIZE];
+    char buf[BUFSIZE];
+    size_t size = 0;
     size_t read;
-    // size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
-    while ((read = fread(&readbuf[0], 1, sizeof(readbuf), fp)) > 0) {
-        buffer.insert(buffer.end(), &readbuf[0], &readbuf[read]);
-        crc = calc_crc32(crc, &readbuf[0], read);
+    while ((read = fread(&buf[size], 1, READSIZE, fp)) > 0) {
+        crc = calc_crc32(crc, &buf[size], read);
         isize += read;
+        size += read;
+        if (size > BLOCKSIZE) {
+            size_t blksz = BLOCKSIZE;
+            uint8_t bfinal = 0;
+            uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
+            uint8_t blkhdr = bfinal | (btype << 1);
+            uint16_t len = blksz;
+            uint16_t nlen = len ^ 0xffffu;
+            xwrite(&blkhdr, sizeof(blkhdr), 1, out);
+            xwrite(&len,    sizeof(len),    1, out);
+            xwrite(&nlen,   sizeof(nlen),   1, out);
+            xwrite(&buf[0], 1, blksz, out);
+
+            size -= blksz;
+            memmove(&buf[0], &buf[BLOCKSIZE], size);
+        }
     }
     if (ferror(fp)) {
         panic("error reading from file");
     }
-    // int c;
-    // while ((c = fgetc(fp)) != EOF) {
-    //     uint8_t byte = static_cast<uint8_t>(c);
-    //     buffer.push_back(byte);
-    //     crc = calc_crc32(crc, (const char*)&byte, 1);
-    //     ++isize;
-    // }
+    assert(feof(fp));
 
-    uint8_t bfinal = 1;
-    uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
-    // blkhdr = (bfinal << 7) | (btype << 6);
-    uint8_t blkhdr = bfinal | (btype << 1);
-    uint16_t len = buffer.size();
-    uint16_t nlen = len ^ 0xffff;
-    xwrite(&blkhdr, sizeof(blkhdr), 1, out); // BLOCK HEADER
-    xwrite(&len,    sizeof(len),    1, out); // LEN
-    xwrite(&nlen,   sizeof(nlen),   1, out); // NLEN
-    xwrite(buffer.data(), buffer.size(), 1, out);
+    // If the input file is empty, do need to write at least 1 block, which can
+    // contain no data.
+    //
+    // NOTE: it is compliant to have unnecessary empty blocks so in the very
+    // rare case that `size` == 0, and isize wraps to exactly 0, will write
+    // an unnecessary empty block, but that is OK.
+    if (size > 0 || isize == 0) {
+        size_t blksz = size;
+        uint8_t bfinal = 1;
+        uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
+        uint8_t blkhdr = bfinal | (btype << 1);
+        uint16_t len = blksz;
+        uint16_t nlen = len ^ 0xffffu;
+        xwrite(&blkhdr, sizeof(blkhdr), 1, out);
+        xwrite(&len,    sizeof(len),    1, out);
+        xwrite(&nlen,   sizeof(nlen),   1, out);
+        xwrite(&buf[0], 1, blksz, out);
+    }
 
     //   0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
