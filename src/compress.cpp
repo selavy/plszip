@@ -7,6 +7,38 @@
 
 #define panic(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
+uint32_t crc_table[256];
+
+void init_crc_table()
+{
+    /* terms of polynomial defining this crc (except x^32): */
+    static const unsigned char p[] = {0,1,2,4,5,7,8,10,11,12,16,22,23,26};
+
+    /* make exclusive-or pattern from polynomial (0xedb88320UL) */
+    unsigned long poly = 0;
+    for (int n = 0; n < (int)(sizeof(p)/sizeof(unsigned char)); n++)
+        poly |= (unsigned long)1 << (31 - p[n]);
+
+    /* generate a crc for every 8-bit value */
+    for (int n = 0; n < 256; n++) {
+        unsigned long c = (unsigned long)n;
+        for (int k = 0; k < 8; k++)
+            c = c & 1 ? poly ^ (c >> 1) : c >> 1;
+        crc_table[n] = c;
+    }
+}
+
+uint32_t calc_crc32(uint32_t crc, const char* buf, size_t len)
+{
+    if (buf == NULL)
+        return 0;
+    crc = crc ^ 0xffffffffUL;
+    for (size_t i = 0; i < len; ++i) {
+        crc = crc_table[((int)crc ^ (*buf++)) & 0xff] ^ (crc >> 8);
+    }
+    return crc ^ 0xffffffffUL;
+}
+
 uint8_t ID1_GZIP = 31;
 uint8_t ID2_GZIP = 139;
 uint8_t CM_DEFLATE = 8;
@@ -58,12 +90,12 @@ void xwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
 
 int main(int argc, char** argv)
 {
-    if (argc != 2) {
+    if (argc != 2 && argc != 3) {
         fprintf(stderr, "Usage: %s [FILE]\n", argv[0]);
         exit(0);
     }
     std::string input_filename = argv[1];
-    std::string output_filename = input_filename + ".gz";
+    std::string output_filename = argc == 3 ? argv[2] : input_filename + ".gz";
 
     printf("Input Filename : %s\n", input_filename.c_str());
     printf("Output Filename: %s\n", output_filename.c_str());
@@ -79,6 +111,8 @@ int main(int argc, char** argv)
         perror("fopen");
         exit(1);
     }
+
+    init_crc_table();
 
 // +---+---+---+---+---+---+---+---+---+---+
 // |ID1|ID2|CM |FLG|     MTIME     |XFL|OS | (more-->)
@@ -96,47 +130,41 @@ int main(int argc, char** argv)
     xwrite(&xfl,        sizeof(xfl),        1, out); // XFL
     xwrite(&os,         sizeof(os),         1, out); // OS
 
-// (if FLG.FNAME set)
 //   +=========================================+
 //   |...original file name, zero-terminated...| (more-->)
 //   +=========================================+
     xwrite(input_filename.c_str(), input_filename.size() + 1, 1, out); // FNAME
 
-    uint32_t crc32 = 0;
+    uint32_t crc = calc_crc32(0, NULL, 0);
     // This contains the size of the original (uncompressed) input
     // data modulo 2^32.
     uint32_t isize = 0;
-
-    uint8_t blkhdr;
-    uint8_t bfinal;
-    uint8_t btype;
-    uint16_t len;
-    uint16_t nlen;
 
     std::vector<uint8_t> buffer;
     int c;
     while ((c = fgetc(fp)) != EOF) {
         uint8_t byte = static_cast<uint8_t>(c);
         buffer.push_back(byte);
+        crc = calc_crc32(crc, (const char*)&byte, 1);
         ++isize;
     }
 
-    bfinal = 1;
-    btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
+    uint8_t bfinal = 1;
+    uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
     // blkhdr = (bfinal << 7) | (btype << 6);
-    blkhdr = bfinal | (btype << 1);
-    len = buffer.size();
-    nlen = len ^ 0xffff;
+    uint8_t blkhdr = bfinal | (btype << 1);
+    uint16_t len = buffer.size();
+    uint16_t nlen = len ^ 0xffff;
     xwrite(&blkhdr, sizeof(blkhdr), 1, out); // BLOCK HEADER
     xwrite(&len,    sizeof(len),    1, out); // LEN
     xwrite(&nlen,   sizeof(nlen),   1, out); // NLEN
     xwrite(buffer.data(), buffer.size(), 1, out);
 
-//   0   1   2   3   4   5   6   7
-// +---+---+---+---+---+---+---+---+
-// |     CRC32     |     ISIZE     |
-// +---+---+---+---+---+---+---+---+
-    xwrite(&crc32, sizeof(crc32), 1, out); // CRC32
+    //   0   1   2   3   4   5   6   7
+    // +---+---+---+---+---+---+---+---+
+    // |     CRC32     |     ISIZE     |
+    // +---+---+---+---+---+---+---+---+
+    xwrite(&crc,   sizeof(crc),   1, out); // CRC32
     xwrite(&isize, sizeof(isize), 1, out); // ISIZE
 
     return 0;
