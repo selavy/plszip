@@ -93,6 +93,18 @@ void xwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
     }
 }
 
+void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, FILE* fp)
+{
+    uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
+    uint8_t blkhdr = bfinal | (btype << 1);
+    uint16_t len = size;
+    uint16_t nlen = len ^ 0xffffu;
+    xwrite(&blkhdr, sizeof(blkhdr), 1, fp);
+    xwrite(&len,    sizeof(len),    1, fp);
+    xwrite(&nlen,   sizeof(nlen),   1, fp);
+    xwrite(&buffer[0], 1, size, fp);
+}
+
 int main(int argc, char** argv)
 {
     if (argc != 2 && argc != 3) {
@@ -153,18 +165,8 @@ int main(int argc, char** argv)
         isize += read;
         size += read;
         if (size > BLOCKSIZE) {
-            size_t blksz = BLOCKSIZE;
-            uint8_t bfinal = 0;
-            uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
-            uint8_t blkhdr = bfinal | (btype << 1);
-            uint16_t len = blksz;
-            uint16_t nlen = len ^ 0xffffu;
-            xwrite(&blkhdr, sizeof(blkhdr), 1, out);
-            xwrite(&len,    sizeof(len),    1, out);
-            xwrite(&nlen,   sizeof(nlen),   1, out);
-            xwrite(&buf[0], 1, blksz, out);
-
-            size -= blksz;
+            blkwrite_no_compression(buf, BLOCKSIZE, 0, out);
+            size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
     }
@@ -180,16 +182,7 @@ int main(int argc, char** argv)
     // rare case that `size` == 0, and isize wraps to exactly 0, will write
     // an unnecessary empty block, but that is OK.
     if (size > 0 || isize == 0) {
-        size_t blksz = size;
-        uint8_t bfinal = 1;
-        uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
-        uint8_t blkhdr = bfinal | (btype << 1);
-        uint16_t len = blksz;
-        uint16_t nlen = len ^ 0xffffu;
-        xwrite(&blkhdr, sizeof(blkhdr), 1, out);
-        xwrite(&len,    sizeof(len),    1, out);
-        xwrite(&nlen,   sizeof(nlen),   1, out);
-        xwrite(&buf[0], 1, blksz, out);
+        blkwrite_no_compression(buf, size, 1, out);
     }
 
     //   0   1   2   3   4   5   6   7

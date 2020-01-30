@@ -11,7 +11,7 @@ then
     exit 0;
 fi;
 
-make debug || (echo "Failed to build." && exit 1)
+make debug || die "Failed to build"
 rm -f *.txt.gz *.check
 
 for file in "$@";
