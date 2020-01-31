@@ -221,6 +221,48 @@ void init_fixed_huffman_data(std::vector<uint16_t>& lit_tree,
     }
 }
 
+//-------------------------------------------------------
+//
+// Working on implementing fixed huffman codes to replace
+// where I'm always choosing non-compressed at the moment.
+// However, 2 things:
+//
+// 1) I mistakenly was using the interface of fwrite() directly
+//    from blkwrite_XXX(), but that isn't correct because a
+//    block does NOT have to be byte aligned. So I need
+//    a BitWriter interface.
+//
+// 2) Huffman codes are bit oriented so also need #1. However,
+//    need to be extra careful that the bits are in the correct
+//    order.
+//
+//-------------------------------------------------------
+
+struct BitWriter
+{
+    BitWriter(FILE* fp) noexcept : out{fp} {}
+    void write(uint8_t x, size_t bits) noexcept
+    {
+        // REVISIT(peter) :definitely not the fastest implementation
+        for (size_t i = 0; i < bits; ++i) {
+            if (idx == bufsize()) {
+                flush();
+            }
+            buf |= 
+        }
+    }
+    size_t bufsize() noexcept const { return 8*sizeof(buf); }
+    void flush() noexcept {
+        xwrite(&buf, 1, 1, out);
+        buf = 0;
+        idx = 0;
+    }
+
+    size_t  idx = 0;
+    uint8_t buf = 0;
+    FILE*   out;
+};
+
 void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal,
                              FILE* fp) {
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
