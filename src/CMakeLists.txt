@@ -9,5 +9,5 @@ add_executable(compress compress.cpp)
 target_compile_features(compress PUBLIC cxx_std_17)
 # target_link_libraries(compress PUBLIC ZLIB::ZLIB)
 
-add_executable(inflate inflate.cpp)
-target_compile_features(inflate PUBLIC cxx_std_17)
+add_executable(inflate inflate.c)
+target_compile_features(inflate PUBLIC c_std_99)

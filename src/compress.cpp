@@ -238,43 +238,77 @@ void init_fixed_huffman_data(std::vector<uint16_t>& lit_tree,
 //
 //-------------------------------------------------------
 
+// All multi-byte numbers in the format described here are stored with
+// the least-significant byte first (at the lower memory address).
+//
+//  * Data elements are packed into bytes in order of
+//    increasing bit number within the byte, i.e., starting
+//    with the least-significant bit of the byte.
+//  * Data elements other than Huffman codes are packed
+//    starting with the least-significant bit of the data
+//    element.
+//  * Huffman codes are packed starting with the most-
+//    significant bit of the code.
+//
+// THEREFORE:
+//  1. Multi-byte numbers are little-endian
+//  2. Huffman codes are are packed most significant -> least significant
+//  3. Everything else is least significant -> most significant
+
 struct BitWriter
 {
     BitWriter(FILE* fp) noexcept : out{fp} {}
-    void write(uint8_t x, size_t bits) noexcept
+
+    void write_bits(uint8_t x, size_t bits) noexcept
     {
-        // REVISIT(peter) :definitely not the fastest implementation
-        for (size_t i = 0; i < bits; ++i) {
-            if (idx == bufsize()) {
-                flush();
-            }
-            buf |= 
-        }
-    }
-    size_t bufsize() noexcept const { return 8*sizeof(buf); }
-    void flush() noexcept {
-        xwrite(&buf, 1, 1, out);
-        buf = 0;
-        idx = 0;
+        assert(bits == 8);
+        xwrite(&x, sizeof(x), 1, out);
     }
 
-    size_t  idx = 0;
-    uint8_t buf = 0;
+    void write(const void* p, size_t size) noexcept
+    {
+        xwrite(p, 1, size, out);
+    }
+
+    void flush() noexcept
+    {
+    }
+
+    // void write(uint8_t x, size_t bits) noexcept
+    // {
+    //     // REVISIT(peter) :definitely not the fastest implementation
+    //     for (size_t i = 0; i < bits; ++i) {
+    //         if (idx == bufsize()) {
+    //             flush();
+    //         }
+    //         buf |= 1u << idx;
+    //     }
+    // }
+    // size_t bufsize() noexcept const { return 8*sizeof(buf); }
+    // void flush() noexcept {
+    //     xwrite(&buf, 1, 1, out);
+    //     buf = 0;
+    //     idx = 0;
+    // }
+
+    // size_t  idx = 0;
+    // uint8_t buf = 0;
     FILE*   out;
 };
 
 void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal,
-                             FILE* fp) {
+                             BitWriter& out) {
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
     uint8_t blkhdr = bfinal | (btype << 1);
     uint16_t len = size;
     uint16_t nlen = len ^ 0xffffu;
-    xwrite(&blkhdr, sizeof(blkhdr), 1, fp);
-    xwrite(&len, sizeof(len), 1, fp);
-    xwrite(&nlen, sizeof(nlen), 1, fp);
-    xwrite(&buffer[0], 1, size, fp);
+    out.write(&blkhdr, sizeof(blkhdr));
+    out.write(&len, sizeof(len));
+    out.write(&nlen, sizeof(nlen));
+    out.write(&buffer[0], size);
 }
 
+#if 0
 void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, FILE* fp) {
     // static char outbuf[BLOCKSIZE];
     std::vector<uint16_t> literal_tree;
@@ -288,6 +322,7 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, FILE* fp) {
         printf("CODE(%c) = %u\n", *p, code);
     }
 }
+#endif
 
 int main(int argc, char** argv) {
     if (argc != 2 && argc != 3) {
@@ -311,6 +346,7 @@ int main(int argc, char** argv) {
         perror("fopen");
         exit(1);
     }
+    BitWriter writer{out};
 
     init_crc_table();
 
@@ -348,8 +384,8 @@ int main(int argc, char** argv) {
         isize += read;
         size += read;
         if (size > BLOCKSIZE) {
-            // blkwrite_no_compression(buf, BLOCKSIZE, 0, out);
-            blkwrite_fixed(buf, BLOCKSIZE, 0, out);
+            blkwrite_no_compression(buf, BLOCKSIZE, 0, writer);
+            // blkwrite_fixed(buf, BLOCKSIZE, 0, writer);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -366,8 +402,8 @@ int main(int argc, char** argv) {
     // rare case that `size` == 0, and isize wraps to exactly 0, will write
     // an unnecessary empty block, but that is OK.
     if (size > 0 || isize == 0) {
-        // blkwrite_no_compression(buf, size, 1, out);
-        blkwrite_fixed(buf, size, 1, out);
+        blkwrite_no_compression(buf, size, 1, writer);
+        // blkwrite_fixed(buf, size, 1, writer);
     }
 
     //   0   1   2   3   4   5   6   7

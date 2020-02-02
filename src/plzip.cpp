@@ -38,6 +38,55 @@ struct FileHandle
     FILE* fp;
 };
 
+struct Reader
+{
+    uint8_t* start;
+    uint8_t* end;
+    uint8_t* cur;
+    int      error;
+    int    (*refill)(Reader* reader);
+    void*    data;
+};
+
+constexpr int REFILL_BUFFER_SIZE = 2056;
+
+struct RefillFileData
+{
+    FILE* fp;
+    char  buf[REFILL_BUFFER_SIZE];
+};
+
+struct ReaderErrorData
+{
+    uint8_t buf;
+} reader_error_data;
+
+int refill_file(Reader* r)
+{
+    auto d = reinterpret_cast<RefillFileData*>(r->data);
+    FILE* fp = d->fp;
+    char* buf = d->buf;
+    size_t rem = r->end - r->cur;
+    memmove(r->start, r->cur, rem);
+    size_t left = REFILL_BUFFER_SIZE - rem;
+    size_t read = fread(buf, left, 1, fp);
+    if (read > 0) {
+        assert(rem + read <= REFILL_BUFFER_SIZE);
+        r->start = reinterpret_cast<uint8_t*>(&buf[0]);
+        r->cur   = reinterpret_cast<uint8_t*>(&buf[rem]);
+        r->end   = reinterpret_cast<uint8_t*>(&buf[rem+read]);
+        return 0;
+    } else {
+        reader_error_data.buf = 0;
+        r->data = reinterpret_cast<void*>(&reader_error_data);
+        r->start = reinterpret_cast<uint8_t*>(&reader_error_data.buf);
+        r->cur = r->start;
+        r->end = r->start + 1;
+        r->error = ferror(fp);
+        return r->error;
+    }
+}
+
 struct BitReader
 {
     BitReader(FILE* f) noexcept : fp(f), buffer(0), index(bufsize()) {}
@@ -719,7 +768,7 @@ int main(int argc, char** argv)
                 write_buffer.insert_at_end(temp_buffer.begin(), temp_buffer.end());
                 len -= BUFFERSZ;
             }
-            xassert(len < BUFFERSZ, "invalid length: %u", len);
+            xassert(0 <= len && len < BUFFERSZ, "invalid length: %u", len);
 
             if (len > 0) {
                 temp_buffer.assign(len, '\0');
