@@ -201,6 +201,11 @@ int main(int argc, char** argv) {
     }
 
     init_file_stream(&strm, &file_stream_data);
+
+    /**************************************************************************
+     * Read header and metadata
+     *************************************************************************/
+
     if (stream_read(&strm, &hdr, sizeof(hdr)) != 0)
         panic("unable to read gzip header: %d", strm.error);
 
@@ -265,8 +270,32 @@ int main(int argc, char** argv) {
     if ((hdr.flg & (RESERV1 | RESERV2 | RESERV3)) != 0)
         panic("reserve bits are not 0");
 
+    /**************************************************************************
+     * Read compressed data
+     *************************************************************************/
 
-
+    /* know at this point that are on a byte boundary as all previous fields
+     * have been byte sized */
+    size_t bitpos = 0; 
+    size_t nbits;
+    uint8_t bfinal;
+    do {
+        bfinal = 0;
+        nbits = 1;
+        while (nbits-- > 0) {
+            if (bitpos == 8) {
+                ++strm.cur;
+                if (strm.cur == strm.end)
+                    if (strm.refill(&strm) != 0)
+                        panic("stream read error: %d", strm.error);
+                bitpos = 0;
+            }
+            bfinal <<= 1;
+            bfinal |= ((*strm.cur >> bitpos) & 0x1u);
+        }
+        printf("BFINAL? %u\n", bfinal);
+        break;
+    } while (bfinal == 0);
 
     fclose(file_stream_data.fp);
     fclose(out);
