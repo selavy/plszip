@@ -223,15 +223,49 @@ int main(int argc, char** argv) {
         // +---+---+=================================+
         panic("FEXTRA flag not supported.");
     }
-    char *orig_filename = NULL;
     if ((hdr.flg & FNAME) != 0) {
         // +=========================================+
         // |...original file name, zero-terminated...| (more-->)
         // +=========================================+
-        orig_filename = read_null_terminated_string(&strm);
+        char *orig_filename = read_null_terminated_string(&strm);
+        if (!orig_filename)
+            panic("unable to read original filename: %d", strm.error);
         printf("File contains original filename!: '%s'\n", orig_filename);
         free(orig_filename);
     }
+    if ((hdr.flg & FCOMMENT) != 0) {
+        // +===================================+
+        // |...file comment, zero-terminated...| (more-->)
+        // +===================================+
+        printf("File contains comment\n");
+        char *comment = read_null_terminated_string(&strm);
+        if (!comment)
+            panic("unable to read file comment: %d", strm.error);
+        printf("File comment: '%s'\n", comment);
+        free(comment);
+    }
+    if ((hdr.flg & FHCRC) != 0) {
+        // +---+---+
+        // | CRC16 |
+        // +---+---+
+        //
+        // +=======================+
+        // |...compressed blocks...| (more-->)
+        // +=======================+
+        //
+        // 0   1   2   3   4   5   6   7
+        // +---+---+---+---+---+---+---+---+
+        // |     CRC32     |     ISIZE     |
+        // +---+---+---+---+---+---+---+---+
+        uint16_t crc16 = 0;
+        if (stream_read(&strm, &crc16, sizeof(crc16)) != 0)
+            panic("unable to read crc16: %d", strm.error);
+        printf("CRC16: %u (0x%04X)\n", crc16, crc16);
+    }
+    if ((hdr.flg & (RESERV1 | RESERV2 | RESERV3)) != 0)
+        panic("reserve bits are not 0");
+
+
 
 
     fclose(file_stream_data.fp);
