@@ -94,13 +94,15 @@ int refill_file(stream *s) {
     memmove(&d->buf[0], s->cur, rem);
     read = fread(&d->buf[rem], 1, sizeof(d->buf) - rem, d->fp);
     if (read > 0) {
+        assert(s->beg == &d->buf[0]);
+        // TEMP TEMP: remove -- going to enforce that `beg = &buf[0]` must already be true
         s->beg = &d->buf[0];
-        s->cur = &d->buf[rem];
+        s->cur = &d->buf[0];
         s->end = &d->buf[rem + read];
-        // TODO(peter): check ferror if `read != sizeof(d->buf) - rem`?
+        s->error = rem + read == sizeof(d->buf) ? 0 : ferror(d->fp);
         assert(s->beg <= s->cur && s->cur <= s->end);
         assert(s->end <= &d->buf[sizeof(d->buf)]);
-        return 0;
+        return s->error;
     } else {
         init_zeros_stream(s);
         s->error = ferror(d->fp);
@@ -295,10 +297,8 @@ int main(int argc, char **argv) {
     do {
         bfinal = readbits(&strm, &bitpos, 1);
         blktyp = readbits(&strm, &bitpos, 2);
-        DEBUG("BFINAL = %u, blktype = %u, bitpos = %zu", bfinal, blktyp,
-               bitpos);
         if (blktyp == NO_COMPRESSION) {
-            DEBUG("No Compression Block");
+            DEBUG("No Compression Block%s", bfinal ? " -- Final Block" : "");
             // flush bit buffer to be on byte boundary
             if (bitpos != 0) strm.cur++;
             bitpos = 0;
@@ -306,23 +306,37 @@ int main(int argc, char **argv) {
             if (strm.end - strm.cur < 4)
                 if (strm.refill(&strm) != 0)
                     panic("refill failed: %d", strm.error);
-            len =
-                (strm.cur[1] << 8) | strm.cur[0];  // 2-byte little endian read
-            nlen =
-                (strm.cur[3] << 8) | strm.cur[2];  // 2-byte little endian read
+            // 2-byte little endian read
+            len = (strm.cur[1] << 8) | strm.cur[0];
+            // 2-byte little endian read
+            nlen = (strm.cur[3] << 8) | strm.cur[2];
             strm.cur += 4;
             if ((len & 0xffffu) != (nlen ^ 0xffffu))
                 panic("invalid stored block lengths: %u %u", len, nlen);
             DEBUG("\tlen = %u, nlen = %u", len, nlen);
-
+            while (len > 0) {
+                if (strm.end - strm.cur < len)
+                    if (strm.refill(&strm) != 0)
+                        panic("refill failed: %d", strm.error);
+                size_t stream_avail = strm.end - strm.cur;
+                size_t avail = MIN(len, stream_avail);
+                assert(avail <= len);
+                DEBUG("XFER len=%u, avail=%zu => %zu", len, stream_avail, avail);
+                // TODO: add write buffer
+                if (fwrite(strm.cur, 1, avail, out) != avail)
+                    panic("short write");
+                strm.cur += avail;
+                len      -= avail;
+            }
         } else if (blktyp == FIXED_HUFFMAN) {
-            DEBUG("Fixed Huffman Block");
+            DEBUG("Fixed Huffman Block%s", bfinal ? " -- Final Block" : "");
+            panic("not implemented yet");
         } else if (blktyp == DYNAMIC_HUFFMAN) {
-            DEBUG("Dynamic Huffman Block");
+            DEBUG("Dynamic Huffman Block%s", bfinal ? " -- Final Block" : "");
+            panic("not implemented yet");
         } else {
             panic("Invalid block type: %u", blktyp);
         }
-        break;
     } while (bfinal == 0);
 
     fclose(file_stream_data.fp);
