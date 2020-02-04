@@ -184,14 +184,14 @@ uint8_t readbits(stream* s, size_t *bitpos, size_t nbits)
 {
     assert(0 <= nbits && nbits <= 8);
     uint8_t result = 0;
-    while (nbits-- > 0) {
+    for (size_t i = 0; i < nbits; ++i) {
         if (*bitpos == 8) {
             if (++s->cur == s->end)
                 if (s->refill(s) != 0)
                     panic("stream read error: %d", s->error);
             *bitpos = 0;
         }
-        result |= ((s->cur[0] >> *bitpos) & 0x1u) << nbits;
+        result |= ((s->cur[0] >> *bitpos) & 0x1u) << i;
         ++*bitpos;
     }
     return result;
@@ -304,18 +304,19 @@ int main(int argc, char** argv) {
     size_t bitpos = 0;
     size_t nbits;
     uint8_t bfinal;
+    uint8_t blktyp;
     do {
         bfinal = readbits(&strm, &bitpos, 1);
-        uint8_t blktype = readbits(&strm, &bitpos, 2);
-        printf("BFINAL = %u, blktype = %u, bitpos = %zu\n", bfinal, blktype, bitpos);
-        if (blktype == NO_COMPRESSION) {
+        blktyp = readbits(&strm, &bitpos, 2);
+        printf("BFINAL = %u, blktype = %u, bitpos = %zu\n", bfinal, blktyp, bitpos);
+        if (blktyp == NO_COMPRESSION) {
             printf("No Compression Block\n");
-        } else if (blktype == FIXED_HUFFMAN) {
+        } else if (blktyp == FIXED_HUFFMAN) {
             printf("Fixed Huffman Block\n");
-        } else if (blktype == DYNAMIC_HUFFMAN) {
+        } else if (blktyp == DYNAMIC_HUFFMAN) {
             printf("Dynamic Huffman Block\n");
         } else {
-            panic("Invalid block type: %u", blktype);
+            panic("Invalid block type: %u", blktyp);
         }
         break;
     } while (bfinal == 0);
