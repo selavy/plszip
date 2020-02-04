@@ -180,19 +180,18 @@ char *read_null_terminated_string(stream *s)
     }
 }
 
-uint8_t readbits(size_t nbits, stream* s, size_t *bitpos)
+uint8_t readbits(stream* s, size_t *bitpos, size_t nbits)
 {
+    assert(0 <= nbits && nbits <= 8);
     uint8_t result = 0;
     while (nbits-- > 0) {
         if (*bitpos == 8) {
-            ++s->cur;
-            if (s->cur == s->end)
+            if (++s->cur == s->end)
                 if (s->refill(s) != 0)
                     panic("stream read error: %d", s->error);
             *bitpos = 0;
         }
-        result <<= 1;
-        result |= ((s->cur[0] >> *bitpos) & 0x1u);
+        result |= ((s->cur[0] >> *bitpos) & 0x1u) << nbits;
         ++*bitpos;
     }
     return result;
@@ -302,13 +301,13 @@ int main(int argc, char** argv) {
 
     /* know at this point that are on a byte boundary as all previous fields
      * have been byte sized */
-    size_t bitpos = 0; 
+    size_t bitpos = 0;
     size_t nbits;
     uint8_t bfinal;
     do {
-        bfinal = readbits(1, &strm, &bitpos);
-        uint8_t blktype = readbits(2, &strm, &bitpos);
-        printf("BFINAL? %u, bitpos = %zu\n", bfinal, bitpos);
+        bfinal = readbits(&strm, &bitpos, 1);
+        uint8_t blktype = readbits(&strm, &bitpos, 2);
+        printf("BFINAL = %u, blktype = %u, bitpos = %zu\n", bfinal, blktype, bitpos);
         if (blktype == NO_COMPRESSION) {
             printf("No Compression Block\n");
         } else if (blktype == FIXED_HUFFMAN) {
