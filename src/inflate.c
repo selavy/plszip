@@ -94,9 +94,7 @@ int refill_file(stream *s) {
     memmove(&d->buf[0], s->cur, rem);
     read = fread(&d->buf[rem], 1, sizeof(d->buf) - rem, d->fp);
     if (read > 0) {
-        assert(s->beg == &d->buf[0]);
-        // TEMP TEMP: remove -- going to enforce that `beg = &buf[0]` must already be true
-        s->beg = &d->buf[0];
+        xassert(s->beg == &d->buf[0], "`beg` pointer not set properly when initializing read buffer");
         s->cur = &d->buf[0];
         s->end = &d->buf[rem + read];
         s->error = rem + read == sizeof(d->buf) ? 0 : ferror(d->fp);
