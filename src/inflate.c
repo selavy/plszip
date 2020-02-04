@@ -35,6 +35,8 @@ typedef struct gzip_header gzip_header;
 
 static const uint8_t ID1_GZIP = 31;
 static const uint8_t ID2_GZIP = 139;
+
+// Header Flags
 static const uint8_t FTEXT    = 1u << 0;
 static const uint8_t FHCRC    = 1u << 1;
 static const uint8_t FEXTRA   = 1u << 2;
@@ -43,6 +45,12 @@ static const uint8_t FCOMMENT = 1u << 4;
 static const uint8_t RESERV1  = 1u << 5;
 static const uint8_t RESERV2  = 1u << 6;
 static const uint8_t RESERV3  = 1u << 7;
+
+// Block Types
+static const uint8_t NO_COMPRESSION   = 0x0u;
+static const uint8_t FIXED_HUFFMAN    = 0x1u;
+static const uint8_t DYNAMIC_HUFFMAN  = 0x2u;
+static const uint8_t RESERVED         = 0x3u;
 
 struct stream
 {
@@ -172,6 +180,24 @@ char *read_null_terminated_string(stream *s)
     }
 }
 
+uint8_t readbits(size_t nbits, stream* s, size_t *bitpos)
+{
+    uint8_t result = 0;
+    while (nbits-- > 0) {
+        if (*bitpos == 8) {
+            ++s->cur;
+            if (s->cur == s->end)
+                if (s->refill(s) != 0)
+                    panic("stream read error: %d", s->error);
+            *bitpos = 0;
+        }
+        result <<= 1;
+        result |= ((s->cur[0] >> *bitpos) & 0x1u);
+        ++*bitpos;
+    }
+    return result;
+}
+
 int main(int argc, char** argv) {
     FILE* fp;
     FILE* out;
@@ -280,20 +306,18 @@ int main(int argc, char** argv) {
     size_t nbits;
     uint8_t bfinal;
     do {
-        bfinal = 0;
-        nbits = 1;
-        while (nbits-- > 0) {
-            if (bitpos == 8) {
-                ++strm.cur;
-                if (strm.cur == strm.end)
-                    if (strm.refill(&strm) != 0)
-                        panic("stream read error: %d", strm.error);
-                bitpos = 0;
-            }
-            bfinal <<= 1;
-            bfinal |= ((*strm.cur >> bitpos) & 0x1u);
+        bfinal = readbits(1, &strm, &bitpos);
+        uint8_t blktype = readbits(2, &strm, &bitpos);
+        printf("BFINAL? %u, bitpos = %zu\n", bfinal, bitpos);
+        if (blktype == NO_COMPRESSION) {
+            printf("No Compression Block\n");
+        } else if (blktype == FIXED_HUFFMAN) {
+            printf("Fixed Huffman Block\n");
+        } else if (blktype == DYNAMIC_HUFFMAN) {
+            printf("Dynamic Huffman Block\n");
+        } else {
+            panic("Invalid block type: %u", blktype);
         }
-        printf("BFINAL? %u\n", bfinal);
         break;
     } while (bfinal == 0);
 
