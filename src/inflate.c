@@ -21,8 +21,9 @@
 
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
-struct gzip_header
-{
+#define DEBUG(fmt, ...) fprintf(stderr, "DBG: " fmt "\n", ##__VA_ARGS__)
+
+struct gzip_header {
     uint8_t id1;
     uint8_t id2;
     uint8_t cm;
@@ -37,60 +38,55 @@ static const uint8_t ID1_GZIP = 31;
 static const uint8_t ID2_GZIP = 139;
 
 // Header Flags
-static const uint8_t FTEXT    = 1u << 0;
-static const uint8_t FHCRC    = 1u << 1;
-static const uint8_t FEXTRA   = 1u << 2;
-static const uint8_t FNAME    = 1u << 3;
+static const uint8_t FTEXT = 1u << 0;
+static const uint8_t FHCRC = 1u << 1;
+static const uint8_t FEXTRA = 1u << 2;
+static const uint8_t FNAME = 1u << 3;
 static const uint8_t FCOMMENT = 1u << 4;
-static const uint8_t RESERV1  = 1u << 5;
-static const uint8_t RESERV2  = 1u << 6;
-static const uint8_t RESERV3  = 1u << 7;
+static const uint8_t RESERV1 = 1u << 5;
+static const uint8_t RESERV2 = 1u << 6;
+static const uint8_t RESERV3 = 1u << 7;
 
 // Block Types
-static const uint8_t NO_COMPRESSION   = 0x0u;
-static const uint8_t FIXED_HUFFMAN    = 0x1u;
-static const uint8_t DYNAMIC_HUFFMAN  = 0x2u;
-static const uint8_t RESERVED         = 0x3u;
+static const uint8_t NO_COMPRESSION = 0x0u;
+static const uint8_t FIXED_HUFFMAN = 0x1u;
+static const uint8_t DYNAMIC_HUFFMAN = 0x2u;
+static const uint8_t RESERVED = 0x3u;
 
-struct stream
-{
+struct stream {
     const uint8_t *beg;
     const uint8_t *cur; /* beg <= cur <= end */
     const uint8_t *end;
-    int            error; /* 0 = OK, otherwise returns result of ferror */
-    int          (*refill)(struct stream* s);
-    void          *udata;
+    int error; /* 0 = OK, otherwise returns result of ferror */
+    int (*refill)(struct stream *s);
+    void *udata;
 };
 typedef struct stream stream;
 
-static const uint8_t _zeros[256] = { 0 };
+static const uint8_t _zeros[256] = {0};
 
-int refill_zeros(stream *s)
-{
+int refill_zeros(stream *s) {
     s->beg = &_zeros[0];
     s->cur = s->beg;
     s->end = s->beg + sizeof(_zeros);
     return s->error;
 }
 
-void init_zeros_stream(stream *s)
-{
+void init_zeros_stream(stream *s) {
     s->refill = &refill_zeros;
     s->error = 0;
     s->udata = NULL;
     s->refill(s);
 }
 
-struct file_stream
-{
+struct file_stream {
     uint8_t buf[2048];
     // uint8_t buf[1];
-    FILE   *fp;
+    FILE *fp;
 };
 typedef struct file_stream file_stream;
 
-int refill_file(stream *s)
-{
+int refill_file(stream *s) {
     struct file_stream *d = s->udata;
     size_t rem = s->end - s->cur;
     size_t read;
@@ -100,7 +96,7 @@ int refill_file(stream *s)
     if (read > 0) {
         s->beg = &d->buf[0];
         s->cur = &d->buf[rem];
-        s->end = &d->buf[rem+read];
+        s->end = &d->buf[rem + read];
         // TODO(peter): check ferror if `read != sizeof(d->buf) - rem`?
         assert(s->beg <= s->cur && s->cur <= s->end);
         assert(s->end <= &d->buf[sizeof(d->buf)]);
@@ -112,8 +108,7 @@ int refill_file(stream *s)
     }
 }
 
-void init_file_stream(stream *s, file_stream* data)
-{
+void init_file_stream(stream *s, file_stream *data) {
     s->beg = &data->buf[0];
     s->cur = &data->buf[0];
     s->end = &data->buf[0];
@@ -125,8 +120,7 @@ void init_file_stream(stream *s, file_stream* data)
 
 #define MIN(x, y) (x) < (y) ? (x) : (y)
 
-int stream_read(stream* s, void* buf, size_t n)
-{
+int stream_read(stream *s, void *buf, size_t n) {
     /* fast path: plenty of data available */
     if (s->end - s->cur >= n) {
         memcpy(buf, s->cur, n);
@@ -137,20 +131,18 @@ int stream_read(stream* s, void* buf, size_t n)
     uint8_t *p = buf;
     while (n > 0) {
         if (s->cur == s->end) {
-            if (s->refill(s) != 0)
-                return s->error;
+            if (s->refill(s) != 0) return s->error;
         }
         size_t avail = MIN(n, s->end - s->cur);
         memcpy(p, s->cur, avail);
         s->cur += avail;
-        p      += avail;
-        n      -= avail;
+        p += avail;
+        n -= avail;
     }
     return 0;
 }
 
-char *read_null_terminated_string(stream *s)
-{
+char *read_null_terminated_string(stream *s) {
     size_t pos;
     size_t len = 0;
     char *str = NULL;
@@ -180,15 +172,13 @@ char *read_null_terminated_string(stream *s)
     }
 }
 
-uint8_t readbits(stream* s, size_t *bitpos, size_t nbits)
-{
+uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
     assert(0 <= nbits && nbits <= 8);
     uint8_t result = 0;
     for (size_t i = 0; i < nbits; ++i) {
         if (*bitpos == 8) {
             if (++s->cur == s->end)
-                if (s->refill(s) != 0)
-                    panic("stream read error: %d", s->error);
+                if (s->refill(s) != 0) panic("stream read error: %d", s->error);
             *bitpos = 0;
         }
         result |= ((s->cur[0] >> *bitpos) & 0x1u) << i;
@@ -197,11 +187,11 @@ uint8_t readbits(stream* s, size_t *bitpos, size_t nbits)
     return result;
 }
 
-int main(int argc, char** argv) {
-    FILE* fp;
-    FILE* out;
-    char* input_filename = argv[1];
-    char* output_filename;
+int main(int argc, char **argv) {
+    FILE *fp;
+    FILE *out;
+    char *input_filename = argv[1];
+    char *output_filename;
     gzip_header hdr;
     file_stream file_stream_data;
     stream strm;
@@ -234,19 +224,17 @@ int main(int argc, char** argv) {
     if (stream_read(&strm, &hdr, sizeof(hdr)) != 0)
         panic("unable to read gzip header: %d", strm.error);
 
-    printf("GzipHeader:\n");
-    printf("\tid1   = %u (0x%02x)\n", hdr.id1, hdr.id1);
-    printf("\tid2   = %u (0x%02x)\n", hdr.id2, hdr.id2);
-    printf("\tcm    = %u\n", hdr.cm);
-    printf("\tflg   = %u\n", hdr.flg);
-    printf("\tmtime = %u\n", hdr.mtime);
-    printf("\txfl   = %u\n", hdr.xfl);
-    printf("\tos    = %u\n", hdr.os);
+    DEBUG("GzipHeader:");
+    DEBUG("\tid1   = %u (0x%02x)", hdr.id1, hdr.id1);
+    DEBUG("\tid2   = %u (0x%02x)", hdr.id2, hdr.id2);
+    DEBUG("\tcm    = %u", hdr.cm);
+    DEBUG("\tflg   = %u", hdr.flg);
+    DEBUG("\tmtime = %u", hdr.mtime);
+    DEBUG("\txfl   = %u", hdr.xfl);
+    DEBUG("\tos    = %u", hdr.os);
 
-    if (hdr.id1 != ID1_GZIP)
-        panic("Unsupported identifier #1: %u.", hdr.id1);
-    if (hdr.id2 != ID2_GZIP)
-        panic("Unsupported identifier #2: %u.", hdr.id2);
+    if (hdr.id1 != ID1_GZIP) panic("Unsupported identifier #1: %u.", hdr.id1);
+    if (hdr.id2 != ID2_GZIP) panic("Unsupported identifier #2: %u.", hdr.id2);
     if ((hdr.flg & FEXTRA) != 0) {
         // +---+---+=================================+
         // | XLEN  |...XLEN bytes of "extra field"...| (more-->)
@@ -260,18 +248,17 @@ int main(int argc, char** argv) {
         char *orig_filename = read_null_terminated_string(&strm);
         if (!orig_filename)
             panic("unable to read original filename: %d", strm.error);
-        printf("File contains original filename!: '%s'\n", orig_filename);
+        DEBUG("File contains original filename!: '%s'", orig_filename);
         free(orig_filename);
     }
     if ((hdr.flg & FCOMMENT) != 0) {
         // +===================================+
         // |...file comment, zero-terminated...| (more-->)
         // +===================================+
-        printf("File contains comment\n");
+        DEBUG("File contains comment");
         char *comment = read_null_terminated_string(&strm);
-        if (!comment)
-            panic("unable to read file comment: %d", strm.error);
-        printf("File comment: '%s'\n", comment);
+        if (!comment) panic("unable to read file comment: %d", strm.error);
+        DEBUG("File comment: '%s'", comment);
         free(comment);
     }
     if ((hdr.flg & FHCRC) != 0) {
@@ -290,7 +277,7 @@ int main(int argc, char** argv) {
         uint16_t crc16 = 0;
         if (stream_read(&strm, &crc16, sizeof(crc16)) != 0)
             panic("unable to read crc16: %d", strm.error);
-        printf("CRC16: %u (0x%04X)\n", crc16, crc16);
+        DEBUG("CRC16: %u (0x%04X)", crc16, crc16);
     }
     if ((hdr.flg & (RESERV1 | RESERV2 | RESERV3)) != 0)
         panic("reserve bits are not 0");
@@ -308,31 +295,30 @@ int main(int argc, char** argv) {
     do {
         bfinal = readbits(&strm, &bitpos, 1);
         blktyp = readbits(&strm, &bitpos, 2);
-        printf("BFINAL = %u, blktype = %u, bitpos = %zu\n", bfinal, blktyp, bitpos);
+        DEBUG("BFINAL = %u, blktype = %u, bitpos = %zu", bfinal, blktyp,
+               bitpos);
         if (blktyp == NO_COMPRESSION) {
-            printf("No Compression Block\n");
+            DEBUG("No Compression Block");
             // flush bit buffer to be on byte boundary
-            if (bitpos != 0)
-                strm.cur++;
+            if (bitpos != 0) strm.cur++;
             bitpos = 0;
             uint16_t len, nlen;
             if (strm.end - strm.cur < 4)
                 if (strm.refill(&strm) != 0)
                     panic("refill failed: %d", strm.error);
-            len  = (strm.cur[1] << 8) | strm.cur[0]; // 2-byte little endian read
-            nlen = (strm.cur[3] << 8) | strm.cur[2]; // 2-byte little endian read
+            len =
+                (strm.cur[1] << 8) | strm.cur[0];  // 2-byte little endian read
+            nlen =
+                (strm.cur[3] << 8) | strm.cur[2];  // 2-byte little endian read
             strm.cur += 4;
-            // if (stream_read(&strm, &len, sizeof(len)) != 0)
-            //     panic("unable to read len from uncompressed block");
-            // if (stream_read(&strm, &nlen, sizeof(nlen)) != 0)
-            //     panic("unable to read nlen from uncompressed block");
             if ((len & 0xffffu) != (nlen ^ 0xffffu))
                 panic("invalid stored block lengths: %u %u", len, nlen);
-            printf("len = %u, nlen = %u\n", len, nlen);
+            DEBUG("\tlen = %u, nlen = %u", len, nlen);
+
         } else if (blktyp == FIXED_HUFFMAN) {
-            printf("Fixed Huffman Block\n");
+            DEBUG("Fixed Huffman Block");
         } else if (blktyp == DYNAMIC_HUFFMAN) {
-            printf("Dynamic Huffman Block\n");
+            DEBUG("Dynamic Huffman Block");
         } else {
             panic("Invalid block type: %u", blktyp);
         }
