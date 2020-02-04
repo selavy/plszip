@@ -757,6 +757,7 @@ int main(int argc, char** argv)
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
                 panic("invalid stored block lengths: %u %u", len, nlen);
             }
+            DEBUG("len = %u, nlen = %u", len, nlen);
 
             std::vector<uint8_t> temp_buffer;
             while (len >= BUFFERSZ) {

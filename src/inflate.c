@@ -311,6 +311,24 @@ int main(int argc, char** argv) {
         printf("BFINAL = %u, blktype = %u, bitpos = %zu\n", bfinal, blktyp, bitpos);
         if (blktyp == NO_COMPRESSION) {
             printf("No Compression Block\n");
+            // flush bit buffer to be on byte boundary
+            if (bitpos != 0)
+                strm.cur++;
+            bitpos = 0;
+            uint16_t len, nlen;
+            // if (strm.end - strm.cur < 4)
+            //     if (strm.refill(&strm) != 0)
+            //         panic("refill failed: %d", strm.error);
+            // len  = (strm.cur[1] << 8) | strm.cur[0];
+            // nlen = (strm.cur[3] << 8) | strm.cur[2];
+            // strm.cur += 4;
+            if (stream_read(&strm, &len, sizeof(len)) != 0)
+                panic("unable to read len from uncompressed block");
+            if (stream_read(&strm, &nlen, sizeof(nlen)) != 0)
+                panic("unable to read nlen from uncompressed block");
+            if ((len & 0xffffu) != (nlen ^ 0xffffu))
+                panic("invalid stored block lengths: %u %u", len, nlen);
+            printf("len = %u, nlen = %u\n", len, nlen);
         } else if (blktyp == FIXED_HUFFMAN) {
             printf("Fixed Huffman Block\n");
         } else if (blktyp == DYNAMIC_HUFFMAN) {
