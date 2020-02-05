@@ -69,8 +69,8 @@ typedef struct gzip_header gzip_header;
 
 struct wstream {
     uint8_t *next_out;
-    uint32_t avail_out;
-    uint64_t total_out;
+    size_t avail_out;
+    size_t total_out;
     int error;
     int (*flush)(struct wstream *s);
     void *udata;
@@ -104,28 +104,14 @@ void init_file_wstream(wstream *s, file_wstream *data) {
 }
 
 struct rstream {
-    const uint8_t *beg;
-    const uint8_t *cur; /* beg <= cur <= end */
-    const uint8_t *end;
+    const uint8_t *next_in;
+    size_t         avail_in;
+    size_t         total_in;
     int error; /* 0 = OK, otherwise returns result of ferror */
     int (*refill)(struct rstream *s);
     void *udata;
 };
 typedef struct rstream rstream;
-
-int rrefill_zeros(rstream *s) {
-    s->beg = &_zeros[0];
-    s->cur = s->beg;
-    s->end = s->beg + sizeof(_zeros);
-    return s->error;
-}
-
-void init_zeros_rstream(rstream *s) {
-    s->refill = &rrefill_zeros;
-    s->error = 0;
-    s->udata = NULL;
-    s->refill(s);
-}
 
 struct file_rstream {
     // uint8_t buf[2048]; // TODO(peter): resize to max size of zlib window
@@ -136,31 +122,25 @@ typedef struct file_rstream file_rstream;
 
 int rrefill_file(rstream *s) {
     file_rstream *d = s->udata;
-    size_t rem = s->end - s->cur;
+    size_t rem = s->avail_in;
     size_t read;
-    assert(s->beg <= s->cur && s->cur <= s->end);
-    memmove(&d->buf[0], s->cur, rem);
+    memmove(&d->buf[0], s->next_in, rem);
+    DEBUG("rrefill_file: avail_in=%zu, readsize=%zu", s->avail_in, sizeof(d->buf) - rem);
     read = fread(&d->buf[rem], 1, sizeof(d->buf) - rem, d->fp);
     if (read > 0) {
-        xassert(s->beg == &d->buf[0],
-                "`beg` pointer not set properly when initializing read buffer");
-        s->cur = &d->buf[0];
-        s->end = &d->buf[rem + read];
-        s->error = rem + read == sizeof(d->buf) ? 0 : ferror(d->fp);
-        assert(s->beg <= s->cur && s->cur <= s->end);
-        assert(s->end <= &d->buf[sizeof(d->buf)]);
+        s->next_in = &d->buf[0];
+        s->avail_in += read;
+        s->error = read == sizeof(d->buf) - rem ? 0 : ferror(d->fp);
         return s->error;
     } else {
-        init_zeros_rstream(s);
         s->error = ferror(d->fp);
         return s->error;
     }
 }
 
 void init_file_rstream(rstream *s, file_rstream *data) {
-    s->beg = &data->buf[0];
-    s->cur = &data->buf[0];
-    s->end = &data->buf[0];
+    s->next_in = &data->buf[0];
+    s->avail_in = 0;
     s->error = 0;
     s->refill = &rrefill_file;
     s->udata = data;
@@ -168,28 +148,36 @@ void init_file_rstream(rstream *s, file_rstream *data) {
 }
 
 int stream_read(rstream *s, void *buf, size_t n) {
+    DEBUG("stream_read: %zu", n);
     /* fast path: plenty of data available */
-    if (s->end - s->cur >= n) {
-        memcpy(buf, s->cur, n);
-        s->cur += n;
+    if (s->avail_in >= n) {
+        memcpy(buf, s->next_in, n);
+        s->next_in += n;
+        s->avail_in -= n;
+        s->total_in += n;
         return 0;
     }
 
     uint8_t *p = buf;
-    while (n > 0) {
-        if (s->cur == s->end) {
+    do {
+        DEBUG("s->avail_in = %zu", s->avail_in);
+        if (s->avail_in < n) {
             if (s->refill(s) != 0) return s->error;
         }
-        size_t avail = MIN(n, s->end - s->cur);
-        memcpy(p, s->cur, avail);
-        s->cur += avail;
+        xassert(s->avail_in > 0 || s->avail_in == n, "refill did not add any bytes!");
+        size_t avail = MIN(n, s->avail_in);
+        memcpy(p, s->next_in, avail);
+        s->next_in += avail;
+        s->avail_in -= avail;
+        s->total_in += avail;
         p += avail;
         n -= avail;
-    }
+    } while (n > 0);
     return 0;
 }
 
 int stream_write(wstream *s, const void *buf, size_t n) {
+    DEBUG("stream_write: %zu", n);
     if (s->avail_out >= n) {
         memcpy(s->next_out, buf, n);
         s->next_out += n;
@@ -216,26 +204,31 @@ int stream_write(wstream *s, const void *buf, size_t n) {
 }
 
 char *read_null_terminated_string(rstream *s) {
+    DEBUG("read_null_terminated_string");
     size_t pos;
     size_t len = 0;
     char *str = NULL;
     for (;;) {
-        size_t n = s->end - s->cur;
-        const uint8_t *p = memchr(s->cur, '\0', n);
+        const size_t n = s->avail_in;
+        const uint8_t *p = memchr(s->next_in, '\0', n);
         if (p) {
-            pos = p - s->cur + 1;
+            pos = p - s->next_in + 1;
             str = realloc(str, len + pos);
             if (!str) return NULL;
-            memcpy(&str[len], s->cur, pos);
+            memcpy(&str[len], s->next_in, pos);
             assert(str[len + pos - 1] == '\0');
-            s->cur += pos;
+            s->next_in += pos;
+            s->avail_in -= pos;
+            s->total_in += pos;
             return str;
         } else {
             str = realloc(str, len + n);
             if (!str) return NULL;
-            memcpy(&str[len], s->cur, n);
-            assert(s->cur + n == s->end);
-            s->cur = s->end;
+            memcpy(&str[len], s->next_in, n);
+            assert(n == s->avail_in);
+            s->next_in += n;
+            s->avail_in = 0;
+            s->total_in += n;
             if (s->refill(s) != 0) {
                 free(str);
                 return NULL;
@@ -250,11 +243,11 @@ uint8_t readbits(rstream *s, size_t *bitpos, size_t nbits) {
     uint8_t result = 0;
     for (size_t i = 0; i < nbits; ++i) {
         if (*bitpos == 8) {
-            if (++s->cur == s->end)
+            if (--s->avail_in == 0)
                 if (s->refill(s) != 0) panic("read error: %d", s->error);
             *bitpos = 0;
         }
-        result |= ((s->cur[0] >> *bitpos) & 0x1u) << i;
+        result |= ((s->next_in[0] >> *bitpos) & 0x1u) << i;
         ++*bitpos;
     }
     return result;
@@ -367,38 +360,42 @@ int main(int argc, char **argv) {
         if (blktyp == NO_COMPRESSION) {
             DEBUG("No Compression Block%s", bfinal ? " -- Final Block" : "");
             // flush bit buffer to be on byte boundary
-            if (bitpos != 0) strm.cur++;
+            if (bitpos != 0) {
+                ++strm.next_in;
+                --strm.avail_in;
+                ++strm.total_in;
+            }
             bitpos = 0;
             uint16_t len, nlen;
-            if (strm.end - strm.cur < 4)
+            if (strm.avail_in < 4)
                 if (strm.refill(&strm) != 0)
                     panic("refill failed: %d", strm.error);
             // 2-byte little endian read
-            len = (strm.cur[1] << 8) | strm.cur[0];
+            len = (strm.next_in[1] << 8) | strm.next_in[0];
             // 2-byte little endian read
-            nlen = (strm.cur[3] << 8) | strm.cur[2];
-            strm.cur += 4;
+            nlen = (strm.next_in[3] << 8) | strm.next_in[2];
+            strm.next_in += 4;
+            strm.avail_in -= 4;
+            strm.total_in += 4;
             if ((len & 0xffffu) != (nlen ^ 0xffffu))
                 panic("invalid stored block lengths: %u %u", len, nlen);
             DEBUG("\tlen = %u, nlen = %u", len, nlen);
             while (len > 0) {
-                if (strm.end - strm.cur < len)
+                if (strm.avail_in < len)
                     // XXX(peter): could hoist error check to end, would write
                     // zeros for section. do we guarantee to detect errors
                     // asap?
                     if (strm.refill(&strm) != 0)
                         panic("refill failed: %d", strm.error);
-                size_t stream_avail = strm.end - strm.cur;
-                size_t avail = MIN(len, stream_avail);
+                size_t avail = MIN(len, strm.avail_in);
                 assert(avail <= len);
-                // DEBUG("XFER len=%u, avail=%zu => %zu", len, stream_avail,
-                //       avail);
+                // DEBUG("XFER len=%u, avail=%zu => %zu", len, strm.avail_in, avail);
                 // TODO: add write buffer
-                if (stream_write(&wstrm, strm.cur, avail))
+                if (stream_write(&wstrm, strm.next_in, avail))
                     panic("failed to write output: %d", wstrm.error);
-                // if (fwrite(strm.cur, 1, avail, out) != avail)
-                //     panic("short write");
-                strm.cur += avail;
+                strm.next_in += avail;
+                strm.avail_in -= avail;
+                strm.total_in += avail;
                 len -= avail;
             }
         } else if (blktyp == FIXED_HUFFMAN) {
