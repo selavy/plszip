@@ -67,65 +67,44 @@ struct gzip_header {
 } __attribute__((packed));
 typedef struct gzip_header gzip_header;
 
-struct wstream {
+struct stream {
+    const uint8_t *next_in;
+    size_t avail_in;
+    size_t total_in;
+    int (*refill)(struct stream *s);
+    void *read_data;
+
     uint8_t *next_out;
     size_t avail_out;
     size_t total_out;
+    int (*flush)(struct stream *s);
+    void *write_data;
+
     int error;
-    int (*flush)(struct wstream *s);
-    void *udata;
 };
-typedef struct wstream wstream;
+typedef struct stream stream;
 
-struct file_wstream {
-    // uint8_t buf[2048];  // TODO(peter): resize to max size of zlib window
-    uint8_t buf[24];  // TEMP TEMP -- for testing only
-    FILE *fp;
-};
-typedef struct file_wstream file_wstream;
-
-int flush_file(wstream *s) {
-    file_wstream *d = s->udata;
-    uint32_t avail = s->next_out - &d->buf[0];
-    size_t out = fwrite(&d->buf[0], 1, avail, d->fp);
-    s->next_out = &d->buf[0];
-    s->avail_out = sizeof(d->buf);
-    s->error = out != avail ? ferror(d->fp) : 0;
-    return s->error;
-}
-
-void init_file_wstream(wstream *s, file_wstream *data) {
-    s->next_out = &data->buf[0];
-    s->avail_out = sizeof(data->buf);
-    s->total_out = 0;
-    s->error = 0;
-    s->flush = &flush_file;
-    s->udata = data;
-}
-
-struct rstream {
-    const uint8_t *next_in;
-    size_t         avail_in;
-    size_t         total_in;
-    int error; /* 0 = OK, otherwise returns result of ferror */
-    int (*refill)(struct rstream *s);
-    void *udata;
-};
-typedef struct rstream rstream;
-
-struct file_rstream {
+struct file_read_data {
     // uint8_t buf[2048]; // TODO(peter): resize to max size of zlib window
     uint8_t buf[24];  // TEMP TEMP -- for testing only
     FILE *fp;
 };
-typedef struct file_rstream file_rstream;
+typedef struct file_read_data file_read_data;
+struct file_write_data {
+    // uint8_t buf[2048];  // TODO(peter): resize to max size of zlib window
+    uint8_t buf[24];  // TEMP TEMP -- for testing only
+    FILE *fp;
+};
+typedef struct file_write_data file_write_data;
 
-int rrefill_file(rstream *s) {
-    file_rstream *d = s->udata;
+int refill_file(stream *s)
+{
+    file_read_data *d = s->read_data;
     size_t rem = s->avail_in;
     size_t read;
     memmove(&d->buf[0], s->next_in, rem);
-    DEBUG("rrefill_file: avail_in=%zu, readsize=%zu", s->avail_in, sizeof(d->buf) - rem);
+    DEBUG("rrefill_file: avail_in=%zu, readsize=%zu", s->avail_in,
+          sizeof(d->buf) - rem);
     read = fread(&d->buf[rem], 1, sizeof(d->buf) - rem, d->fp);
     if (read > 0) {
         s->next_in = &d->buf[0];
@@ -138,16 +117,42 @@ int rrefill_file(rstream *s) {
     }
 }
 
-void init_file_rstream(rstream *s, file_rstream *data) {
-    s->next_in = &data->buf[0];
-    s->avail_in = 0;
-    s->error = 0;
-    s->refill = &rrefill_file;
-    s->udata = data;
-    s->refill(s);
+int flush_file(stream *s) {
+    file_write_data *d = s->write_data;
+    uint32_t avail = s->next_out - &d->buf[0];
+    size_t out = fwrite(&d->buf[0], 1, avail, d->fp);
+    s->next_out = &d->buf[0];
+    s->avail_out = sizeof(d->buf);
+    s->error = out != avail ? ferror(d->fp) : 0;
+    return s->error;
 }
 
-int stream_read(rstream *s, void *buf, size_t n) {
+void init_file_stream(stream *s, file_read_data *read_data, file_write_data *write_data)
+{
+    s->next_in = &read_data->buf[0];
+    s->avail_in = 0;
+    s->total_in = 0;
+    s->refill = &refill_file;
+    s->read_data = read_data;
+
+    s->next_out = &write_data->buf[0];
+    s->avail_out = sizeof(write_data->buf);
+    s->total_out = 0;
+    s->flush = &flush_file;
+    s->write_data = write_data;
+
+    s->error = 0;
+}
+
+void close_file_stream(stream *s)
+{
+    file_read_data *read_data = s->read_data;
+    file_write_data *write_data = s->write_data;
+    fclose(read_data->fp);
+    fclose(write_data->fp);
+}
+
+int stream_read(stream *s, void *buf, size_t n) {
     DEBUG("stream_read: %zu", n);
     /* fast path: plenty of data available */
     if (s->avail_in >= n) {
@@ -164,7 +169,8 @@ int stream_read(rstream *s, void *buf, size_t n) {
         if (s->avail_in < n) {
             if (s->refill(s) != 0) return s->error;
         }
-        xassert(s->avail_in > 0 || s->avail_in == n, "refill did not add any bytes!");
+        xassert(s->avail_in > 0 || s->avail_in == n,
+                "refill did not add any bytes!");
         size_t avail = MIN(n, s->avail_in);
         memcpy(p, s->next_in, avail);
         s->next_in += avail;
@@ -176,7 +182,7 @@ int stream_read(rstream *s, void *buf, size_t n) {
     return 0;
 }
 
-int stream_write(wstream *s, const void *buf, size_t n) {
+int stream_write(stream *s, const void *buf, size_t n) {
     DEBUG("stream_write: %zu", n);
     if (s->avail_out >= n) {
         memcpy(s->next_out, buf, n);
@@ -203,7 +209,7 @@ int stream_write(wstream *s, const void *buf, size_t n) {
     return 0;
 }
 
-char *read_null_terminated_string(rstream *s) {
+char *read_null_terminated_string(stream *s) {
     DEBUG("read_null_terminated_string");
     size_t pos;
     size_t len = 0;
@@ -238,7 +244,7 @@ char *read_null_terminated_string(rstream *s) {
     }
 }
 
-uint8_t readbits(rstream *s, size_t *bitpos, size_t nbits) {
+uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
     assert(0 <= nbits && nbits <= 8);
     uint8_t result = 0;
     for (size_t i = 0; i < nbits; ++i) {
@@ -257,10 +263,9 @@ int main(int argc, char **argv) {
     char *input_filename = argv[1];
     char *output_filename;
     gzip_header hdr;
-    file_rstream file_rstream_data;
-    rstream strm;
-    file_wstream file_wstream_data;
-    wstream wstrm;
+    file_read_data file_read_data;
+    file_write_data file_write_data;
+    stream strm;
 
     if (argc == 2) {
         output_filename = NULL;
@@ -271,13 +276,12 @@ int main(int argc, char **argv) {
         exit(0);
     }
 
-    if (!(file_rstream_data.fp = fopen(input_filename, "rb")))
+    if (!(file_read_data.fp = fopen(input_filename, "rb")))
         panic("failed to open input file: %s", input_filename);
-    if (!(file_wstream_data.fp =
+    if (!(file_write_data.fp =
               output_filename ? fopen(output_filename, "wb") : stdout))
         panic("failed to open output file: %s", output_filename ?: "<stdout>");
-    init_file_rstream(&strm, &file_rstream_data);
-    init_file_wstream(&wstrm, &file_wstream_data);
+    init_file_stream(&strm, &file_read_data, &file_write_data);
 
     /**************************************************************************
      * Read header and metadata
@@ -389,10 +393,11 @@ int main(int argc, char **argv) {
                         panic("refill failed: %d", strm.error);
                 size_t avail = MIN(len, strm.avail_in);
                 assert(avail <= len);
-                // DEBUG("XFER len=%u, avail=%zu => %zu", len, strm.avail_in, avail);
+                // DEBUG("XFER len=%u, avail=%zu => %zu", len, strm.avail_in,
+                // avail);
                 // TODO: add write buffer
-                if (stream_write(&wstrm, strm.next_in, avail))
-                    panic("failed to write output: %d", wstrm.error);
+                if (stream_write(&strm, strm.next_in, avail))
+                    panic("failed to write output: %d", strm.error);
                 strm.next_in += avail;
                 strm.avail_in -= avail;
                 strm.total_in += avail;
@@ -409,9 +414,8 @@ int main(int argc, char **argv) {
         }
     } while (bfinal == 0);
 
-    if (wstrm.flush(&wstrm) != 0) panic("write failed: %d", wstrm.error);
+    if (strm.flush(&strm) != 0) panic("write failed: %d", strm.error);
 
-    fclose(file_rstream_data.fp);
-    fclose(file_wstream_data.fp);
+    close_file_stream(&strm);
     return 0;
 }
