@@ -123,6 +123,7 @@ int flush_file(stream *s) {
     size_t out = fwrite(&d->buf[0], 1, avail, d->fp);
     s->next_out = &d->buf[0];
     s->avail_out = sizeof(d->buf);
+    s->total_out += out;
     s->error = out != avail ? ferror(d->fp) : 0;
     return s->error;
 }
@@ -152,11 +153,21 @@ void close_file_stream(stream *s)
     fclose(write_data->fp);
 }
 
-void stream_consume(stream *s, size_t n) {
+// TODO(peter): force inline?
+void stream_read_consume(stream *s, size_t n) {
     assert(s->avail_in >= n);
     s->next_in += n;
     s->avail_in -= n;
     s->total_in += n;
+    // TODO(peter): add CRC32 calculatiion
+}
+
+// TODO(peter): force inline?
+void stream_write_consume(stream *s, size_t n) {
+    assert(s->avail_out >= n);
+    s->next_out += n;
+    s->avail_out -= n;
+    s->total_out += n;
 }
 
 int stream_read(stream *s, void *buf, size_t n) {
@@ -164,7 +175,7 @@ int stream_read(stream *s, void *buf, size_t n) {
     /* fast path: plenty of data available */
     if (s->avail_in >= n) {
         memcpy(buf, s->next_in, n);
-        stream_consume(s, n);
+        stream_read_consume(s, n);
         return 0;
     }
 
@@ -178,7 +189,7 @@ int stream_read(stream *s, void *buf, size_t n) {
                 "refill did not add any bytes!");
         size_t avail = MIN(n, s->avail_in);
         memcpy(p, s->next_in, avail);
-        stream_consume(s, avail);
+        stream_read_consume(s, avail);
         p += avail;
         n -= avail;
     } while (n > 0);
@@ -189,9 +200,7 @@ int stream_write(stream *s, const void *buf, size_t n) {
     DEBUG("stream_write: %zu", n);
     if (s->avail_out >= n) {
         memcpy(s->next_out, buf, n);
-        s->next_out += n;
-        s->avail_out -= n;
-        s->total_out += n;
+        stream_write_consume(s, n);
         return 0;
     }
 
@@ -203,9 +212,7 @@ int stream_write(stream *s, const void *buf, size_t n) {
         assert(s->avail_out > 0);
         size_t avail = MIN(n, s->avail_out);
         memcpy(s->next_out, p, avail);
-        s->next_out += avail;
-        s->avail_out -= avail;
-        s->total_out += avail;
+        stream_write_consume(s, avail);
         p += avail;
         n -= avail;
     } while (n > 0);
@@ -226,7 +233,7 @@ char *read_null_terminated_string(stream *s) {
             if (!str) return NULL;
             memcpy(&str[len], s->next_in, pos);
             assert(str[len + pos - 1] == '\0');
-            stream_consume(s, pos);
+            stream_read_consume(s, pos);
             return str;
         } else {
             str = realloc(str, len + n);
@@ -379,7 +386,7 @@ int main(int argc, char **argv) {
             len = (strm.next_in[1] << 8) | strm.next_in[0];
             // 2-byte little endian read
             nlen = (strm.next_in[3] << 8) | strm.next_in[2];
-            stream_consume(&strm, 4);
+            stream_read_consume(&strm, 4);
             if ((len & 0xffffu) != (nlen ^ 0xffffu))
                 panic("invalid stored block lengths: %u %u", len, nlen);
             DEBUG("\tlen = %u, nlen = %u", len, nlen);
@@ -397,7 +404,7 @@ int main(int argc, char **argv) {
                 // TODO: add write buffer
                 if (stream_write(&strm, strm.next_in, avail))
                     panic("failed to write output: %d", strm.error);
-                stream_consume(&strm, avail);
+                stream_read_consume(&strm, avail);
                 len -= avail;
             }
         } else if (blktyp == FIXED_HUFFMAN) {
