@@ -68,15 +68,15 @@ struct gzip_header {
 typedef struct gzip_header gzip_header;
 
 struct stream {
-    const uint8_t *next_in;
-    size_t avail_in;
-    size_t total_in;
+    const uint8_t *next_in; /* next input byte */
+    size_t avail_in; /* number of bytes available at next_in */
+    size_t total_in; /* total number of bytes read so far */
     int (*refill)(struct stream *s);
     void *read_data;
 
-    uint8_t *next_out;
-    size_t avail_out;
-    size_t total_out;
+    uint8_t *next_out; /* next output byte will go here */
+    size_t avail_out;  /* remaining free space at next_out */
+    size_t total_out;  /* total number of bytes output so far */
     int (*flush)(struct stream *s);
     void *write_data;
 
@@ -152,14 +152,19 @@ void close_file_stream(stream *s)
     fclose(write_data->fp);
 }
 
+void stream_consume(stream *s, size_t n) {
+    assert(s->avail_in >= n);
+    s->next_in += n;
+    s->avail_in -= n;
+    s->total_in += n;
+}
+
 int stream_read(stream *s, void *buf, size_t n) {
     DEBUG("stream_read: %zu", n);
     /* fast path: plenty of data available */
     if (s->avail_in >= n) {
         memcpy(buf, s->next_in, n);
-        s->next_in += n;
-        s->avail_in -= n;
-        s->total_in += n;
+        stream_consume(s, n);
         return 0;
     }
 
@@ -173,9 +178,7 @@ int stream_read(stream *s, void *buf, size_t n) {
                 "refill did not add any bytes!");
         size_t avail = MIN(n, s->avail_in);
         memcpy(p, s->next_in, avail);
-        s->next_in += avail;
-        s->avail_in -= avail;
-        s->total_in += avail;
+        stream_consume(s, avail);
         p += avail;
         n -= avail;
     } while (n > 0);
@@ -223,9 +226,7 @@ char *read_null_terminated_string(stream *s) {
             if (!str) return NULL;
             memcpy(&str[len], s->next_in, pos);
             assert(str[len + pos - 1] == '\0');
-            s->next_in += pos;
-            s->avail_in -= pos;
-            s->total_in += pos;
+            stream_consume(s, pos);
             return str;
         } else {
             str = realloc(str, len + n);
@@ -378,9 +379,7 @@ int main(int argc, char **argv) {
             len = (strm.next_in[1] << 8) | strm.next_in[0];
             // 2-byte little endian read
             nlen = (strm.next_in[3] << 8) | strm.next_in[2];
-            strm.next_in += 4;
-            strm.avail_in -= 4;
-            strm.total_in += 4;
+            stream_consume(&strm, 4);
             if ((len & 0xffffu) != (nlen ^ 0xffffu))
                 panic("invalid stored block lengths: %u %u", len, nlen);
             DEBUG("\tlen = %u, nlen = %u", len, nlen);
@@ -398,9 +397,7 @@ int main(int argc, char **argv) {
                 // TODO: add write buffer
                 if (stream_write(&strm, strm.next_in, avail))
                     panic("failed to write output: %d", strm.error);
-                strm.next_in += avail;
-                strm.avail_in -= avail;
-                strm.total_in += avail;
+                stream_consume(&strm, avail);
                 len -= avail;
             }
         } else if (blktyp == FIXED_HUFFMAN) {
