@@ -53,48 +53,49 @@ static const uint8_t FIXED_HUFFMAN = 0x1u;
 static const uint8_t DYNAMIC_HUFFMAN = 0x2u;
 static const uint8_t RESERVED = 0x3u;
 
-struct stream {
+struct rstream {
     const uint8_t *beg;
     const uint8_t *cur; /* beg <= cur <= end */
     const uint8_t *end;
     int error; /* 0 = OK, otherwise returns result of ferror */
-    int (*refill)(struct stream *s);
+    int (*refill)(struct rstream *s);
     void *udata;
 };
-typedef struct stream stream;
+typedef struct rstream rstream;
 
 static const uint8_t _zeros[256] = {0};
 
-int refill_zeros(stream *s) {
+int refill_zeros(rstream *s) {
     s->beg = &_zeros[0];
     s->cur = s->beg;
     s->end = s->beg + sizeof(_zeros);
     return s->error;
 }
 
-void init_zeros_stream(stream *s) {
+void init_zeros_rstream(rstream *s) {
     s->refill = &refill_zeros;
     s->error = 0;
     s->udata = NULL;
     s->refill(s);
 }
 
-struct file_stream {
+struct file_rstream {
     uint8_t buf[2048];
-    // uint8_t buf[1];
+    // uint8_t buf[24];
     FILE *fp;
 };
-typedef struct file_stream file_stream;
+typedef struct file_rstream file_rstream;
 
-int refill_file(stream *s) {
-    struct file_stream *d = s->udata;
+int refill_file(rstream *s) {
+    struct file_rstream *d = s->udata;
     size_t rem = s->end - s->cur;
     size_t read;
     assert(s->beg <= s->cur && s->cur <= s->end);
     memmove(&d->buf[0], s->cur, rem);
     read = fread(&d->buf[rem], 1, sizeof(d->buf) - rem, d->fp);
     if (read > 0) {
-        xassert(s->beg == &d->buf[0], "`beg` pointer not set properly when initializing read buffer");
+        xassert(s->beg == &d->buf[0],
+                "`beg` pointer not set properly when initializing read buffer");
         s->cur = &d->buf[0];
         s->end = &d->buf[rem + read];
         s->error = rem + read == sizeof(d->buf) ? 0 : ferror(d->fp);
@@ -102,13 +103,13 @@ int refill_file(stream *s) {
         assert(s->end <= &d->buf[sizeof(d->buf)]);
         return s->error;
     } else {
-        init_zeros_stream(s);
+        init_zeros_rstream(s);
         s->error = ferror(d->fp);
         return s->error;
     }
 }
 
-void init_file_stream(stream *s, file_stream *data) {
+void init_file_rstream(rstream *s, file_rstream *data) {
     s->beg = &data->buf[0];
     s->cur = &data->buf[0];
     s->end = &data->buf[0];
@@ -120,7 +121,7 @@ void init_file_stream(stream *s, file_stream *data) {
 
 #define MIN(x, y) (x) < (y) ? (x) : (y)
 
-int stream_read(stream *s, void *buf, size_t n) {
+int stream_read(rstream *s, void *buf, size_t n) {
     /* fast path: plenty of data available */
     if (s->end - s->cur >= n) {
         memcpy(buf, s->cur, n);
@@ -142,7 +143,7 @@ int stream_read(stream *s, void *buf, size_t n) {
     return 0;
 }
 
-char *read_null_terminated_string(stream *s) {
+char *read_null_terminated_string(rstream *s) {
     size_t pos;
     size_t len = 0;
     char *str = NULL;
@@ -172,13 +173,13 @@ char *read_null_terminated_string(stream *s) {
     }
 }
 
-uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
+uint8_t readbits(rstream *s, size_t *bitpos, size_t nbits) {
     assert(0 <= nbits && nbits <= 8);
     uint8_t result = 0;
     for (size_t i = 0; i < nbits; ++i) {
         if (*bitpos == 8) {
             if (++s->cur == s->end)
-                if (s->refill(s) != 0) panic("stream read error: %d", s->error);
+                if (s->refill(s) != 0) panic("read error: %d", s->error);
             *bitpos = 0;
         }
         result |= ((s->cur[0] >> *bitpos) & 0x1u) << i;
@@ -193,8 +194,8 @@ int main(int argc, char **argv) {
     char *input_filename = argv[1];
     char *output_filename;
     gzip_header hdr;
-    file_stream file_stream_data;
-    stream strm;
+    file_rstream file_rstream_data;
+    rstream strm;
 
     if (argc == 2) {
         output_filename = NULL;
@@ -205,17 +206,11 @@ int main(int argc, char **argv) {
         exit(0);
     }
 
-    file_stream_data.fp = fopen(input_filename, "rb");
-    if (!file_stream_data.fp) {
+    if (!(file_rstream_data.fp = fopen(input_filename, "rb")))
         panic("failed to open input file: %s", input_filename);
-    }
-
-    out = output_filename ? fopen(output_filename, "wb") : stdout;
-    if (!out) {
+    if (!(out = output_filename ? fopen(output_filename, "wb") : stdout))
         panic("failed to open output file: %s", output_filename ?: "<stdout>");
-    }
-
-    init_file_stream(&strm, &file_stream_data);
+    init_file_rstream(&strm, &file_rstream_data);
 
     /**************************************************************************
      * Read header and metadata
@@ -314,17 +309,21 @@ int main(int argc, char **argv) {
             DEBUG("\tlen = %u, nlen = %u", len, nlen);
             while (len > 0) {
                 if (strm.end - strm.cur < len)
+                    // XXX(peter): could hoist error check to end, would write
+                    // zeros for section. do we guarantee to detect errors
+                    // asap?
                     if (strm.refill(&strm) != 0)
                         panic("refill failed: %d", strm.error);
                 size_t stream_avail = strm.end - strm.cur;
                 size_t avail = MIN(len, stream_avail);
                 assert(avail <= len);
-                DEBUG("XFER len=%u, avail=%zu => %zu", len, stream_avail, avail);
+                DEBUG("XFER len=%u, avail=%zu => %zu", len, stream_avail,
+                      avail);
                 // TODO: add write buffer
                 if (fwrite(strm.cur, 1, avail, out) != avail)
                     panic("short write");
                 strm.cur += avail;
-                len      -= avail;
+                len -= avail;
             }
         } else if (blktyp == FIXED_HUFFMAN) {
             DEBUG("Fixed Huffman Block%s", bfinal ? " -- Final Block" : "");
@@ -337,7 +336,7 @@ int main(int argc, char **argv) {
         }
     } while (bfinal == 0);
 
-    fclose(file_stream_data.fp);
+    fclose(file_rstream_data.fp);
     fclose(out);
     return 0;
 }
