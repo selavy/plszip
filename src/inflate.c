@@ -69,8 +69,8 @@ typedef struct gzip_header gzip_header;
 
 struct stream {
     const uint8_t *next_in; /* next input byte */
-    size_t avail_in; /* number of bytes available at next_in */
-    size_t total_in; /* total number of bytes read so far */
+    size_t avail_in;        /* number of bytes available at next_in */
+    size_t total_in;        /* total number of bytes read so far */
     int (*refill)(struct stream *s);
     void *read_data;
 
@@ -97,8 +97,7 @@ struct file_write_data {
 };
 typedef struct file_write_data file_write_data;
 
-int refill_file(stream *s)
-{
+int refill_file(stream *s) {
     file_read_data *d = s->read_data;
     size_t rem = s->avail_in;
     size_t read;
@@ -128,8 +127,8 @@ int flush_file(stream *s) {
     return s->error;
 }
 
-void init_file_stream(stream *s, file_read_data *read_data, file_write_data *write_data)
-{
+void init_file_stream(stream *s, file_read_data *read_data,
+                      file_write_data *write_data) {
     s->next_in = &read_data->buf[0];
     s->avail_in = 0;
     s->total_in = 0;
@@ -145,8 +144,7 @@ void init_file_stream(stream *s, file_read_data *read_data, file_write_data *wri
     s->error = 0;
 }
 
-void close_file_stream(stream *s)
-{
+void close_file_stream(stream *s) {
     file_read_data *read_data = s->read_data;
     file_write_data *write_data = s->write_data;
     fclose(read_data->fp);
@@ -372,11 +370,7 @@ int main(int argc, char **argv) {
         if (blktyp == NO_COMPRESSION) {
             DEBUG("No Compression Block%s", bfinal ? " -- Final Block" : "");
             // flush bit buffer to be on byte boundary
-            if (bitpos != 0) {
-                ++strm.next_in;
-                --strm.avail_in;
-                ++strm.total_in;
-            }
+            if (bitpos != 0) stream_read_consume(&strm, 1);
             bitpos = 0;
             uint16_t len, nlen;
             if (strm.avail_in < 4)
@@ -390,7 +384,7 @@ int main(int argc, char **argv) {
             if ((len & 0xffffu) != (nlen ^ 0xffffu))
                 panic("invalid stored block lengths: %u %u", len, nlen);
             DEBUG("\tlen = %u, nlen = %u", len, nlen);
-            while (len > 0) {
+            do {
                 if (strm.avail_in < len)
                     // XXX(peter): could hoist error check to end, would write
                     // zeros for section. do we guarantee to detect errors
@@ -406,7 +400,7 @@ int main(int argc, char **argv) {
                     panic("failed to write output: %d", strm.error);
                 stream_read_consume(&strm, avail);
                 len -= avail;
-            }
+            } while (len > 0);
         } else if (blktyp == FIXED_HUFFMAN) {
             DEBUG("Fixed Huffman Block%s", bfinal ? " -- Final Block" : "");
             panic("not implemented yet");
