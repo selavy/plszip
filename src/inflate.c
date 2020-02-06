@@ -32,6 +32,7 @@
 #endif
 
 #define MIN(x, y) (x) < (y) ? (x) : (y)
+#define MAX(x, y) (x) > (y) ? (x) : (y)
 
 /* Header Constants */
 static const uint8_t ID1_GZIP = 31;
@@ -80,9 +81,19 @@ struct stream {
     int (*flush)(struct stream *s);
     void *write_data;
 
+    void *(*zalloc)(void *data, size_t nmemb, size_t size);
+    void (*zfree)(void *data, void *address);
+    void *alloc_data;
+
     int error;
 };
 typedef struct stream stream;
+
+void *default_zalloc(void *data, size_t nmemb, size_t size) {
+    return malloc(nmemb * size);
+}
+
+void default_zfree(void *data, void *address) { free(address); }
 
 struct file_read_data {
     // uint8_t buf[2048]; // TODO(peter): resize to max size of zlib window
@@ -102,13 +113,15 @@ int refill_file(stream *s) {
     size_t rem = s->avail_in;
     size_t read;
     memmove(&d->buf[0], s->next_in, rem);
-    DEBUG("rrefill_file: avail_in=%zu, readsize=%zu", s->avail_in,
+    DEBUG("refill_file(1): avail_in=%zu, readsize=%zu", s->avail_in,
           sizeof(d->buf) - rem);
     read = fread(&d->buf[rem], 1, sizeof(d->buf) - rem, d->fp);
     if (read > 0) {
         s->next_in = &d->buf[0];
         s->avail_in += read;
         s->error = read == sizeof(d->buf) - rem ? 0 : ferror(d->fp);
+        DEBUG("refill_file(2): avail_in=%zu, error=%d, feof=%d", s->avail_in,
+              s->error, feof(d->fp));
         return s->error;
     } else {
         s->error = ferror(d->fp);
@@ -142,6 +155,9 @@ void init_file_stream(stream *s, file_read_data *read_data,
     s->write_data = write_data;
 
     s->error = 0;
+
+    s->zalloc = &default_zalloc;
+    s->zfree = &default_zfree;
 }
 
 void close_file_stream(stream *s) {
@@ -265,6 +281,172 @@ uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
     return result;
 }
 
+struct vec {
+    size_t len;
+    uint16_t *d;
+};
+typedef struct vec vec;
+
+int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
+                      size_t n) {
+#define MaxCodes 512
+#define MaxBitLength 16
+#define EmptySentinel UINT16_MAX
+    static size_t bl_count[MaxBitLength];
+    static uint16_t next_code[MaxBitLength];
+    static uint16_t codes[MaxCodes];
+
+    if (!(n < MaxCodes)) {
+        xassert(n < MaxCodes, "code lengths too long");
+        return 1;  // TODO: improve error codes
+    }
+
+    // 1) Count the number of codes for each code length. Let bl_count[N] be the
+    // number of codes of length N, N >= 1.
+    memset(&bl_count[0], 0, sizeof(bl_count));
+    size_t max_bit_length = 0;
+    for (size_t i = 0; i < n; ++i) {
+        xassert(code_lengths[i] <= MaxBitLength, "Unsupported bit length");
+        ++bl_count[code_lengths[i]];
+        max_bit_length =
+            code_lengths[i] > max_bit_length ? code_lengths[i] : max_bit_length;
+    }
+    bl_count[0] = 0;
+
+    // 2) Find the numerical value of the smallest code for each code length:
+    memset(&next_code[0], 0, sizeof(next_code));
+    uint32_t code = 0;
+    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
+        code = (code + bl_count[bits - 1]) << 1;
+        next_code[bits] = code;
+    }
+
+    // 3) Assign numerical values to all codes, using consecutive values for all
+    // codes of the same length with the base values determined at step 2. Codes
+    // that are never used (which have a bit length of zero) must not be
+    // assigned a value.
+    memset(&codes[0], 0, sizeof(codes));
+    for (size_t i = 0; i < n; ++i) {
+        if (code_lengths[i] != 0) {
+            codes[i] = next_code[code_lengths[i]]++;
+            xassert((16 - __builtin_clz(codes[i])) <= code_lengths[i],
+                    "overflowed code length");
+        }
+    }
+
+    // Table size is 2**(max_bit_length + 1)
+    size_t table_size = 1u << (max_bit_length + 1);
+    // tree.assign(table_size, EmptySentinel);
+    tree->d = s->zalloc(s->alloc_data, table_size, sizeof(uint16_t));
+    tree->len = table_size;
+    for (int j = 0; j < table_size; ++j) {
+        tree->d[j] = EmptySentinel;
+    }
+    for (size_t value = 0; value < n; ++value) {
+        size_t len = code_lengths[value];
+        if (len == 0) {
+            continue;
+        }
+        uint16_t code = codes[value];
+        size_t index = 1;
+        for (int i = len - 1; i >= 0; --i) {
+            size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
+            index = 2 * index + isset;
+        }
+        xassert(tree->d[index] == EmptySentinel,
+                "Assigned multiple values to same index");
+        tree->d[index] = value;
+    }
+
+    return 0;
+}
+
+int init_fixed_huffman(stream *strm, vec *lit_tree, vec *dist_tree) {
+    static uint16_t codes[288];
+    vec cvec;
+    int rc;
+
+    /* Literal Tree */
+    struct LiteralCodeTableEntry {
+        size_t start, stop, bits;
+    } xs[] = {
+        // start, stop, bits
+        {
+            0,
+            143,
+            8,
+        },
+        {
+            144,
+            255,
+            9,
+        },
+        {
+            256,
+            279,
+            7,
+        },
+        {
+            280,
+            287,
+            8,
+        },
+    };
+    for (size_t j = 0; j < ARRSIZE(xs); ++j) {
+        for (size_t i = xs[j].start; i <= xs[j].stop; ++i) {
+            codes[i] = xs[j].bits;
+        }
+    }
+    // {
+    //     size_t i = 0;
+    //     while (i < 144) codes[i++] = 8;
+    //     while (i < 256) codes[i++] = 9;
+    //     while (i < 280) codes[i++] = 7;
+    //     while (i < 288) codes[i++] = 8;
+    // }
+    // cvec.d = &codes[0];
+    // cvec.len = 288;
+    if ((rc = init_huffman_tree(strm, lit_tree, &codes[0], 288)) != 0) {
+        panic("failed to initialize fixed literals huffman tree.");
+        return rc;
+    }
+
+    /* Distance Tree */
+    for (size_t i = 0; i < 32; ++i) {
+        codes[i] = 5;
+    }
+    // cvec.d = &codes[0];
+    // cvec.len = 32;
+    if ((rc = init_huffman_tree(strm, dist_tree, &codes[0], 32)) != 0) {
+        panic("failed to initialize fixed distance huffman tree.");
+        return rc;
+    }
+
+    return 0;
+}
+
+uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
+    // TODO(peter): what is the maximum number of bits in a huffman code?
+    //    fixed  : 9
+    //    dymamic: ?
+    size_t index = 1;
+    do {
+        index = index << 1;
+        if (*bitpos == 8) {
+            if (--s->avail_in == 0)
+                if (s->refill(s) != 0) panic("read error: %d", s->error);
+            *bitpos = 0;
+        }
+        // index |= ((s->next_in[0] >> *bitpos) & 0x1u);
+        index += (s->next_in[0] & (1u << *bitpos)) != 0 ? 1 : 0;
+        ++*bitpos;
+        xassert(index < tree.len, "invalid index");
+    } while (tree.d[index] == EmptySentinel);
+    DEBUG("HUFFMAN idx=0x%02x val=%u, c=%c", (unsigned int)index, tree.d[index],
+          tree.d[index] < 256 ? (char)tree.d[index] : '?');
+    return tree.d[index];
+}
+
 int main(int argc, char **argv) {
     char *input_filename = argv[1];
     char *output_filename;
@@ -364,6 +546,10 @@ int main(int argc, char **argv) {
     size_t nbits;
     uint8_t bfinal;
     uint8_t blktyp;
+    vec lit_tree;
+    vec dist_tree;
+    lit_tree.d = dist_tree.d = NULL;
+    lit_tree.len = dist_tree.len = 0;
     do {
         bfinal = readbits(&strm, &bitpos, 1);
         blktyp = readbits(&strm, &bitpos, 2);
@@ -403,6 +589,43 @@ int main(int argc, char **argv) {
             } while (len > 0);
         } else if (blktyp == FIXED_HUFFMAN) {
             DEBUG("Fixed Huffman Block%s", bfinal ? " -- Final Block" : "");
+            // TEMP TEMP -- don't reinitialize trees
+            free(lit_tree.d);
+            lit_tree.len = 0;
+            free(dist_tree.d);
+            dist_tree.len = 0;
+            if (init_fixed_huffman(&strm, &lit_tree, &dist_tree) != 0)
+                panic("failed to initialize fixed huffman tree");
+            for (int i = 0; i < 8; ++i) {
+                uint16_t value = read_huffman_value(&strm, &bitpos, lit_tree);
+                if (value < 256) {
+                    uint8_t c = (uint8_t)value;
+                    // DEBUG("huffman: 0x%02x -> %c (%d)", value, c, (int)c);
+                    if (stream_write(&strm, &c, sizeof(c)) != 0)
+                        panic("failed to write value in fixed huffman section");
+                } else if (value == 256) {
+                    DEBUG("inflate: end of %s huffman block found", "fixed");
+                    break;
+                } else if (value <= 258) {
+                    panic("unimplemented");
+                    // value -= LENGTH_BASE_CODE;
+                    // assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
+                    // size_t base_length = LENGTH_BASES[value];
+                    // size_t extra_length = readbits(&strm, &bitpos,
+                    // LENGTH_EXTRA_BITS[value]); size_t length = base_length +
+                    // extra_length; xassert(length <= 258, "invalid length");
+                    // size_t distance_code = read_huffman_value(&strm, &bitpos,
+                    // dist_tree); xassert(distance_code < 32, "invalid distance
+                    // code"); size_t base_distance =
+                    // DISTANCE_BASES[distance_code]; size_t extra_distance =
+                    // readbits(&strm, &bitpos,
+                    // DISTANCE_EXTRA_BITS[distance_code]); size_t distance =
+                    // base_distance + extra_distance;
+                } else {
+                    panic("invalid %s huffman value: %u", "huffman", value);
+                }
+            }
+
             panic("not implemented yet");
         } else if (blktyp == DYNAMIC_HUFFMAN) {
             DEBUG("Dynamic Huffman Block%s", bfinal ? " -- Final Block" : "");
