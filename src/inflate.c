@@ -325,7 +325,7 @@ int stream_write(stream *s, const void *buf, size_t n) {
     return 0;
 }
 
-size_t wdwix(struct priv_stream_data *wnd, size_t index) {
+size_t wndix(struct priv_stream_data *wnd, size_t index) {
     return (wnd->head + index) & wnd->mask;
 }
 
@@ -333,7 +333,7 @@ int stream_window(stream *strm, size_t distance, size_t length) {
     struct priv_stream_data *w = strm->stream_data;
     size_t index = (w->mask + 1) - distance;
     for (size_t i = 0; i < length; ++i) {
-        uint8_t x = w->wnd[(w->head + index) & w->mask];
+        uint8_t x = w->wnd[wndix(w, index)];
         w->wnd[w->head++] = x;
         w->head &= w->mask;
         DEBUG("DC: %c", x);
