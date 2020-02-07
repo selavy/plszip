@@ -325,6 +325,10 @@ int stream_write(stream *s, const void *buf, size_t n) {
     return 0;
 }
 
+size_t wdwix(struct priv_stream_data *wnd, size_t index) {
+    return (wnd->head + index) & wnd->mask;
+}
+
 int stream_window(stream *strm, size_t distance, size_t length) {
     struct priv_stream_data *w = strm->stream_data;
     size_t index = (w->mask + 1) - distance;
@@ -333,10 +337,24 @@ int stream_window(stream *strm, size_t distance, size_t length) {
         w->wnd[w->head++] = x;
         w->head &= w->mask;
         DEBUG("DC: %c", x);
-        // TODO: optimize like `flush_buffer`
-        if (stream_write(strm, &x, sizeof(x)) != 0)
-            panic("short write");
     }
+    // flush window -- may require 2 writes in case wrapped
+    // ---------------------------------
+    // | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | X |
+    // ---------------------------------
+    //           ^           ^
+    //           end         head, length = 5
+    //
+    // length1 = [head, X) ==> 
+    // length2 = [0   , end)
+    size_t buffer_size = w->mask + 1;
+    size_t start_index = (w->head + (buffer_size - length)) & w->mask;
+    size_t length1 = MIN(buffer_size - start_index, length);
+    size_t length2 = length - length1;
+    if (stream_write(strm, &w->wnd[start_index], length1) != 0)
+        panic("short write");
+    if (stream_write(strm, &w->wnd[0],           length2) != 0)
+        panic("short write");
     return 0;
 }
 
