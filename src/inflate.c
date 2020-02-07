@@ -623,9 +623,12 @@ int main(int argc, char **argv) {
                 } else if (value == 256) {
                     DEBUG("inflate: end of %s huffman block found", "fixed");
                     break;
-                } else if (value <= 258) {
+                } else if (value <= 285) {
+                    assert(257 <= value <= 285);
+                    // NOTE: 257 <= value <= 285
+                    // ==> 0 <= (value - LENGTH_BASE_CODE) <= 28
+                    // ==> value - LENGTH_BASE_CODE < asize(LENGTH_EXTRA_BITS)
                     value -= LENGTH_BASE_CODE;
-                    assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
                     size_t base_length = LENGTH_BASES[value];
                     size_t extra_length =
                         readbits(&strm, &bitpos, LENGTH_EXTRA_BITS[value]);
