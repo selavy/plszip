@@ -98,6 +98,12 @@ struct gzip_header {
 } __attribute__((packed));
 typedef struct gzip_header gzip_header;
 
+struct vec {
+    size_t len;
+    const uint16_t *d;
+};
+typedef struct vec vec;
+
 struct stream {
     const uint8_t *next_in; /* next input byte */
     size_t avail_in;        /* number of bytes available at next_in */
@@ -115,9 +121,22 @@ struct stream {
     void (*zfree)(void *data, void *address);
     void *alloc_data;
 
+    void *stream_data;
+
     int error;
 };
 typedef struct stream stream;
+
+struct priv_stream_data {
+    /* circular buffer window */
+    uint32_t mask;
+    uint32_t head;
+#define STRICT_WINDOW_SIZE_CHECK
+#ifdef STRICT_WINDOW_SIZE_CHECK
+    uint32_t size;
+#endif
+    uint8_t wnd[1];
+};
 
 void *default_zalloc(void *data, size_t nmemb, size_t size) {
     return malloc(nmemb * size);
@@ -170,6 +189,23 @@ int flush_file(stream *s) {
     return s->error;
 }
 
+int init_priv_stream_data(stream *s, size_t size) {
+    struct priv_stream_data *data;
+    xassert((size & (size - 1)) == 0, "window size must be a power of 2");
+    data = s->zalloc(s->alloc_data, 1,
+                     sizeof(*data) + sizeof(data->wnd[0]) * (size - 1));
+    if (!data) return -1;  // TODO(peter): improve error codes
+    data->mask = size - 1;
+    data->head = 0;
+#ifdef STRICT_WINDOW_SIZE_CHECK
+    data->size = 0;
+#endif
+    // TEMP TEMP
+    memset(&data->wnd[0], 0, sizeof(data->wnd[0]) * size);
+    s->stream_data = data;
+    return 0;
+}
+
 void init_file_stream(stream *s, file_read_data *read_data,
                       file_write_data *write_data) {
     s->next_in = &read_data->buf[0];
@@ -188,6 +224,9 @@ void init_file_stream(stream *s, file_read_data *read_data,
 
     s->zalloc = &default_zalloc;
     s->zfree = &default_zfree;
+
+    if (init_priv_stream_data(s, 1u << 16) != 0)
+        panic("failed to initialize private stream data");
 }
 
 void close_file_stream(stream *s) {
@@ -240,6 +279,28 @@ int stream_read(stream *s, void *buf, size_t n) {
     return 0;
 }
 
+void window_add(stream *s, const uint8_t *buf, size_t n) {
+    struct priv_stream_data *data = s->stream_data;
+    while (n-- > 0) {
+        data->wnd[data->head++] = *buf++;
+        data->head &= data->mask;
+    }
+#ifdef STRICT_WINDOW_SIZE_CHECK
+    data->size = MIN(data->size + n, data->mask + 1);
+#endif
+}
+
+int check_distance(stream *s, size_t distance) {
+#ifdef STRICT_WINDOW_SIZE_CHECK
+    struct priv_stream_data *data = s->stream_data;
+    if (distance > data->size)
+        return 1;
+#endif
+    if (distance > data->mask)
+        return 1;
+    return 0;
+}
+
 int stream_write(stream *s, const void *buf, size_t n) {
     // DEBUG("stream_write: %zu", n);
     if (s->avail_out >= n) {
@@ -260,6 +321,22 @@ int stream_write(stream *s, const void *buf, size_t n) {
         p += avail;
         n -= avail;
     } while (n > 0);
+
+    return 0;
+}
+
+int stream_window(stream *strm, size_t distance, size_t length) {
+    struct priv_stream_data *w = strm->stream_data;
+    size_t index = (w->mask + 1) - distance;
+    for (size_t i = 0; i < length; ++i) {
+        uint8_t x = w->wnd[(w->head + index) & w->mask];
+        w->wnd[w->head++] = x;
+        w->head &= w->mask;
+        DEBUG("DC: %c", x);
+        // TODO: optimize like `flush_buffer`
+        if (stream_write(strm, &x, sizeof(x)) != 0)
+            panic("short write");
+    }
     return 0;
 }
 
@@ -311,12 +388,6 @@ uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
     }
     return result;
 }
-
-struct vec {
-    size_t len;
-    const uint16_t *d;
-};
-typedef struct vec vec;
 
 int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
                       size_t n) {
@@ -537,6 +608,7 @@ int main(int argc, char **argv) {
                 // TODO: add write buffer
                 if (stream_write(&strm, strm.next_in, avail))
                     panic("failed to write output: %d", strm.error);
+                window_add(&strm, strm.next_in, avail);
                 stream_read_consume(&strm, avail);
                 len -= avail;
             } while (len > 0);
@@ -554,6 +626,7 @@ int main(int argc, char **argv) {
                     DEBUG("FX: %c", c);
                     if (stream_write(&strm, &c, sizeof(c)) != 0)
                         panic("failed to write value in fixed huffman section");
+                    window_add(&strm, &c, sizeof(c));
                 } else if (value == 256) {
                     DEBUG("inflate: end of %s huffman block found", "fixed");
                     break;
@@ -575,6 +648,10 @@ int main(int argc, char **argv) {
                     size_t extra_distance = readbits(
                         &strm, &bit, DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
+                    if (check_distance(&strm, distance) != 0)
+                        panic("invalid distance: %zu", distance);
+                    if (stream_window(&strm, distance, length) != 0)
+                        panic("failed to write distance/length code");
                 } else {
                     panic("invalid %s huffman value: %u", "huffman", value);
                 }
