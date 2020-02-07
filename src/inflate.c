@@ -31,6 +31,10 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DBG: " fmt "\n", ##__VA_ARGS__)
 #endif
 
+#ifndef static_assert
+#define static_assert(x) _Static_assert(x, "")
+#endif
+
 #define MIN(x, y) (x) < (y) ? (x) : (y)
 #define MAX(x, y) (x) > (y) ? (x) : (y)
 
@@ -55,7 +59,28 @@ static const uint8_t DYNAMIC_HUFFMAN = 0x2u;
 static const uint8_t RESERVED = 0x3u;
 
 /* Global Static Data */
-static const uint8_t _zeros[256] = {0};
+static const size_t LENGTH_BASE_CODE = 257;
+static const size_t LENGTH_EXTRA_BITS[29] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2,
+    2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+};
+
+static const size_t LENGTH_BASES[29] = {
+    3,  4,  5,  6,  7,  8,  9,  10, 11,  13,  15,  17,  19,  23,  27,
+    31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
+};
+static_assert(ARRSIZE(LENGTH_EXTRA_BITS) == ARRSIZE(LENGTH_BASES));
+
+static const size_t DISTANCE_EXTRA_BITS[32] = {
+    0, 0, 0, 0, 1, 1, 2,  2,  3,  3,  4,  4,  5,  5,  6, 6,
+    7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 0, 0,
+};
+
+static const size_t DISTANCE_BASES[32] = {
+    1,    2,    3,    4,    5,    7,     9,     13,    17,  25,   33,
+    49,   65,   97,   129,  193,  257,   385,   513,   769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577, 0,   0,
+};
 
 struct gzip_header {
     uint8_t id1;
@@ -96,14 +121,14 @@ void *default_zalloc(void *data, size_t nmemb, size_t size) {
 void default_zfree(void *data, void *address) { free(address); }
 
 struct file_read_data {
-    // uint8_t buf[2048]; // TODO(peter): resize to max size of zlib window
-    uint8_t buf[24];  // TEMP TEMP -- for testing only
+    uint8_t buf[2048];  // TODO(peter): resize to max size of zlib window
+    // uint8_t buf[24];  // TEMP TEMP -- for testing only
     FILE *fp;
 };
 typedef struct file_read_data file_read_data;
 struct file_write_data {
-    // uint8_t buf[2048];  // TODO(peter): resize to max size of zlib window
-    uint8_t buf[24];  // TEMP TEMP -- for testing only
+    uint8_t buf[2048];  // TODO(peter): resize to max size of zlib window
+    // uint8_t buf[24];  // TEMP TEMP -- for testing only
     FILE *fp;
 };
 typedef struct file_write_data file_write_data;
@@ -211,7 +236,7 @@ int stream_read(stream *s, void *buf, size_t n) {
 }
 
 int stream_write(stream *s, const void *buf, size_t n) {
-    DEBUG("stream_write: %zu", n);
+    // DEBUG("stream_write: %zu", n);
     if (s->avail_out >= n) {
         memcpy(s->next_out, buf, n);
         stream_write_consume(s, n);
@@ -271,6 +296,7 @@ uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
     uint8_t result = 0;
     for (size_t i = 0; i < nbits; ++i) {
         if (*bitpos == 8) {
+            ++s->next_in;
             if (--s->avail_in == 0)
                 if (s->refill(s) != 0) panic("read error: %d", s->error);
             *bitpos = 0;
@@ -432,18 +458,9 @@ uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
     size_t index = 1;
     do {
         index = index << 1;
-        if (*bitpos == 8) {
-            if (--s->avail_in == 0)
-                if (s->refill(s) != 0) panic("read error: %d", s->error);
-            *bitpos = 0;
-        }
-        // index |= ((s->next_in[0] >> *bitpos) & 0x1u);
-        index += (s->next_in[0] & (1u << *bitpos)) != 0 ? 1 : 0;
-        ++*bitpos;
+        index |= readbits(s, bitpos, 1);  // TODO(peter): inline this?
         xassert(index < tree.len, "invalid index");
     } while (tree.d[index] == EmptySentinel);
-    DEBUG("HUFFMAN idx=0x%02x val=%u, c=%c", (unsigned int)index, tree.d[index],
-          tree.d[index] < 256 ? (char)tree.d[index] : '?');
     return tree.d[index];
 }
 
@@ -596,37 +613,35 @@ int main(int argc, char **argv) {
             dist_tree.len = 0;
             if (init_fixed_huffman(&strm, &lit_tree, &dist_tree) != 0)
                 panic("failed to initialize fixed huffman tree");
-            for (int i = 0; i < 8; ++i) {
+            for (;;) {
                 uint16_t value = read_huffman_value(&strm, &bitpos, lit_tree);
                 if (value < 256) {
                     uint8_t c = (uint8_t)value;
-                    // DEBUG("huffman: 0x%02x -> %c (%d)", value, c, (int)c);
+                    DEBUG("FX: %c", c);
                     if (stream_write(&strm, &c, sizeof(c)) != 0)
                         panic("failed to write value in fixed huffman section");
                 } else if (value == 256) {
                     DEBUG("inflate: end of %s huffman block found", "fixed");
                     break;
                 } else if (value <= 258) {
-                    panic("unimplemented");
-                    // value -= LENGTH_BASE_CODE;
-                    // assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
-                    // size_t base_length = LENGTH_BASES[value];
-                    // size_t extra_length = readbits(&strm, &bitpos,
-                    // LENGTH_EXTRA_BITS[value]); size_t length = base_length +
-                    // extra_length; xassert(length <= 258, "invalid length");
-                    // size_t distance_code = read_huffman_value(&strm, &bitpos,
-                    // dist_tree); xassert(distance_code < 32, "invalid distance
-                    // code"); size_t base_distance =
-                    // DISTANCE_BASES[distance_code]; size_t extra_distance =
-                    // readbits(&strm, &bitpos,
-                    // DISTANCE_EXTRA_BITS[distance_code]); size_t distance =
-                    // base_distance + extra_distance;
+                    value -= LENGTH_BASE_CODE;
+                    assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
+                    size_t base_length = LENGTH_BASES[value];
+                    size_t extra_length =
+                        readbits(&strm, &bitpos, LENGTH_EXTRA_BITS[value]);
+                    size_t length = base_length + extra_length;
+                    xassert(length <= 258, "invalid length");
+                    size_t distance_code =
+                        read_huffman_value(&strm, &bitpos, dist_tree);
+                    xassert(distance_code < 32, "invalid distance code");
+                    size_t base_distance = DISTANCE_BASES[distance_code];
+                    size_t extra_distance = readbits(
+                        &strm, &bitpos, DISTANCE_EXTRA_BITS[distance_code]);
+                    size_t distance = base_distance + extra_distance;
                 } else {
                     panic("invalid %s huffman value: %u", "huffman", value);
                 }
             }
-
-            panic("not implemented yet");
         } else if (blktyp == DYNAMIC_HUFFMAN) {
             DEBUG("Dynamic Huffman Block%s", bfinal ? " -- Final Block" : "");
             panic("not implemented yet");

@@ -177,7 +177,7 @@ void print_tree(vec v) {
     uint16_t *A = v.d;
     size_t i = 0;
     for (; i < n; i += 8) {
-        WRITE("    " FMT " " FMT " " FMT " " FMT " " FMT " " FMT " " FMT " " FMT "",
+        WRITE("    " FMT ", " FMT ", " FMT ", " FMT ", " FMT ", " FMT ", " FMT ", " FMT ", // (%4zu)",
                 A[i+0],
                 A[i+1],
                 A[i+2],
@@ -185,14 +185,13 @@ void print_tree(vec v) {
                 A[i+4],
                 A[i+5],
                 A[i+6],
-                A[i+7]
-                );
+                A[i+7],
+                i);
     }
-    fprintf(out, "   ");
+    fprintf(out, "    ");
     for (; i < n; ++i) {
-        fprintf(out, " " FMT, A[i]);
+        fprintf(out, FMT ", ", A[i]);
     }
-    fprintf(out, "\n");
 }
 
 int main(int argc, char **argv) {

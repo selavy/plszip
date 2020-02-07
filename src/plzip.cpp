@@ -434,12 +434,23 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
 
 uint16_t read_huffman_value(const uint16_t* tree, size_t length, BitReader& reader)
 {
+    char buf[128];
+    size_t bufidx = 0;
+    memset(&buf[0], 0, sizeof(buf));
+
     size_t index = 1;
+    buf[bufidx++] = '1';
+    printf("BEGIN READ_HUFFMAN: buffer = 0x%04x, index = %zu\n", reader.buffer, reader.index);
     do {
         index *= 2;
-        index += reader.read_bit() ? 1 : 0;
+        bool bit = reader.read_bit();
+        index += bit ? 1 : 0;
+        printf("%d", bit ? 1 : 0);
+        // index += reader.read_bit() ? 1 : 0;
+        buf[bufidx++] = (index & 0x01u) ? '1' : '0';
         xassert(index < length, "invalid index");
     } while (tree[index] == EmptySentinel);
+    printf("HV: index=%3zu, value=%3zu, c=%c => %s\n", index, tree[index], tree[index] < 256 ? tree[index] : '?', buf);
     return tree[index];
 }
 
