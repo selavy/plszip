@@ -325,12 +325,13 @@ int stream_write(stream *s, const void *buf, size_t n) {
     return 0;
 }
 
-size_t wndix(struct priv_stream_data *wnd, size_t index) {
+size_t wndix(const struct priv_stream_data *wnd, size_t index) {
     return (wnd->head + index) & wnd->mask;
 }
 
 int stream_window(stream *strm, size_t distance, size_t length) {
     struct priv_stream_data *w = strm->stream_data;
+    size_t start_index = w->head;
     size_t index = (w->mask + 1) - distance;
     for (size_t i = 0; i < length; ++i) {
         uint8_t x = w->wnd[wndix(w, index)];
@@ -343,12 +344,16 @@ int stream_window(stream *strm, size_t distance, size_t length) {
     // | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | X |
     // ---------------------------------
     //           ^           ^
-    //           end         head, length = 5
+    //           head        start_index
+    //           length = 5
+    // [      ]            [           ]
+    // [WRITE2]            [WRITE1     ]
     //
-    // length1 = [head, X) ==> 
+    // length1 = [head, X) ==> buffer_size - head
     // length2 = [0   , end)
     size_t buffer_size = w->mask + 1;
-    size_t start_index = (w->head + (buffer_size - length)) & w->mask;
+    // size_t start_index = wndix(w, buffer_size - length);
+    // size_t start_index = (w->head - length) & w->mask;
     size_t length1 = MIN(buffer_size - start_index, length);
     size_t length2 = length - length1;
     if (stream_write(strm, &w->wnd[start_index], length1) != 0)
