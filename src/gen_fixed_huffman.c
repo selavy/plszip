@@ -215,7 +215,7 @@ int main(int argc, char **argv) {
     WRITE("#ifndef FIXED_HUFFMAN_TREES__H_");
     WRITE("#define FIXED_HUFFMAN_TREES__H_");
     WRITE("");
-    WRITE("#include \"<stdint.h>\"");
+    WRITE("#include <stdint.h>");
     WRITE("");
     WRITE("static const uint16_t fixed_huffman_literals_tree[%zu] = {", lit_tree.len);
     print_tree(lit_tree);
@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
     print_tree(dist_tree);
     WRITE("};");
     WRITE("");
-    WRITE("// FIXED_HUFFMAN_TREES__H_");
+    WRITE("#endif // FIXED_HUFFMAN_TREES__H_");
 
     return 0;
 }

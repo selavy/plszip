@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fixed_huffman_trees.h"
+
 #define panic(fmt, ...)                                   \
     do {                                                  \
         fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); \
@@ -41,6 +43,9 @@
 /* Header Constants */
 static const uint8_t ID1_GZIP = 31;
 static const uint8_t ID2_GZIP = 139;
+#define MaxCodes 512
+#define MaxBitLength 16
+#define EmptySentinel UINT16_MAX
 
 /* Header Flags */
 static const uint8_t FTEXT = 1u << 0;
@@ -309,15 +314,12 @@ uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
 
 struct vec {
     size_t len;
-    uint16_t *d;
+    const uint16_t *d;
 };
 typedef struct vec vec;
 
 int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
                       size_t n) {
-#define MaxCodes 512
-#define MaxBitLength 16
-#define EmptySentinel UINT16_MAX
     static size_t bl_count[MaxBitLength];
     static uint16_t next_code[MaxBitLength];
     static uint16_t codes[MaxCodes];
@@ -362,11 +364,9 @@ int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
 
     // Table size is 2**(max_bit_length + 1)
     size_t table_size = 1u << (max_bit_length + 1);
-    // tree.assign(table_size, EmptySentinel);
-    tree->d = s->zalloc(s->alloc_data, table_size, sizeof(uint16_t));
-    tree->len = table_size;
+    uint16_t *t = s->zalloc(s->alloc_data, table_size, sizeof(*t));
     for (int j = 0; j < table_size; ++j) {
-        tree->d[j] = EmptySentinel;
+        t[j] = EmptySentinel;
     }
     for (size_t value = 0; value < n; ++value) {
         size_t len = code_lengths[value];
@@ -379,74 +379,12 @@ int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
             size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
             index = 2 * index + isset;
         }
-        xassert(tree->d[index] == EmptySentinel,
+        xassert(t[index] == EmptySentinel,
                 "Assigned multiple values to same index");
-        tree->d[index] = value;
+        t[index] = value;
     }
-
-    return 0;
-}
-
-int init_fixed_huffman(stream *strm, vec *lit_tree, vec *dist_tree) {
-    static uint16_t codes[288];
-    vec cvec;
-    int rc;
-
-    /* Literal Tree */
-    struct LiteralCodeTableEntry {
-        size_t start, stop, bits;
-    } xs[] = {
-        // start, stop, bits
-        {
-            0,
-            143,
-            8,
-        },
-        {
-            144,
-            255,
-            9,
-        },
-        {
-            256,
-            279,
-            7,
-        },
-        {
-            280,
-            287,
-            8,
-        },
-    };
-    for (size_t j = 0; j < ARRSIZE(xs); ++j) {
-        for (size_t i = xs[j].start; i <= xs[j].stop; ++i) {
-            codes[i] = xs[j].bits;
-        }
-    }
-    // {
-    //     size_t i = 0;
-    //     while (i < 144) codes[i++] = 8;
-    //     while (i < 256) codes[i++] = 9;
-    //     while (i < 280) codes[i++] = 7;
-    //     while (i < 288) codes[i++] = 8;
-    // }
-    // cvec.d = &codes[0];
-    // cvec.len = 288;
-    if ((rc = init_huffman_tree(strm, lit_tree, &codes[0], 288)) != 0) {
-        panic("failed to initialize fixed literals huffman tree.");
-        return rc;
-    }
-
-    /* Distance Tree */
-    for (size_t i = 0; i < 32; ++i) {
-        codes[i] = 5;
-    }
-    // cvec.d = &codes[0];
-    // cvec.len = 32;
-    if ((rc = init_huffman_tree(strm, dist_tree, &codes[0], 32)) != 0) {
-        panic("failed to initialize fixed distance huffman tree.");
-        return rc;
-    }
+    tree->d = t;
+    tree->len = table_size;
 
     return 0;
 }
@@ -559,22 +497,20 @@ int main(int argc, char **argv) {
 
     /* know at this point that are on a byte boundary as all previous fields
      * have been byte sized */
-    size_t bitpos = 0;
+    size_t bit = 0;
     size_t nbits;
     uint8_t bfinal;
     uint8_t blktyp;
     vec lit_tree;
-    vec dist_tree;
-    lit_tree.d = dist_tree.d = NULL;
-    lit_tree.len = dist_tree.len = 0;
+    vec dst_tree;
     do {
-        bfinal = readbits(&strm, &bitpos, 1);
-        blktyp = readbits(&strm, &bitpos, 2);
+        bfinal = readbits(&strm, &bit, 1);
+        blktyp = readbits(&strm, &bit, 2);
         if (blktyp == NO_COMPRESSION) {
             DEBUG("No Compression Block%s", bfinal ? " -- Final Block" : "");
             // flush bit buffer to be on byte boundary
-            if (bitpos != 0) stream_read_consume(&strm, 1);
-            bitpos = 0;
+            if (bit != 0) stream_read_consume(&strm, 1);
+            bit = 0;
             uint16_t len, nlen;
             if (strm.avail_in < 4)
                 if (strm.refill(&strm) != 0)
@@ -606,15 +542,13 @@ int main(int argc, char **argv) {
             } while (len > 0);
         } else if (blktyp == FIXED_HUFFMAN) {
             DEBUG("Fixed Huffman Block%s", bfinal ? " -- Final Block" : "");
-            // TEMP TEMP -- don't reinitialize trees
-            free(lit_tree.d);
-            lit_tree.len = 0;
-            free(dist_tree.d);
-            dist_tree.len = 0;
-            if (init_fixed_huffman(&strm, &lit_tree, &dist_tree) != 0)
-                panic("failed to initialize fixed huffman tree");
+            lit_tree.d = fixed_huffman_literals_tree;
+            lit_tree.len = sizeof(fixed_huffman_literals_tree);
+            dst_tree.d = fixed_huffman_distance_tree;
+            dst_tree.len = sizeof(fixed_huffman_distance_tree);
             for (;;) {
-                uint16_t value = read_huffman_value(&strm, &bitpos, lit_tree);
+                vec v = {lit_tree.len, lit_tree.d};
+                uint16_t value = read_huffman_value(&strm, &bit, v);
                 if (value < 256) {
                     uint8_t c = (uint8_t)value;
                     DEBUG("FX: %c", c);
@@ -631,15 +565,15 @@ int main(int argc, char **argv) {
                     value -= LENGTH_BASE_CODE;
                     size_t base_length = LENGTH_BASES[value];
                     size_t extra_length =
-                        readbits(&strm, &bitpos, LENGTH_EXTRA_BITS[value]);
+                        readbits(&strm, &bit, LENGTH_EXTRA_BITS[value]);
                     size_t length = base_length + extra_length;
                     xassert(length <= 258, "invalid length");
                     size_t distance_code =
-                        read_huffman_value(&strm, &bitpos, dist_tree);
+                        read_huffman_value(&strm, &bit, dst_tree);
                     xassert(distance_code < 32, "invalid distance code");
                     size_t base_distance = DISTANCE_BASES[distance_code];
                     size_t extra_distance = readbits(
-                        &strm, &bitpos, DISTANCE_EXTRA_BITS[distance_code]);
+                        &strm, &bit, DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
                 } else {
                     panic("invalid %s huffman value: %u", "huffman", value);

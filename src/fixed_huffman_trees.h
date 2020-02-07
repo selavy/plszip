@@ -1,7 +1,7 @@
 #ifndef FIXED_HUFFMAN_TREES__H_
 #define FIXED_HUFFMAN_TREES__H_
 
-#include "<stdint.h>"
+#include <stdint.h>
 
 static const uint16_t fixed_huffman_literals_tree[1024] = {
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, // (   0)
@@ -145,4 +145,4 @@ static const uint16_t fixed_huffman_distance_tree[64] = {
        24,    25,    26,    27,    28,    29,    30,    31, // (  56)
     };
 
-// FIXED_HUFFMAN_TREES__H_
+#endif // FIXED_HUFFMAN_TREES__H_
