@@ -13,8 +13,11 @@
         exit(1);                                          \
     } while (0)
 
+#define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
+
 #ifdef NDEBUG
 #define xassert(c, fmt, ...)
+#define DEBUG(fmt, ...)
 #else
 #define xassert(c, fmt, ...)                                     \
     do {                                                         \
@@ -23,15 +26,10 @@
             assert(0);                                           \
         }                                                        \
     } while (0)
-#endif
-
-#define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
-
-#ifdef NDEBUG
-#define DEBUG(fmt, ...)
-#else
 #define DEBUG(fmt, ...) fprintf(stderr, "DBG: " fmt "\n", ##__VA_ARGS__)
 #endif
+
+#define INFO(fmt, ...) fprintf(stdout, "INFO: " fmt "\n", ##__VA_ARGS__)
 
 #ifndef static_assert
 #define static_assert(x) _Static_assert(x, "")
@@ -162,15 +160,11 @@ int refill_file(stream *s) {
     size_t rem = s->avail_in;
     size_t read;
     memmove(&d->buf[0], s->next_in, rem);
-    DEBUG("refill_file(1): avail_in=%zu, readsize=%zu", s->avail_in,
-          sizeof(d->buf) - rem);
     read = fread(&d->buf[rem], 1, sizeof(d->buf) - rem, d->fp);
     if (read > 0) {
         s->next_in = &d->buf[0];
         s->avail_in += read;
         s->error = read == sizeof(d->buf) - rem ? 0 : ferror(d->fp);
-        DEBUG("refill_file(2): avail_in=%zu, error=%d, feof=%d", s->avail_in,
-              s->error, feof(d->fp));
         return s->error;
     } else {
         s->error = ferror(d->fp);
@@ -254,7 +248,6 @@ void stream_write_consume(stream *s, size_t n) {
 }
 
 int stream_read(stream *s, void *buf, size_t n) {
-    DEBUG("stream_read: %zu", n);
     /* fast path: plenty of data available */
     if (s->avail_in >= n) {
         memcpy(buf, s->next_in, n);
@@ -264,7 +257,6 @@ int stream_read(stream *s, void *buf, size_t n) {
 
     uint8_t *p = buf;
     do {
-        DEBUG("s->avail_in = %zu", s->avail_in);
         if (s->avail_in < n) {
             if (s->refill(s) != 0) return s->error;
         }
@@ -279,28 +271,41 @@ int stream_read(stream *s, void *buf, size_t n) {
     return 0;
 }
 
+size_t wndsize(const stream *s) {
+    struct priv_stream_data *data = s->stream_data;
+#ifdef STRICT_WINDOW_SIZE_CHECK
+    return data->size;
+#else
+    return data->mask + 1;
+#endif
+}
+
+size_t wndcap(const stream *s) {
+    struct priv_stream_data *data = s->stream_data;
+    return data->mask + 1;
+}
+
 void window_add(stream *s, const uint8_t *buf, size_t n) {
     struct priv_stream_data *data = s->stream_data;
-    while (n-- > 0) {
-        data->wnd[data->head++] = *buf++;
-        data->head &= data->mask;
-    }
 #ifdef STRICT_WINDOW_SIZE_CHECK
     data->size = MIN(data->size + n, data->mask + 1);
 #endif
+    while (n-- > 0) {
+        data->wnd[data->head] = *buf++;
+        data->head = (data->head + 1) & data->mask;
+    }
 }
 
 int check_distance(stream *s, size_t distance) {
 #ifdef STRICT_WINDOW_SIZE_CHECK
-    struct priv_stream_data *data = s->stream_data;
-    if (distance > data->size) return 1;
+    struct priv_stream_data *wnd = s->stream_data;
+    if (distance > wnd->size) return 1;
 #endif
-    if (distance > data->mask) return 1;
+    if (distance > wnd->mask) return 1;
     return 0;
 }
 
 int stream_write(stream *s, const void *buf, size_t n) {
-    // DEBUG("stream_write: %zu", n);
     if (s->avail_out >= n) {
         memcpy(s->next_out, buf, n);
         stream_write_consume(s, n);
@@ -351,20 +356,6 @@ int stream_window(stream *strm, size_t dist, size_t len) {
     // len2 = [0   , end)
     size_t len1 = MIN(bsize - start, len);
     size_t len2 = len - len1;
-
-    // TEMP TEMP: remove
-    xassert(
-        start + len1 <= bsize,
-        "invalid start idx + len: start=%zu len1=%zu len2=%zu len=%zu head=%zu bsize=%zu",
-        start, len1, len2, len, head, bsize);
-    for (size_t i = start; i < start + len1; ++i) {
-        DEBUG("D1: %c", w->wnd[i]);
-    }
-    assert(0 <= len2 && len2 <= bsize);
-    for (size_t i = 0; i < len2; ++i) {
-        DEBUG("D2: %c", w->wnd[i]);
-    }
-
     if (stream_write(strm, &w->wnd[start], len1) != 0) panic("short write");
     if (stream_write(strm, &w->wnd[0], len2) != 0) panic("short write");
     w->head = (head + len) & mask;
@@ -375,7 +366,6 @@ int stream_window(stream *strm, size_t dist, size_t len) {
 }
 
 char *read_null_terminated_string(stream *s) {
-    DEBUG("read_null_terminated_string");
     size_t pos;
     size_t len = 0;
     char *str = NULL;
@@ -617,14 +607,14 @@ int main(int argc, char **argv) {
     if (stream_read(&strm, &hdr, sizeof(hdr)) != 0)
         panic("unable to read gzip header: %d", strm.error);
 
-    DEBUG("GzipHeader:");
-    DEBUG("\tid1   = %u (0x%02x)", hdr.id1, hdr.id1);
-    DEBUG("\tid2   = %u (0x%02x)", hdr.id2, hdr.id2);
-    DEBUG("\tcm    = %u", hdr.cm);
-    DEBUG("\tflg   = %u", hdr.flg);
-    DEBUG("\tmtime = %u", hdr.mtime);
-    DEBUG("\txfl   = %u", hdr.xfl);
-    DEBUG("\tos    = %u", hdr.os);
+    INFO("GzipHeader:");
+    INFO("\tid1   = %u (0x%02x)", hdr.id1, hdr.id1);
+    INFO("\tid2   = %u (0x%02x)", hdr.id2, hdr.id2);
+    INFO("\tcm    = %u", hdr.cm);
+    INFO("\tflg   = %u", hdr.flg);
+    INFO("\tmtime = %u", hdr.mtime);
+    INFO("\txfl   = %u", hdr.xfl);
+    INFO("\tos    = %u", hdr.os);
 
     if (hdr.id1 != ID1_GZIP) panic("Unsupported identifier #1: %u.", hdr.id1);
     if (hdr.id2 != ID2_GZIP) panic("Unsupported identifier #2: %u.", hdr.id2);
@@ -638,11 +628,10 @@ int main(int argc, char **argv) {
         // +=========================================+
         // |...original file name, zero-terminated...| (more-->)
         // +=========================================+
-        char *orig_filename = read_null_terminated_string(&strm);
-        if (!orig_filename)
-            panic("unable to read original filename: %d", strm.error);
-        DEBUG("File contains original filename!: '%s'", orig_filename);
-        free(orig_filename);
+        char *fname = read_null_terminated_string(&strm);
+        if (!fname) panic("unable to read original filename: %d", strm.error);
+        INFO("Original Filename: '%s'", fname);
+        free(fname);
     }
     if ((hdr.flg & FCOMMENT) != 0) {
         // +===================================+
@@ -651,7 +640,7 @@ int main(int argc, char **argv) {
         DEBUG("File contains comment");
         char *comment = read_null_terminated_string(&strm);
         if (!comment) panic("unable to read file comment: %d", strm.error);
-        DEBUG("File comment: '%s'", comment);
+        INFO("File comment: '%s'", comment);
         free(comment);
     }
     if ((hdr.flg & FHCRC) != 0) {
@@ -670,7 +659,7 @@ int main(int argc, char **argv) {
         uint16_t crc16 = 0;
         if (stream_read(&strm, &crc16, sizeof(crc16)) != 0)
             panic("unable to read crc16: %d", strm.error);
-        DEBUG("CRC16: %u (0x%04X)", crc16, crc16);
+        INFO("CRC16: %u (0x%04X)", crc16, crc16);
     }
     if ((hdr.flg & (RESERV1 | RESERV2 | RESERV3)) != 0)
         panic("reserve bits are not 0");
@@ -718,9 +707,6 @@ int main(int argc, char **argv) {
                         panic("refill failed: %d", strm.error);
                 size_t avail = MIN(len, strm.avail_in);
                 assert(avail <= len);
-                // DEBUG("XFER len=%u, avail=%zu => %zu", len, strm.avail_in,
-                // avail);
-                // TODO: add write buffer
                 if (stream_write(&strm, strm.next_in, avail))
                     panic("failed to write output: %d", strm.error);
                 window_add(&strm, strm.next_in, avail);
@@ -750,8 +736,6 @@ int main(int argc, char **argv) {
                 uint16_t value = read_huffman_value(&strm, &bit, lit_tree);
                 if (value < 256) {
                     uint8_t c = (uint8_t)value;
-                    DEBUG("%s: (0x%02x) %c",
-                          blktyp == FIXED_HUFFMAN ? "FH" : "DH", value, c);
                     if (stream_write(&strm, &c, sizeof(c)) != 0)
                         panic("failed to write value in fixed huffman section");
                     window_add(&strm, &c, sizeof(c));
@@ -776,9 +760,9 @@ int main(int argc, char **argv) {
                     size_t extra_distance = readbits(
                         &strm, &bit, DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
-                    DEBUG("DLEN CODE: dist=%zu, len=%zu", distance, length);
                     if (check_distance(&strm, distance) != 0)
-                        panic("invalid distance: %zu", distance);
+                        panic("invalid distance: dist=%zu wnd=%zu cap=%zu",
+                              distance, wndsize(&strm), wndcap(&strm));
                     if (stream_window(&strm, distance, length) != 0)
                         panic("failed to write distance/length code");
                 } else {

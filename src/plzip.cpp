@@ -12,11 +12,22 @@
 
 #define panic(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
 
-#define xassert(c, fmt, ...) do { auto r = (c); if (!r) { fprintf(stderr, "ASSERT: " fmt "\n", ##__VA_ARGS__); assert(0); } } while(0)
+#ifdef NDEBUG
+#define xassert(c, fmt, ...)
+#define DEBUG(fmt, ...)
+#else
+#define xassert(c, fmt, ...)                                     \
+    do {                                                         \
+        if (!(c)) {                                              \
+            fprintf(stderr, "ASSERT: " fmt "\n", ##__VA_ARGS__); \
+            assert(0);                                           \
+        }                                                        \
+    } while (0)
+#define DEBUG(fmt, ...) fprintf(stderr, "DBG: " fmt "\n", ##__VA_ARGS__)
+#endif
 
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
-#define DEBUG(fmt, ...) fprintf(stderr, "DBG: " fmt "\n", ##__VA_ARGS__)
 #define INFO(fmt, ...) fprintf(stdout, "INFO: " fmt "\n", ##__VA_ARGS__)
 
 //  ID1 (IDentification 1)
@@ -49,7 +60,7 @@ struct Reader
     void*    data;
 };
 
-constexpr int REFILL_BUFFER_SIZE = 2056;
+constexpr int REFILL_BUFFER_SIZE = 2048;
 
 struct RefillFileData
 {
@@ -674,18 +685,17 @@ int main(int argc, char** argv)
     }
     INFO("Original Filename: '%s'", fname.c_str());
 
-    std::string fcomment = "<none>";
     if ((hdr.flg & static_cast<uint8_t>(Flags::FCOMMENT)) != 0) {
         // +===================================+
         // |...file comment, zero-terminated...| (more-->)
         // +===================================+
+        std::string fcomment = "<none>";
         if (!read_null_terminated_string(fp, fcomment)) {
             panic("failed to read FCOMMENT.");
         }
+        INFO("File comment: '%s'", fcomment.c_str());
     }
-    INFO("File comment: '%s'", fcomment.c_str());
 
-    uint16_t crc16 = 0;
     if ((hdr.flg & static_cast<uint8_t>(Flags::FHCRC)) != 0) {
         // +---+---+
         // | CRC16 |
@@ -699,11 +709,12 @@ int main(int argc, char** argv)
         // +---+---+---+---+---+---+---+---+
         // |     CRC32     |     ISIZE     |
         // +---+---+---+---+---+---+---+---+
+        uint16_t crc16 = 0;
         if (fread(&crc16, sizeof(crc16), 1, fp) != 1) {
             panic("failed to read CRC16.");
         }
+        INFO("CRC16: %u (0x%04X)", crc16, crc16);
     }
-    INFO("CRC16: %u (0x%04X)", crc16, crc16);
 
     // Reserved FLG bits must be zero.
     uint8_t mask = static_cast<uint8_t>(Flags::RESERV1) |
