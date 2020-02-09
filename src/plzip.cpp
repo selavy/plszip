@@ -17,6 +17,7 @@
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 #define DEBUG(fmt, ...) fprintf(stderr, "DBG: " fmt "\n", ##__VA_ARGS__)
+#define INFO(fmt, ...) fprintf(stdout, "INFO: " fmt "\n", ##__VA_ARGS__)
 
 //  ID1 (IDentification 1)
 //  ID2 (IDentification 2)
@@ -440,17 +441,11 @@ uint16_t read_huffman_value(const uint16_t* tree, size_t length, BitReader& read
 
     size_t index = 1;
     buf[bufidx++] = '1';
-    printf("BEGIN READ_HUFFMAN: buffer = 0x%04x, index = %zu\n", reader.buffer, reader.index);
     do {
-        index *= 2;
-        bool bit = reader.read_bit();
-        index += bit ? 1 : 0;
-        printf("%d", bit ? 1 : 0);
-        // index += reader.read_bit() ? 1 : 0;
-        buf[bufidx++] = (index & 0x01u) ? '1' : '0';
+        index <<= 1;
+        index += reader.read_bit() ? 1 : 0;
         xassert(index < length, "invalid index");
     } while (tree[index] == EmptySentinel);
-    printf("HV: index=%3zu, value=%3zu, c=%c => %s\n", index, tree[index], tree[index] < 256 ? tree[index] : '?', buf);
     return tree[index];
 }
 
@@ -636,14 +631,14 @@ int main(int argc, char** argv)
     //  presence of a new field that would cause subsequent data to be
     //  interpreted incorrectly.
 
-    printf("GzipHeader:\n");
-    printf("\tid1   = %u (0x%02x)\n", hdr.id1, hdr.id1);
-    printf("\tid2   = %u (0x%02x)\n", hdr.id2, hdr.id2);
-    printf("\tcm    = %u\n", hdr.cm);
-    printf("\tflg   = %u\n", hdr.flg);
-    printf("\tmtime = %u\n", hdr.mtime);
-    printf("\txfl   = %u\n", hdr.xfl);
-    printf("\tos    = %u\n", hdr.os);
+    INFO("GzipHeader:");
+    INFO("\tid1   = %u (0x%02x)", hdr.id1, hdr.id1);
+    INFO("\tid2   = %u (0x%02x)", hdr.id2, hdr.id2);
+    INFO("\tcm    = %u", hdr.cm);
+    INFO("\tflg   = %u", hdr.flg);
+    INFO("\tmtime = %u", hdr.mtime);
+    INFO("\txfl   = %u", hdr.xfl);
+    INFO("\tos    = %u", hdr.os);
 
     if (hdr.id1 != ID1_GZIP) {
         panic("Unsupported identifier #1: %u.", hdr.id1);
@@ -660,7 +655,6 @@ int main(int argc, char** argv)
         if (fread(&xlen, sizeof(xlen), 1, fp) != 1) {
             panic("short read on xlen.");
         }
-        printf("XLEN = %u\n", xlen);
         std::vector<uint8_t> buffer;
         buffer.assign(xlen, 0u);
         if (fread(buffer.data(), xlen, 1, fp) != 1) {
@@ -678,7 +672,7 @@ int main(int argc, char** argv)
             panic("failed to read FNAME.");
         }
     }
-    printf("Original Filename: '%s'\n", fname.c_str());
+    INFO("Original Filename: '%s'", fname.c_str());
 
     std::string fcomment = "<none>";
     if ((hdr.flg & static_cast<uint8_t>(Flags::FCOMMENT)) != 0) {
@@ -689,7 +683,7 @@ int main(int argc, char** argv)
             panic("failed to read FCOMMENT.");
         }
     }
-    printf("File comment: '%s'\n", fcomment.c_str());
+    INFO("File comment: '%s'", fcomment.c_str());
 
     uint16_t crc16 = 0;
     if ((hdr.flg & static_cast<uint8_t>(Flags::FHCRC)) != 0) {
@@ -709,7 +703,7 @@ int main(int argc, char** argv)
             panic("failed to read CRC16.");
         }
     }
-    printf("CRC16: %u (0x%04X)\n", crc16, crc16);
+    INFO("CRC16: %u (0x%04X)", crc16, crc16);
 
     // Reserved FLG bits must be zero.
     uint8_t mask = static_cast<uint8_t>(Flags::RESERV1) |
@@ -768,8 +762,6 @@ int main(int argc, char** argv)
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
                 panic("invalid stored block lengths: %u %u", len, nlen);
             }
-            DEBUG("len = %u, nlen = %u", len, nlen);
-
             std::vector<uint8_t> temp_buffer;
             while (len >= BUFFERSZ) {
                 temp_buffer.assign(BUFFERSZ, '\0');

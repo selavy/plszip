@@ -334,13 +334,8 @@ int stream_window(stream *strm, size_t dist, size_t len) {
     size_t head = w->head;
     size_t start = head + (bsize - dist) & mask;
     xassert(dist < bsize, "distance >= bsize: %zu >= %zu", dist, bsize);
-    xassert(
-        start + len < bsize,
-        "invalid distance + length code: start=%zu len=%zu dist=%zu bsize=%zu",
-        start, len, dist, bsize);
     for (size_t i = 0; i < len; ++i) {
-        w->wnd[w->head] = w->wnd[(start + i) & mask];
-        w->head = (w->head + 1) & mask;
+        w->wnd[(head + i) & mask] = w->wnd[(start + i) & mask];
     }
     // flush window -- may require 2 writes in case wrapped
     // ---------------------------------
@@ -354,14 +349,14 @@ int stream_window(stream *strm, size_t dist, size_t len) {
     //
     // len1 = [head, X) ==> buffer_size - head
     // len2 = [0   , end)
-    size_t len1 = MIN(bsize - head, len);
+    size_t len1 = MIN(bsize - start, len);
     size_t len2 = len - len1;
 
     // TEMP TEMP: remove
-    xassert(0 <= start && start <= bsize, "invalid start idx: %zu [0, %zu]",
-            start, bsize);
-    xassert(0 <= (start + len1) && (start + len1) <= bsize,
-            "invalid start idx + len: %zu", start + len1);
+    xassert(
+        start + len1 <= bsize,
+        "invalid start idx + len: start=%zu len1=%zu len2=%zu len=%zu head=%zu bsize=%zu",
+        start, len1, len2, len, head, bsize);
     for (size_t i = start; i < start + len1; ++i) {
         DEBUG("D1: %c", w->wnd[i]);
     }
@@ -372,6 +367,10 @@ int stream_window(stream *strm, size_t dist, size_t len) {
 
     if (stream_write(strm, &w->wnd[start], len1) != 0) panic("short write");
     if (stream_write(strm, &w->wnd[0], len2) != 0) panic("short write");
+    w->head = (head + len) & mask;
+#ifdef STRICT_WINDOW_SIZE_CHECK
+    w->size = MIN(w->size + len, bsize);
+#endif
     return 0;
 }
 
