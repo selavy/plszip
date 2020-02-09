@@ -29,18 +29,22 @@ die() {
 	exit 1
 }
 
+run() {
+    PROG=$1
+    BENCH=$2
+    shift 2
+    echo "-- Benchmark: $PROG $BENCH"
+    /usr/bin/time -f "\t%E real,\t%U user,\t%S sys" $@ > /dev/null || die "$PROG failed"
+}
+
 run_bench() {
     PROG=$1
     BENCH=$2
     CORRECT=$3
+    shift 3
+    echo "Remaining arguments: $@"
     OUTPUT=${BENCH}.out
-    echo ""
-    echo ""
-    echo "-------------------------------------------------"
-    echo "| Benchmark: $PROG $BENCH"
-    echo "-------------------------------------------------"
-    time $PROG $BENCH $OUTPUT || die "$PROG failed"
-    echo "-------------------------------------------------"
+    run $PROG $BENCH $PROG $BENCH $OUTPUT
     diff $CORRECT $OUTPUT || die "$PROG failed to inflate correctly"
     rm $OUTPUT
 }
@@ -56,12 +60,16 @@ ninja -C $BUILD || die "Failed to build!"
 
 for fname in ${TESTS[@]};
 do
+    echo ""
+    echo ""
     gzip -k $fname
     cat $fname.gz > /dev/null
     for prog in ${PROGS[@]};
     do
         run_bench $BUILD/$prog $fname.gz $fname
     done;
+    rm $fname
+    run gunzip $fname.gz gunzip -k -d $fname.gz
 done;
 
 cleanup
