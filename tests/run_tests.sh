@@ -24,8 +24,21 @@ else
 fi;
 
 PLZIP=${BUILD}/plzip
+INFLATE=${BUILD}/inflate
 
 ninja -C ${BUILD} || die "Failed to compile"
+
+run_inflate() {
+    PROG=$1
+    if [[ $2 -ne 0 ]];
+    then
+        $PROG $COMPRESSED $OUTPUT || die "Failed to decompress with $PROG"
+    else
+        $PROG $COMPRESSED $OUTPUT > /dev/null 2> /dev/null || die "Failed to compress with $PROG"
+    fi;
+    diff $ORIG $OUTPUT > /dev/null && echo "Passed." || die "Diff failed"
+    rm -f $OUTPUT
+}
 
 run_test() {
     input=$1
@@ -35,15 +48,9 @@ run_test() {
     OUTPUT=${BUILD}/${input}.output
 	echo -n "$TEST... "
     gzip -c $ORIG > $COMPRESSED || die "Failed to compress with gzip"
-    if [[ $2 -ne 0 ]];
-    then
-        $PLZIP $COMPRESSED $OUTPUT || die "Failed to decompress with plzip"
-    else
-        $PLZIP $COMPRESSED $OUTPUT > /dev/null 2> /dev/null || die "Failed to compress with plzip"
-    fi;
-    diff $ORIG $OUTPUT > /dev/null && echo "Passed." || die "Diff failed"
+    # run_inflate $PLZIP $2
+    run_inflate $INFLATE $2
     rm -f $COMPRESSED
-    rm -f $OUTPUT
 }
 
 if [[ $# -gt 2 ]];
