@@ -43,8 +43,8 @@
 /* Header Constants */
 static const uint8_t ID1_GZIP = 31;
 static const uint8_t ID2_GZIP = 139;
-#define MaxCodes 512
-#define MaxBitLength 16
+#define MAX_HUFFMAN_CODES 512
+#define MAX_HCODE_BIT_LENGTH 16
 #define EmptySentinel UINT16_MAX
 
 /* Header Flags */
@@ -412,12 +412,12 @@ uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
 
 int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
                       size_t n) {
-    static size_t bl_count[MaxBitLength];
-    static uint16_t next_code[MaxBitLength];
-    static uint16_t codes[MaxCodes];
+    static size_t bl_count[MAX_HCODE_BIT_LENGTH];
+    static uint16_t next_code[MAX_HCODE_BIT_LENGTH];
+    static uint16_t codes[MAX_HUFFMAN_CODES];
 
-    if (!(n < MaxCodes)) {
-        xassert(n < MaxCodes, "code lengths too long");
+    if (!(n < MAX_HUFFMAN_CODES)) {
+        xassert(n < MAX_HUFFMAN_CODES, "code lengths too long");
         return 1;  // TODO: improve error codes
     }
 
@@ -426,7 +426,7 @@ int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
     memset(&bl_count[0], 0, sizeof(bl_count));
     size_t max_bit_length = 0;
     for (size_t i = 0; i < n; ++i) {
-        xassert(code_lengths[i] <= MaxBitLength, "Unsupported bit length");
+        xassert(code_lengths[i] <= MAX_HCODE_BIT_LENGTH, "Unsupported bit length");
         ++bl_count[code_lengths[i]];
         max_bit_length =
             code_lengths[i] > max_bit_length ? code_lengths[i] : max_bit_length;
