@@ -495,18 +495,19 @@ uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
     //    fixed  : 9
     //    dymamic: ?
     size_t index = 1;
+    size_t bit = *bitpos;
     do {
+        if (bit == 8) {
+            ++s->next_in;
+            if (--s->avail_in == 0)
+                refill_or_panic(s);
+            bit = 0;
+        }
         index <<= 1;
-        // if (*bitpos == 8) {
-        //     ++s->next_in;
-        //     if (--s->avail_in == 0)
-        //         refill_or_panic(s);
-        //     *bitpos = 0;
-        // }
-        // index |= (s->next_in[0] >> *bitpos) & 0x1u;
-        index |= readbits(s, bitpos, 1);  // TODO(peter): inline this?
+        index |= (s->next_in[0] >> bit++) & 0x1u;
         xassert(index < tree.len, "invalid index");
     } while (tree.d[index] == EMPTY_SENTINEL);
+    *bitpos = bit;
     return tree.d[index];
 }
 
