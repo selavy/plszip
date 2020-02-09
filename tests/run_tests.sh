@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # set -x
 
@@ -36,7 +36,7 @@ run_inflate() {
     else
         $PROG $COMPRESSED $OUTPUT > /dev/null 2> /dev/null || die "Failed to compress with $PROG"
     fi;
-    diff $ORIG $OUTPUT > /dev/null && echo "Passed." || die "Diff failed"
+    diff $ORIG $OUTPUT > /dev/null && echo -n " Passed." || die "Diff failed"
     rm -f $OUTPUT
 }
 
@@ -48,8 +48,9 @@ run_test() {
     OUTPUT=${BUILD}/${input}.output
 	echo -n "$TEST... "
     gzip -c $ORIG > $COMPRESSED || die "Failed to compress with gzip"
-    # run_inflate $PLZIP $2
+    run_inflate $PLZIP $2
     run_inflate $INFLATE $2
+    echo ""
     rm -f $COMPRESSED
 }
 
