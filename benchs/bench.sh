@@ -34,7 +34,7 @@ run() {
     BENCH=$2
     shift 2
     echo "-- Benchmark: $PROG $BENCH"
-    /usr/bin/time -f "\t%E real,\t%U user,\t%S sys" $@ > /dev/null || die "$PROG failed"
+    /usr/bin/time -f "\t%E real,\t%U user,\t%S sys" $PROG $BENCH $@ > /dev/null || die "$PROG failed"
 }
 
 run_bench() {
@@ -44,7 +44,7 @@ run_bench() {
     shift 3
     echo "Remaining arguments: $@"
     OUTPUT=${BENCH}.out
-    run $PROG $BENCH $PROG $BENCH $OUTPUT
+    run $PROG $BENCH $OUTPUT
     diff $CORRECT $OUTPUT || die "$PROG failed to inflate correctly"
     rm $OUTPUT
 }
@@ -69,7 +69,7 @@ do
         run_bench $BUILD/$prog $fname.gz $fname
     done;
     rm $fname
-    run gunzip $fname.gz gunzip -k -d $fname.gz
+    run gunzip $fname.gz -k -d
 done;
 
 cleanup
