@@ -329,30 +329,48 @@ size_t wndix(const struct priv_stream_data *wnd, size_t index) {
 
 int stream_window(stream *strm, size_t dist, size_t len) {
     struct priv_stream_data *w = strm->stream_data;
-    size_t msk = w->mask;
-    size_t bsz = w->mask + 1;
+    size_t mask = w->mask;
+    size_t bsize = w->mask + 1;
     size_t head = w->head;
-    size_t startidx = head + bsz - dist;
-    size_t endidx = startidx + len;
-    for (size_t i = startidx; i < endidx; ++i) {
-        w->wnd[w->head] = w->wnd[i & msk];
-        w->head = (w->head + 1) & msk;
+    size_t start = head + (bsize - dist) & mask;
+    xassert(dist < bsize, "distance >= bsize: %zu >= %zu", dist, bsize);
+    xassert(
+        start + len < bsize,
+        "invalid distance + length code: start=%zu len=%zu dist=%zu bsize=%zu",
+        start, len, dist, bsize);
+    for (size_t i = 0; i < len; ++i) {
+        w->wnd[w->head] = w->wnd[(start + i) & mask];
+        w->head = (w->head + 1) & mask;
     }
     // flush window -- may require 2 writes in case wrapped
     // ---------------------------------
     // | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | X |
     // ---------------------------------
     //           ^           ^
-    //           head        startidx
+    //           head        start
     //           len = 5
     // [      ]            [           ]
     // [WRITE2]            [WRITE1     ]
     //
     // len1 = [head, X) ==> buffer_size - head
     // len2 = [0   , end)
-    size_t len1 = MIN(bsz - head, len);
+    size_t len1 = MIN(bsize - head, len);
     size_t len2 = len - len1;
-    if (stream_write(strm, &w->wnd[startidx], len1) != 0) panic("short write");
+
+    // TEMP TEMP: remove
+    xassert(0 <= start && start <= bsize, "invalid start idx: %zu [0, %zu]",
+            start, bsize);
+    xassert(0 <= (start + len1) && (start + len1) <= bsize,
+            "invalid start idx + len: %zu", start + len1);
+    for (size_t i = start; i < start + len1; ++i) {
+        DEBUG("D1: %c", w->wnd[i]);
+    }
+    assert(0 <= len2 && len2 <= bsize);
+    for (size_t i = 0; i < len2; ++i) {
+        DEBUG("D2: %c", w->wnd[i]);
+    }
+
+    if (stream_write(strm, &w->wnd[start], len1) != 0) panic("short write");
     if (stream_write(strm, &w->wnd[0], len2) != 0) panic("short write");
     return 0;
 }
@@ -759,6 +777,7 @@ int main(int argc, char **argv) {
                     size_t extra_distance = readbits(
                         &strm, &bit, DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
+                    DEBUG("DLEN CODE: dist=%zu, len=%zu", distance, length);
                     if (check_distance(&strm, distance) != 0)
                         panic("invalid distance: %zu", distance);
                     if (stream_window(&strm, distance, length) != 0)
