@@ -329,36 +329,34 @@ size_t wndix(const struct priv_stream_data *wnd, size_t index) {
     return (wnd->head + index) & wnd->mask;
 }
 
-int stream_window(stream *strm, size_t distance, size_t length) {
+int stream_window(stream *strm, size_t dist, size_t len) {
     struct priv_stream_data *w = strm->stream_data;
-    size_t start_index = w->head;
-    size_t index = (w->mask + 1) - distance;
-    for (size_t i = 0; i < length; ++i) {
-        uint8_t x = w->wnd[wndix(w, index)];
-        w->wnd[w->head++] = x;
-        w->head &= w->mask;
-        DEBUG("DC: %c", x);
+    size_t msk = w->mask;
+    size_t bsz = w->mask + 1;
+    size_t head = w->head;
+    size_t startidx = head + bsz - dist;
+    size_t endidx = startidx + len;
+    for (size_t i = startidx; i < endidx; ++i) {
+        w->wnd[w->head] = w->wnd[i & msk];
+        w->head = (w->head + 1) & msk;
     }
     // flush window -- may require 2 writes in case wrapped
     // ---------------------------------
     // | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | X |
     // ---------------------------------
     //           ^           ^
-    //           head        start_index
-    //           length = 5
+    //           head        startidx
+    //           len = 5
     // [      ]            [           ]
     // [WRITE2]            [WRITE1     ]
     //
-    // length1 = [head, X) ==> buffer_size - head
-    // length2 = [0   , end)
-    size_t buffer_size = w->mask + 1;
-    // size_t start_index = wndix(w, buffer_size - length);
-    // size_t start_index = (w->head - length) & w->mask;
-    size_t length1 = MIN(buffer_size - start_index, length);
-    size_t length2 = length - length1;
-    if (stream_write(strm, &w->wnd[start_index], length1) != 0)
+    // len1 = [head, X) ==> buffer_size - head
+    // len2 = [0   , end)
+    size_t len1 = MIN(bsz - head, len);
+    size_t len2 = len - len1;
+    if (stream_write(strm, &w->wnd[startidx], len1) != 0)
         panic("short write");
-    if (stream_write(strm, &w->wnd[0],           length2) != 0)
+    if (stream_write(strm, &w->wnd[0],        len2) != 0)
         panic("short write");
     return 0;
 }
