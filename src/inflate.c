@@ -43,7 +43,7 @@ static const uint8_t ID1_GZIP = 31;
 static const uint8_t ID2_GZIP = 139;
 #define MAX_HUFFMAN_CODES 512
 #define MAX_HCODE_BIT_LENGTH 16
-#define EmptySentinel UINT16_MAX
+#define EMPTY_SENTINEL UINT16_MAX
 
 /* Header Flags */
 static const uint8_t FTEXT = 1u << 0;
@@ -462,7 +462,7 @@ int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
     size_t table_size = 1u << (max_bit_length + 1);
     uint16_t *t = s->zalloc(s->alloc_data, table_size, sizeof(*t));
     for (int j = 0; j < table_size; ++j) {
-        t[j] = EmptySentinel;
+        t[j] = EMPTY_SENTINEL;
     }
     for (size_t value = 0; value < n; ++value) {
         size_t len = code_lengths[value];
@@ -472,10 +472,11 @@ int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
         uint16_t code = codes[value];
         size_t index = 1;
         for (int i = len - 1; i >= 0; --i) {
-            size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
-            index = 2 * index + isset;
+            // size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
+            // index = 2 * index + isset;
+            index = (index << 1) | ((code >> i) & 0x1u);
         }
-        xassert(t[index] == EmptySentinel,
+        xassert(t[index] == EMPTY_SENTINEL,
                 "Assigned multiple values to same index");
         t[index] = value;
     }
@@ -491,10 +492,10 @@ uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
     //    dymamic: ?
     size_t index = 1;
     do {
-        index =
-            (index << 1) | readbits(s, bitpos, 1);  // TODO(peter): inline this?
+        index = index << 1;
+        index = index | readbits(s, bitpos, 1);  // TODO(peter): inline this?
         xassert(index < tree.len, "invalid index");
-    } while (tree.d[index] == EmptySentinel);
+    } while (tree.d[index] == EMPTY_SENTINEL);
     return tree.d[index];
 }
 
