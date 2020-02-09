@@ -155,6 +155,11 @@ struct file_write_data {
 };
 typedef struct file_write_data file_write_data;
 
+void refill_or_panic(stream *s) {
+    if (s->refill(s) != 0)
+        panic("read error: %d", s->error);
+}
+
 int refill_file(stream *s) {
     file_read_data *d = s->read_data;
     size_t rem = s->avail_in;
@@ -257,9 +262,8 @@ int stream_read(stream *s, void *buf, size_t n) {
 
     uint8_t *p = buf;
     do {
-        if (s->avail_in < n) {
-            if (s->refill(s) != 0) return s->error;
-        }
+        if (s->avail_in < n)
+            refill_or_panic(s);
         xassert(s->avail_in > 0 || s->avail_in == n,
                 "refill did not add any bytes!");
         size_t avail = MIN(n, s->avail_in);
@@ -404,7 +408,7 @@ uint16_t readbits(stream *s, size_t *bitpos, size_t nbits) {
         if (*bitpos == 8) {
             ++s->next_in;
             if (--s->avail_in == 0)
-                if (s->refill(s) != 0) panic("read error: %d", s->error);
+                refill_or_panic(s);
             *bitpos = 0;
         }
         result |= ((s->next_in[0] >> *bitpos) & 0x1u) << i;
@@ -492,8 +496,15 @@ uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
     //    dymamic: ?
     size_t index = 1;
     do {
-        index = index << 1;
-        index = index | readbits(s, bitpos, 1);  // TODO(peter): inline this?
+        index <<= 1;
+        // if (*bitpos == 8) {
+        //     ++s->next_in;
+        //     if (--s->avail_in == 0)
+        //         refill_or_panic(s);
+        //     *bitpos = 0;
+        // }
+        // index |= (s->next_in[0] >> *bitpos) & 0x1u;
+        index |= readbits(s, bitpos, 1);  // TODO(peter): inline this?
         xassert(index < tree.len, "invalid index");
     } while (tree.d[index] == EMPTY_SENTINEL);
     return tree.d[index];
@@ -689,8 +700,7 @@ int main(int argc, char **argv) {
             bit = 0;
             uint16_t len, nlen;
             if (strm.avail_in < 4)
-                if (strm.refill(&strm) != 0)
-                    panic("refill failed: %d", strm.error);
+                refill_or_panic(&strm);
             // 2-byte little endian read
             len = (strm.next_in[1] << 8) | strm.next_in[0];
             // 2-byte little endian read
@@ -704,8 +714,7 @@ int main(int argc, char **argv) {
                     // XXX(peter): could hoist error check to end, would write
                     // zeros for section. do we guarantee to detect errors
                     // asap?
-                    if (strm.refill(&strm) != 0)
-                        panic("refill failed: %d", strm.error);
+                    refill_or_panic(&strm);
                 size_t avail = MIN(len, strm.avail_in);
                 assert(avail <= len);
                 if (stream_write(&strm, strm.next_in, avail))
