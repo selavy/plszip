@@ -293,11 +293,9 @@ void window_add(stream *s, const uint8_t *buf, size_t n) {
 int check_distance(stream *s, size_t distance) {
 #ifdef STRICT_WINDOW_SIZE_CHECK
     struct priv_stream_data *data = s->stream_data;
-    if (distance > data->size)
-        return 1;
+    if (distance > data->size) return 1;
 #endif
-    if (distance > data->mask)
-        return 1;
+    if (distance > data->mask) return 1;
     return 0;
 }
 
@@ -354,10 +352,8 @@ int stream_window(stream *strm, size_t dist, size_t len) {
     // len2 = [0   , end)
     size_t len1 = MIN(bsz - head, len);
     size_t len2 = len - len1;
-    if (stream_write(strm, &w->wnd[startidx], len1) != 0)
-        panic("short write");
-    if (stream_write(strm, &w->wnd[0],        len2) != 0)
-        panic("short write");
+    if (stream_write(strm, &w->wnd[startidx], len1) != 0) panic("short write");
+    if (stream_write(strm, &w->wnd[0], len2) != 0) panic("short write");
     return 0;
 }
 
@@ -394,9 +390,9 @@ char *read_null_terminated_string(stream *s) {
     }
 }
 
-uint8_t readbits(stream *s, size_t *bitpos, size_t nbits) {
-    assert(0 <= nbits && nbits <= 8);
-    uint8_t result = 0;
+uint16_t readbits(stream *s, size_t *bitpos, size_t nbits) {
+    xassert(0 <= nbits && nbits <= 16, "invalid nbits: %zu", nbits);
+    uint16_t result = 0;
     for (size_t i = 0; i < nbits; ++i) {
         if (*bitpos == 8) {
             ++s->next_in;
@@ -426,7 +422,8 @@ int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
     memset(&bl_count[0], 0, sizeof(bl_count));
     size_t max_bit_length = 0;
     for (size_t i = 0; i < n; ++i) {
-        xassert(code_lengths[i] <= MAX_HCODE_BIT_LENGTH, "Unsupported bit length");
+        xassert(code_lengths[i] <= MAX_HCODE_BIT_LENGTH,
+                "Unsupported bit length");
         ++bl_count[code_lengths[i]];
         max_bit_length =
             code_lengths[i] > max_bit_length ? code_lengths[i] : max_bit_length;
@@ -487,11 +484,89 @@ uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
     //    dymamic: ?
     size_t index = 1;
     do {
-        index = index << 1;
-        index |= readbits(s, bitpos, 1);  // TODO(peter): inline this?
+        index =
+            (index << 1) | readbits(s, bitpos, 1);  // TODO(peter): inline this?
         xassert(index < tree.len, "invalid index");
     } while (tree.d[index] == EmptySentinel);
     return tree.d[index];
+}
+
+int read_dynamic_trees(stream *s, size_t *bitpos, vec *lits, vec *dists) {
+    size_t hlit = readbits(s, bitpos, 5) + 257;
+    size_t hdist = readbits(s, bitpos, 5) + 1;
+    size_t hclen = readbits(s, bitpos, 4) + 4;
+    size_t ncodes = hlit + hdist;
+#define NUM_CODE_LENGTHS 19
+    const static uint16_t order[NUM_CODE_LENGTHS] = {
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
+    static uint16_t lengths[NUM_CODE_LENGTHS];
+    memset(&lengths, 0, sizeof(lengths));
+    for (size_t i = 0; i < hclen; ++i) {
+        lengths[order[i]] = readbits(s, bitpos, 3);
+    }
+    vec htree;
+
+    // TODO(peter): statically allocate `htree`? each length is max 3 bits => 8
+    if (init_huffman_tree(s, &htree, &lengths[0], NUM_CODE_LENGTHS) != 0)
+        panic("failed to initialized dynamic huffman tree header");
+
+// max(HLIT)  => max(5 bits + 257) => max(32 + 257) => max 289
+// max(HDIST) => max(5 bits +   1) => max(32 +   1) => max 33
+// max(NCODES) => max(HLIT + HDIST) => max(289 + 33) => max(322)
+#define MAX_CODE_LENGTHS 322
+    static uint16_t dynamic_code_lengths[MAX_CODE_LENGTHS];
+    memset(&dynamic_code_lengths, 0, sizeof(dynamic_code_lengths));
+    xassert(ncodes <= MAX_CODE_LENGTHS, "too many dynamic code lengths");
+    size_t idx = 0;
+    while (idx < ncodes) {
+        uint16_t value = read_huffman_value(s, bitpos, htree);
+        if (value <= 15) {
+            dynamic_code_lengths[idx++] = value;
+        } else if (value <= 18) {
+            size_t nbits, offset;
+            uint16_t rvalue;
+            if (value == 16) {
+                nbits = 2;
+                offset = 3;
+                if (idx == 0)
+                    panic(
+                        "received repeat code 16 with no code lengths to "
+                        "repeat");
+                rvalue = dynamic_code_lengths[idx - 1];
+            } else if (value == 17) {
+                nbits = offset = 3;
+                rvalue = 0;
+            } else if (value == 18) {
+                nbits = 7;
+                offset = 11;
+                rvalue = 0;
+            }
+            xassert(16 <= value && value <= 18,
+                    "didn't cover all cases for value");
+            int rtimes = readbits(s, bitpos, nbits) + offset;
+            xassert(rtimes > 0, "invalid repeat value");
+            while (rtimes-- > 0) {
+                dynamic_code_lengths[idx++] = rvalue;
+            }
+        } else {
+            panic("invalid dynamic code length: %u", value);
+        }
+    }
+    xassert(idx == ncodes, "invalid number of dynamic length codes: %zu", idx);
+    xassert(idx > 256 && dynamic_code_lengths[256] != 0,
+            "invalid dynamic length codes");
+
+    if (init_huffman_tree(s, lits, &dynamic_code_lengths[0], hlit) != 0)
+        panic("failed to initialize dynamic huffman literals tree");
+    if (init_huffman_tree(s, dists, &dynamic_code_lengths[hlit], hdist) != 0)
+        panic("failed to initialize dynamic huffman distances tree");
+
+    s->zfree(s->alloc_data, (void *)htree.d);
+#ifndef NDEBUG
+    htree.d = NULL;
+    htree.len = 0;
+#endif
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -595,6 +670,8 @@ int main(int argc, char **argv) {
     uint8_t blktyp;
     vec lit_tree;
     vec dst_tree;
+    vec dynlits;
+    vec dyndists;
     do {
         bfinal = readbits(&strm, &bit, 1);
         blktyp = readbits(&strm, &bit, 2);
@@ -633,18 +710,31 @@ int main(int argc, char **argv) {
                 stream_read_consume(&strm, avail);
                 len -= avail;
             } while (len > 0);
-        } else if (blktyp == FIXED_HUFFMAN) {
-            DEBUG("Fixed Huffman Block%s", bfinal ? " -- Final Block" : "");
-            lit_tree.d = fixed_huffman_literals_tree;
-            lit_tree.len = sizeof(fixed_huffman_literals_tree);
-            dst_tree.d = fixed_huffman_distance_tree;
-            dst_tree.len = sizeof(fixed_huffman_distance_tree);
+        } else if (blktyp == FIXED_HUFFMAN || blktyp == DYNAMIC_HUFFMAN) {
+            // TODO(peter): max output from a literal or length+distance code is
+            // 258 bytes so just require that output buffer has that must space
+            // at beginning of loop?
+            if (blktyp == FIXED_HUFFMAN) {
+                DEBUG("Fixed Huffman Block%s", bfinal ? " -- Final Block" : "");
+                lit_tree.d = fixed_huffman_literals_tree;
+                lit_tree.len = sizeof(fixed_huffman_literals_tree);
+                dst_tree.d = fixed_huffman_distance_tree;
+                dst_tree.len = sizeof(fixed_huffman_distance_tree);
+            } else {
+                DEBUG("Dynamic Huffman Block%s",
+                      bfinal ? " -- Final Block" : "");
+                if (read_dynamic_trees(&strm, &bit, &dynlits, &dyndists) != 0)
+                    panic("failed to read dynamic huffman trees");
+                lit_tree = dynlits;
+                dst_tree = dyndists;
+            }
+
             for (;;) {
-                vec v = {lit_tree.len, lit_tree.d};
-                uint16_t value = read_huffman_value(&strm, &bit, v);
+                uint16_t value = read_huffman_value(&strm, &bit, lit_tree);
                 if (value < 256) {
                     uint8_t c = (uint8_t)value;
-                    DEBUG("FX: %c", c);
+                    DEBUG("%s: (0x%02x) %c",
+                          blktyp == FIXED_HUFFMAN ? "FH" : "DH", value, c);
                     if (stream_write(&strm, &c, sizeof(c)) != 0)
                         panic("failed to write value in fixed huffman section");
                     window_add(&strm, &c, sizeof(c));
@@ -654,8 +744,8 @@ int main(int argc, char **argv) {
                 } else if (value <= 285) {
                     assert(257 <= value <= 285);
                     // NOTE: 257 <= value <= 285
-                    // ==> 0 <= (value - LENGTH_BASE_CODE) <= 28
-                    // ==> value - LENGTH_BASE_CODE < asize(LENGTH_EXTRA_BITS)
+                    // => 0 <= (value - LENGTH_BASE_CODE) <= 28
+                    // => value - LENGTH_BASE_CODE < asize(LENGTH_EXTRA_BITS)
                     value -= LENGTH_BASE_CODE;
                     size_t base_length = LENGTH_BASES[value];
                     size_t extra_length =
@@ -677,9 +767,16 @@ int main(int argc, char **argv) {
                     panic("invalid %s huffman value: %u", "huffman", value);
                 }
             }
-        } else if (blktyp == DYNAMIC_HUFFMAN) {
-            DEBUG("Dynamic Huffman Block%s", bfinal ? " -- Final Block" : "");
-            panic("not implemented yet");
+
+            // TODO(peter): revisit
+            if (blktyp == DYNAMIC_HUFFMAN) {
+                strm.zfree(strm.alloc_data, (void *)dynlits.d);
+                dynlits.d = NULL;
+                dynlits.len = 0;
+                strm.zfree(strm.alloc_data, (void *)dyndists.d);
+                dyndists.d = NULL;
+                dyndists.len = 0;
+            }
         } else {
             panic("Invalid block type: %u", blktyp);
         }
