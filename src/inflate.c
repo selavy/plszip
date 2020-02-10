@@ -401,18 +401,18 @@ char *read_null_terminated_string(stream *s) {
     }
 }
 
-uint16_t readbits(stream *s, size_t *bitpos, size_t nbits) {
+uint16_t readbits(stream *s, size_t *bit, size_t nbits) {
     xassert(0 <= nbits && nbits <= 16, "invalid nbits: %zu", nbits);
     uint16_t result = 0;
     for (size_t i = 0; i < nbits; ++i) {
-        if (*bitpos == 8) {
+        if (*bit == 8) {
             ++s->next_in;
             if (--s->avail_in == 0)
                 refill_or_panic(s);
-            *bitpos = 0;
+            *bit = 0;
         }
-        result |= ((s->next_in[0] >> *bitpos) & 0x1u) << i;
-        ++*bitpos;
+        result |= ((s->next_in[0] >> *bit) & 0x1u) << i;
+        ++*bit;
     }
     return result;
 }
@@ -490,14 +490,12 @@ int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
     return 0;
 }
 
-uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
+uint16_t read_huffman_value(stream *s, size_t *bitp, vec tree) {
     // TODO(peter): what is the maximum number of bits in a huffman code?
     //    fixed  : 9
     //    dymamic: ?
     size_t index = 1;
-    size_t bit = *bitpos;
-    if (s->avail_in < 3) // TODO: firm up this bound
-        refill_or_panic(s);
+    size_t bit = *bitp;
     do {
         if (bit == 8) {
             ++s->next_in;
@@ -509,14 +507,14 @@ uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
         index |= (s->next_in[0] >> bit++) & 0x1u;
         xassert(index < tree.len, "invalid index");
     } while (tree.d[index] == EMPTY_SENTINEL);
-    *bitpos = bit;
+    *bitp = bit;
     return tree.d[index];
 }
 
-int read_dynamic_trees(stream *s, size_t *bitpos, vec *lits, vec *dists) {
-    size_t hlit = readbits(s, bitpos, 5) + 257;
-    size_t hdist = readbits(s, bitpos, 5) + 1;
-    size_t hclen = readbits(s, bitpos, 4) + 4;
+int read_dynamic_trees(stream *s, size_t *bit, vec *lits, vec *dists) {
+    size_t hlit = readbits(s, bit, 5) + 257;
+    size_t hdist = readbits(s, bit, 5) + 1;
+    size_t hclen = readbits(s, bit, 4) + 4;
     size_t ncodes = hlit + hdist;
 #define NUM_CODE_LENGTHS 19
     const static uint16_t order[NUM_CODE_LENGTHS] = {
@@ -524,7 +522,7 @@ int read_dynamic_trees(stream *s, size_t *bitpos, vec *lits, vec *dists) {
     static uint16_t lengths[NUM_CODE_LENGTHS];
     memset(&lengths, 0, sizeof(lengths));
     for (size_t i = 0; i < hclen; ++i) {
-        lengths[order[i]] = readbits(s, bitpos, 3);
+        lengths[order[i]] = readbits(s, bit, 3);
     }
     vec htree;
 
@@ -541,7 +539,7 @@ int read_dynamic_trees(stream *s, size_t *bitpos, vec *lits, vec *dists) {
     xassert(ncodes <= MAX_CODE_LENGTHS, "too many dynamic code lengths");
     size_t idx = 0;
     while (idx < ncodes) {
-        uint16_t value = read_huffman_value(s, bitpos, htree);
+        uint16_t value = read_huffman_value(s, bit, htree);
         if (value <= 15) {
             dynamic_code_lengths[idx++] = value;
         } else if (value <= 18) {
@@ -565,7 +563,7 @@ int read_dynamic_trees(stream *s, size_t *bitpos, vec *lits, vec *dists) {
             }
             xassert(16 <= value && value <= 18,
                     "didn't cover all cases for value");
-            int rtimes = readbits(s, bitpos, nbits) + offset;
+            int rtimes = readbits(s, bit, nbits) + offset;
             xassert(rtimes > 0, "invalid repeat value");
             while (rtimes-- > 0) {
                 dynamic_code_lengths[idx++] = rvalue;
