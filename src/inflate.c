@@ -496,6 +496,8 @@ uint16_t read_huffman_value(stream *s, size_t *bitpos, vec tree) {
     //    dymamic: ?
     size_t index = 1;
     size_t bit = *bitpos;
+    if (s->avail_in < 3) // TODO: firm up this bound
+        refill_or_panic(s);
     do {
         if (bit == 8) {
             ++s->next_in;
