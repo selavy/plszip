@@ -5,7 +5,8 @@
 BENCHS=.
 BUILD=../build/release
 PROGS=(plzip inflate)
-TESTS=(berlioz.txt dracula.txt latin_verse.txt random.txt)
+# TESTS=(berlioz.txt dracula.txt latin_verse.txt random.txt)
+TESTS=(big.txt random.txt)
 
 if [[ $# -gt 0 ]];
 then
@@ -44,7 +45,7 @@ do
     cat $fname.gz > /dev/null
     cat $fname.gz > /dev/null
     cat $fname.gz > /dev/null
-    # hyperfine --warmup 30 "${cmds[@]}"
-    hyperfine --prepare 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches' "${cmds[@]}"
+    hyperfine --warmup 30 "${cmds[@]}"
+    # hyperfine --prepare 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches' "${cmds[@]}"
 done;
 cleanup

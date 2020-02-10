@@ -41,7 +41,7 @@
 /* Header Constants */
 static const uint8_t ID1_GZIP = 31;
 static const uint8_t ID2_GZIP = 139;
-// #define STRICT_WINDOW_SIZE_CHECK
+#define STRICT_WINDOW_SIZE_CHECK
 #define MAX_HUFFMAN_CODES 512
 #define MAX_HCODE_BIT_LENGTH 16
 #define EMPTY_SENTINEL UINT16_MAX
@@ -246,14 +246,14 @@ void stream_read_consume(stream *s, size_t n) {
 }
 
 // TODO(peter): force inline?
-void stream_write_consume(stream *s, size_t n) {
+static void stream_write_consume(stream *s, size_t n) {
     assert(s->avail_out >= n);
     s->next_out += n;
     s->avail_out -= n;
     s->total_out += n;
 }
 
-int stream_read(stream *s, void *buf, size_t n) {
+static int stream_read(stream *s, void *buf, size_t n) {
     /* fast path: plenty of data available */
     if (s->avail_in >= n) {
         memcpy(buf, s->next_in, n);
@@ -276,7 +276,7 @@ int stream_read(stream *s, void *buf, size_t n) {
     return 0;
 }
 
-size_t wndsize(const stream *s) {
+static size_t wndsize(const stream *s) {
     struct priv_stream_data *data = s->stream_data;
 #ifdef STRICT_WINDOW_SIZE_CHECK
     return data->size;
@@ -285,12 +285,12 @@ size_t wndsize(const stream *s) {
 #endif
 }
 
-size_t wndcap(const stream *s) {
+static size_t wndcap(const stream *s) {
     struct priv_stream_data *data = s->stream_data;
     return data->mask + 1;
 }
 
-void window_add(stream *s, const uint8_t *buf, size_t n) {
+static void window_add(stream *s, const uint8_t *buf, size_t n) {
     struct priv_stream_data *data = s->stream_data;
 #ifdef STRICT_WINDOW_SIZE_CHECK
     data->size = MIN(data->size + n, data->mask + 1);
@@ -301,7 +301,7 @@ void window_add(stream *s, const uint8_t *buf, size_t n) {
     }
 }
 
-int check_distance(stream *s, size_t distance) {
+static int check_distance(stream *s, size_t distance) {
     struct priv_stream_data *wnd = s->stream_data;
 #ifdef STRICT_WINDOW_SIZE_CHECK
     if (distance > wnd->size) return 1;
@@ -310,7 +310,7 @@ int check_distance(stream *s, size_t distance) {
     return 0;
 }
 
-int stream_write(stream *s, const void *buf, size_t n) {
+static int stream_write(stream *s, const void *buf, size_t n) {
     if (s->avail_out >= n) {
         memcpy(s->next_out, buf, n);
         stream_write_consume(s, n);
@@ -333,19 +333,18 @@ int stream_write(stream *s, const void *buf, size_t n) {
     return 0;
 }
 
-size_t wndix(const struct priv_stream_data *wnd, size_t index) {
-    return (wnd->head + index) & wnd->mask;
-}
-
-int stream_window(stream *strm, size_t dist, size_t len) {
-    struct priv_stream_data *w = strm->stream_data;
+static int stream_window(stream *s, size_t dist, size_t len) {
+    struct priv_stream_data *w = s->stream_data;
     size_t mask = w->mask;
     size_t bsize = w->mask + 1;
     size_t head = w->head;
-    size_t start = head + (bsize - dist) & mask;
+    size_t start = (head + (bsize - dist)) & mask;
     xassert(dist < bsize, "distance >= bsize: %zu >= %zu", dist, bsize);
+    size_t hh = head, ss = start;
     for (size_t i = 0; i < len; ++i) {
-        w->wnd[(head + i) & mask] = w->wnd[(start + i) & mask];
+        w->wnd[hh] = w->wnd[ss];
+        hh = (hh + 1) & mask;
+        ss = (ss + 1) & mask;
     }
     // flush window -- may require 2 writes in case wrapped
     // ---------------------------------
@@ -361,16 +360,20 @@ int stream_window(stream *strm, size_t dist, size_t len) {
     // len2 = [0   , end)
     size_t len1 = MIN(bsize - start, len);
     size_t len2 = len - len1;
-    if (stream_write(strm, &w->wnd[start], len1) != 0) panic("short write");
-    if (stream_write(strm, &w->wnd[0], len2) != 0) panic("short write");
-    w->head = (head + len) & mask;
+    if (s->avail_out < len)
+        if (s->flush(s) != 0)
+            return s->error;
+    memcpy(s->next_out +    0, &w->wnd[start], len1);
+    memcpy(s->next_out + len1, &w->wnd[    0], len2);
+    stream_write_consume(s, len);
+    w->head = hh;
 #ifdef STRICT_WINDOW_SIZE_CHECK
     w->size = MIN(w->size + len, bsize);
 #endif
     return 0;
 }
 
-char *read_null_terminated_string(stream *s) {
+static char *read_null_terminated_string(stream *s) {
     size_t pos;
     size_t len = 0;
     char *str = NULL;
@@ -402,7 +405,7 @@ char *read_null_terminated_string(stream *s) {
     }
 }
 
-uint16_t readbits(stream *s, size_t *bit, size_t nbits) {
+static uint16_t readbits(stream *s, size_t *bit, size_t nbits) {
     xassert(0 <= nbits && nbits <= 16, "invalid nbits: %zu", nbits);
     uint16_t result = 0;
     for (size_t i = 0; i < nbits; ++i) {
@@ -418,7 +421,7 @@ uint16_t readbits(stream *s, size_t *bit, size_t nbits) {
     return result;
 }
 
-int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
+static int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
                       size_t n) {
     static size_t bl_count[MAX_HCODE_BIT_LENGTH];
     static uint16_t next_code[MAX_HCODE_BIT_LENGTH];
@@ -491,7 +494,7 @@ int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
     return 0;
 }
 
-uint16_t read_huffman_value(stream *s, size_t *bitp, vec tree) {
+static uint16_t read_huffman_value(stream *s, size_t *bitp, vec tree) {
     // TODO(peter): what is the maximum number of bits in a huffman code?
     //    fixed  : 9
     //    dymamic: ?
@@ -512,7 +515,7 @@ uint16_t read_huffman_value(stream *s, size_t *bitp, vec tree) {
     return tree.d[index];
 }
 
-int read_dynamic_trees(stream *s, size_t *bit, vec *lits, vec *dists) {
+static int read_dynamic_trees(stream *s, size_t *bit, vec *lits, vec *dists) {
     size_t hlit = readbits(s, bit, 5) + 257;
     size_t hdist = readbits(s, bit, 5) + 1;
     size_t hclen = readbits(s, bit, 4) + 4;
