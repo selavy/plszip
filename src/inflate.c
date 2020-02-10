@@ -41,9 +41,13 @@
 /* Header Constants */
 static const uint8_t ID1_GZIP = 31;
 static const uint8_t ID2_GZIP = 139;
+// #define STRICT_WINDOW_SIZE_CHECK
 #define MAX_HUFFMAN_CODES 512
 #define MAX_HCODE_BIT_LENGTH 16
 #define EMPTY_SENTINEL UINT16_MAX
+#define READ_BUFFER_SIZE (1u << 16)
+#define WRIT_BUFFER_SIZE (1u << 16)
+#define WINDOW_SIZE      (1u << 16)
 
 /* Header Flags */
 static const uint8_t FTEXT = 1u << 0;
@@ -129,7 +133,6 @@ struct priv_stream_data {
     /* circular buffer window */
     uint32_t mask;
     uint32_t head;
-#define STRICT_WINDOW_SIZE_CHECK
 #ifdef STRICT_WINDOW_SIZE_CHECK
     uint32_t size;
 #endif
@@ -143,14 +146,12 @@ void *default_zalloc(void *data, size_t nmemb, size_t size) {
 void default_zfree(void *data, void *address) { free(address); }
 
 struct file_read_data {
-    uint8_t buf[2048];  // TODO(peter): resize to max size of zlib window
-    // uint8_t buf[24];  // TEMP TEMP -- for testing only
+    uint8_t buf[READ_BUFFER_SIZE];
     FILE *fp;
 };
 typedef struct file_read_data file_read_data;
 struct file_write_data {
-    uint8_t buf[2048];  // TODO(peter): resize to max size of zlib window
-    // uint8_t buf[24];  // TEMP TEMP -- for testing only
+    uint8_t buf[WRIT_BUFFER_SIZE];
     FILE *fp;
 };
 typedef struct file_write_data file_write_data;
@@ -224,7 +225,7 @@ void init_file_stream(stream *s, file_read_data *read_data,
     s->zalloc = &default_zalloc;
     s->zfree = &default_zfree;
 
-    if (init_priv_stream_data(s, 1u << 16) != 0)
+    if (init_priv_stream_data(s, WINDOW_SIZE) != 0)
         panic("failed to initialize private stream data");
 }
 
@@ -301,8 +302,8 @@ void window_add(stream *s, const uint8_t *buf, size_t n) {
 }
 
 int check_distance(stream *s, size_t distance) {
-#ifdef STRICT_WINDOW_SIZE_CHECK
     struct priv_stream_data *wnd = s->stream_data;
+#ifdef STRICT_WINDOW_SIZE_CHECK
     if (distance > wnd->size) return 1;
 #endif
     if (distance > wnd->mask) return 1;

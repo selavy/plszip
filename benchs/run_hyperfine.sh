@@ -29,16 +29,6 @@ die() {
 	exit 1
 }
 
-run() {
-    PROG=$1
-    BENCH=$2
-    shift 2
-    echo "-- Benchmark: $PROG $BENCH"
-    #cmd="$PROG $BENCH $@"
-    #echo "Command: $cmd"
-    hyperfine --warmup 10 '$PROG $BENCH $@'
-}
-
 cleanup
 ninja -C $BUILD || die "Failed to build"
 for fname in ${TESTS[@]};
@@ -54,6 +44,7 @@ do
     cat $fname.gz > /dev/null
     cat $fname.gz > /dev/null
     cat $fname.gz > /dev/null
-    hyperfine --warmup 10 "${cmds[@]}"
+    # hyperfine --warmup 30 "${cmds[@]}"
+    hyperfine --prepare 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches' "${cmds[@]}"
 done;
 cleanup
