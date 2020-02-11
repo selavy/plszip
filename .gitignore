@@ -36,3 +36,5 @@ output
 
 *.txt.gz
 *.check
+
+benchs/big.txt
