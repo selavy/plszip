@@ -35,6 +35,8 @@
 #define static_assert(x) _Static_assert(x, "")
 #endif
 
+#define FORCE_INLINE __attribute__((always_inline)) inline
+
 #define MIN(x, y) (x) < (y) ? (x) : (y)
 #define MAX(x, y) (x) > (y) ? (x) : (y)
 
@@ -130,6 +132,9 @@ struct stream {
 typedef struct stream stream;
 
 struct priv_stream_data {
+    uint8_t buf;
+    size_t  bit;
+
     /* circular buffer window */
     uint32_t mask;
     uint32_t head;
@@ -156,7 +161,7 @@ struct file_write_data {
 };
 typedef struct file_write_data file_write_data;
 
-void refill_or_panic(stream *s) {
+static void refill_or_panic(stream *s) {
     if (s->refill(s) != 0)
         panic("read error: %d", s->error);
 }
@@ -189,7 +194,7 @@ int flush_file(stream *s) {
     return s->error;
 }
 
-int init_priv_stream_data(stream *s, size_t size) {
+static int init_priv_stream_data(stream *s, size_t size) {
     struct priv_stream_data *data;
     xassert((size & (size - 1)) == 0, "window size must be a power of 2");
     data = s->zalloc(s->alloc_data, 1,
@@ -202,11 +207,13 @@ int init_priv_stream_data(stream *s, size_t size) {
 #endif
     // TEMP TEMP
     memset(&data->wnd[0], 0, sizeof(data->wnd[0]) * size);
+    data->buf = 0u;
+    data->bit = 0;
     s->stream_data = data;
     return 0;
 }
 
-void init_file_stream(stream *s, file_read_data *read_data,
+static void init_file_stream(stream *s, file_read_data *read_data,
                       file_write_data *write_data) {
     s->next_in = &read_data->buf[0];
     s->avail_in = 0;
@@ -229,7 +236,7 @@ void init_file_stream(stream *s, file_read_data *read_data,
         panic("failed to initialize private stream data");
 }
 
-void close_file_stream(stream *s) {
+FORCE_INLINE static void close_file_stream(stream *s) {
     file_read_data *read_data = s->read_data;
     file_write_data *write_data = s->write_data;
     fclose(read_data->fp);
@@ -237,7 +244,7 @@ void close_file_stream(stream *s) {
 }
 
 // TODO(peter): force inline?
-void stream_read_consume(stream *s, size_t n) {
+FORCE_INLINE static void stream_read_consume(stream *s, size_t n) {
     assert(s->avail_in >= n);
     s->next_in += n;
     s->avail_in -= n;
@@ -246,7 +253,7 @@ void stream_read_consume(stream *s, size_t n) {
 }
 
 // TODO(peter): force inline?
-static void stream_write_consume(stream *s, size_t n) {
+FORCE_INLINE static void stream_write_consume(stream *s, size_t n) {
     assert(s->avail_out >= n);
     s->next_out += n;
     s->avail_out -= n;
@@ -276,7 +283,7 @@ static int stream_read(stream *s, void *buf, size_t n) {
     return 0;
 }
 
-static size_t wndsize(const stream *s) {
+FORCE_INLINE static size_t wndsize(const stream *s) {
     struct priv_stream_data *data = s->stream_data;
 #ifdef STRICT_WINDOW_SIZE_CHECK
     return data->size;
@@ -285,7 +292,7 @@ static size_t wndsize(const stream *s) {
 #endif
 }
 
-static size_t wndcap(const stream *s) {
+FORCE_INLINE static size_t wndcap(const stream *s) {
     struct priv_stream_data *data = s->stream_data;
     return data->mask + 1;
 }
@@ -295,10 +302,21 @@ static void window_add(stream *s, const uint8_t *buf, size_t n) {
 #ifdef STRICT_WINDOW_SIZE_CHECK
     data->size = MIN(data->size + n, data->mask + 1);
 #endif
-    while (n-- > 0) {
-        data->wnd[data->head] = *buf++;
-        data->head = (data->head + 1) & data->mask;
+    // while (n-- > 0) {
+    //     data->wnd[data->head] = *buf++;
+    //     data->head = (data->head + 1) & data->mask;
+    // }
+    size_t n1 = MIN(data->mask + 1 - data->head, n);
+    size_t n2 = n - n1;
+    uint8_t *p = &data->wnd[data->head];
+    while (n1-- > 0) {
+        *p++ = *buf++;
     }
+    p = &data->wnd[0];
+    while (n2-- > 0) {
+        *p++ = *buf++;
+    }
+    data->head = (data->head + n) & data->mask;
 }
 
 static int check_distance(stream *s, size_t distance) {
@@ -340,12 +358,23 @@ static int stream_window(stream *s, size_t dist, size_t len) {
     size_t head = w->head;
     size_t start = (head + (bsize - dist)) & mask;
     xassert(dist < bsize, "distance >= bsize: %zu >= %zu", dist, bsize);
-    size_t hh = head, ss = start;
-    for (size_t i = 0; i < len; ++i) {
-        w->wnd[hh] = w->wnd[ss];
-        hh = (hh + 1) & mask;
-        ss = (ss + 1) & mask;
+
+    // size_t hh = head, ss = start;
+    // for (size_t i = 0; i < len; ++i) {
+    //     w->wnd[hh] = w->wnd[ss];
+    //     hh = (hh + 1) & mask;
+    //     ss = (ss + 1) & mask;
+    // }
+
+    size_t ll1 = MIN(bsize - head, len);
+    size_t ll2 = len - ll1;
+    for (size_t i = 0; i < ll1; ++i) {
+        w->wnd[head+i] = w->wnd[(start+i) & mask];
     }
+    for (size_t i = 0; i < ll2; ++i) {
+        w->wnd[   0+i] = w->wnd[(start+ll1+i) & mask];
+    }
+
     // flush window -- may require 2 writes in case wrapped
     // ---------------------------------
     // | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | X |
@@ -366,7 +395,8 @@ static int stream_window(stream *s, size_t dist, size_t len) {
     memcpy(s->next_out +    0, &w->wnd[start], len1);
     memcpy(s->next_out + len1, &w->wnd[    0], len2);
     stream_write_consume(s, len);
-    w->head = hh;
+    // w->head = hh;
+    w->head = (head + len) & mask;
 #ifdef STRICT_WINDOW_SIZE_CHECK
     w->size = MIN(w->size + len, bsize);
 #endif
@@ -374,6 +404,7 @@ static int stream_window(stream *s, size_t dist, size_t len) {
 }
 
 static char *read_null_terminated_string(stream *s) {
+    // TODO(peter): remove usage of realloc, and use s->z_alloc instead
     size_t pos;
     size_t len = 0;
     char *str = NULL;
