@@ -446,16 +446,19 @@ static uint16_t readbits(stream *s, size_t nbits) {
     struct priv_stream_data *data = s->stream_data;
     uint16_t result = 0;
     size_t bit = data->bit;
+    uint8_t buf = data->buf;
     for (size_t i = 0; i < nbits; ++i) {
         if (bit == 8) {
             ++s->next_in;
             if (--s->avail_in == 0) refill_or_panic(s);
             bit = 0;
+            buf = s->next_in[0];
         }
-        result |= ((s->next_in[0] >> bit) & 0x1u) << i;
+        result |= ((buf >> bit) & 0x1u) << i;
         ++bit;
     }
     data->bit = bit;
+    data->buf = buf;
     return result;
 }
 
@@ -540,20 +543,21 @@ static uint16_t read_huffman_value(stream *s, vec tree) {
     // TODO(peter): what is the maximum number of bits in a huffman code?
     //    fixed  : 9
     //    dymamic: ?
-    struct priv_stream_data *data = s->stream_data;
+    // struct priv_stream_data *data = s->stream_data;
     size_t index = 1;
-    size_t bit = data->bit;
+    // size_t bit = data->bit;
     do {
-        if (bit == 8) {
-            ++s->next_in;
-            if (--s->avail_in == 0) refill_or_panic(s);
-            bit = 0;
-        }
-        index <<= 1;
-        index |= (s->next_in[0] >> bit++) & 0x1u;
+        // if (bit == 8) {
+        //     ++s->next_in;
+        //     if (--s->avail_in == 0) refill_or_panic(s);
+        //     bit = 0;
+        // }
+        // index <<= 1;
+        // index |= (s->next_in[0] >> bit++) & 0x1u;
+        index = (index << 1) | readbits(s, 1); // TODO(peter): inline readbits(1)?
         xassert(index < tree.len, "invalid index");
     } while (tree.d[index] == EMPTY_SENTINEL);
-    data->bit = bit;
+    // data->bit = bit;
     return tree.d[index];
 }
 
@@ -729,6 +733,8 @@ int main(int argc, char **argv) {
     vec lit_tree, dst_tree, dynlits, dyndists;
     struct priv_stream_data *priv_data = strm.stream_data;
     do {
+        /* safe to reload bitbuffer -- could hoist out of loop */
+        priv_data->buf = strm.next_in[0];
         bfinal = readbits(&strm, 1);
         blktyp = readbits(&strm, 2);
         if (blktyp == NO_COMPRESSION) {
@@ -763,6 +769,7 @@ int main(int argc, char **argv) {
             /* Will always end on byte boundary for "No Compression" blocks.
              * Fixes preconditions of bit-oriented state. */
             priv_data->bit = 0;
+            priv_data->buf = strm.next_in[0];
         } else if (blktyp == FIXED_HUFFMAN || blktyp == DYNAMIC_HUFFMAN) {
             // TODO(peter): max output from a literal or length+distance code is
             // 258 bytes so just require that output buffer has that must space
