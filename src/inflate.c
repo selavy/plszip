@@ -206,6 +206,8 @@ static int init_priv_stream_data(stream *s, size_t size) {
 #endif
     // TEMP TEMP
     memset(&data->wnd[0], 0, sizeof(data->wnd[0]) * size);
+
+    // TODO(peter): make this call happen once we know there should be data?
     data->buf = 0u;
     data->bit = 0;
     s->stream_data = data;
@@ -439,8 +441,9 @@ static uint16_t readbits(stream *s, size_t nbits) {
     uint16_t result = 0;
     size_t bit = data->bit;
     uint8_t buf = data->buf;
+    _Static_assert(sizeof(buf) == sizeof(data->buf), "");
     for (size_t i = 0; i < nbits; ++i) {
-        if (bit == 8) {
+        if (bit == 8*sizeof(buf)) {
             ++s->next_in;
             if (--s->avail_in == 0) refill_or_panic(s);
             bit = 0;
@@ -725,7 +728,7 @@ int main(int argc, char **argv) {
     uint8_t bfinal, blktyp;
     vec lit_tree, dst_tree, dynlits, dyndists;
     struct priv_stream_data *priv_data = strm.stream_data;
-    /* safe to reload bitbuffer -- could hoist out of loop */
+    /* TODO(peter): move into an inflateInit() call */
     priv_data->buf = strm.next_in[0];
     do {
         bfinal = readbits(&strm, 1);
