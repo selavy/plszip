@@ -727,12 +727,16 @@ int main(int argc, char **argv) {
      * have been byte sized */
     uint8_t bfinal, blktyp;
     vec lit_tree, dst_tree, dynlits, dyndists;
+    struct priv_stream_data *priv_data = strm.stream_data;
     do {
         bfinal = readbits(&strm, 1);
         blktyp = readbits(&strm, 2);
         if (blktyp == NO_COMPRESSION) {
             DEBUG("No Compression Block%s", bfinal ? " -- Final Block" : "");
-            stream_flush_to_byte_boundary(&strm);
+            /* For "No Compression" blocks, switch to byte-oriented reading,
+             * temporarily violate preconditions of bit-oriented state. */
+            if (priv_data->bit != 0)
+                stream_read_consume(&strm, 1);
             uint16_t len, nlen;
             if (strm.avail_in < 4) refill_or_panic(&strm);
             // 2-byte little endian read
@@ -756,6 +760,9 @@ int main(int argc, char **argv) {
                 stream_read_consume(&strm, avail);
                 len -= avail;
             } while (len > 0);
+            /* Will always end on byte boundary for "No Compression" blocks.
+             * Fixes preconditions of bit-oriented state. */
+            priv_data->bit = 0;
         } else if (blktyp == FIXED_HUFFMAN || blktyp == DYNAMIC_HUFFMAN) {
             // TODO(peter): max output from a literal or length+distance code is
             // 258 bytes so just require that output buffer has that must space
