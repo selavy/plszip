@@ -499,7 +499,14 @@ static int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
 
     // Table size is 2**(max_bit_length + 1)
     size_t table_size = 1u << (max_bit_length + 1);
-    uint16_t *t = s->zalloc(s->alloc_data, table_size, sizeof(*t));
+    uint16_t *t;
+    if (table_size > tree->len) {
+        if (tree->d)
+            s->zfree(s->alloc_data, (void*)tree->d);
+        t = s->zalloc(s->alloc_data, table_size, sizeof(*t));
+    } else {
+        t = (uint16_t*)tree->d;
+    }
     for (int j = 0; j < table_size; ++j) {
         t[j] = EMPTY_SENTINEL;
     }
@@ -511,8 +518,6 @@ static int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
         uint16_t code = codes[value];
         size_t index = 1;
         for (int i = len - 1; i >= 0; --i) {
-            // size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
-            // index = 2 * index + isset;
             index = (index << 1) | ((code >> i) & 0x1u);
         }
         xassert(t[index] == EMPTY_SENTINEL,
@@ -547,21 +552,22 @@ static uint16_t read_huffman_value(stream *s, size_t *bitp, vec tree) {
 }
 
 static int read_dynamic_trees(stream *s, size_t *bit, vec *lits, vec *dists) {
-    size_t hlit = readbits(s, bit, 5) + 257;
-    size_t hdist = readbits(s, bit, 5) + 1;
-    size_t hclen = readbits(s, bit, 4) + 4;
-    size_t ncodes = hlit + hdist;
 #define NUM_CODE_LENGTHS 19
     const static uint16_t order[NUM_CODE_LENGTHS] = {
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
     static uint16_t lengths[NUM_CODE_LENGTHS];
+#define MAX_HTREE_BIT_LENGTH 8
+    static uint16_t htree_data[1u << MAX_HTREE_BIT_LENGTH];
+    vec htree = { sizeof(htree_data), &htree_data[0] };
+    size_t hlit = readbits(s, bit, 5) + 257;
+    size_t hdist = readbits(s, bit, 5) + 1;
+    size_t hclen = readbits(s, bit, 4) + 4;
+    size_t ncodes = hlit + hdist;
     memset(&lengths, 0, sizeof(lengths));
     for (size_t i = 0; i < hclen; ++i) {
         lengths[order[i]] = readbits(s, bit, 3);
     }
-    vec htree;
 
-    // TODO(peter): statically allocate `htree`? each length is max 3 bits => 8
     if (init_huffman_tree(s, &htree, &lengths[0], NUM_CODE_LENGTHS) != 0)
         panic("failed to initialized dynamic huffman tree header");
 
@@ -616,11 +622,6 @@ static int read_dynamic_trees(stream *s, size_t *bit, vec *lits, vec *dists) {
     if (init_huffman_tree(s, dists, &dynamic_code_lengths[hlit], hdist) != 0)
         panic("failed to initialize dynamic huffman distances tree");
 
-    s->zfree(s->alloc_data, (void *)htree.d);
-#ifndef NDEBUG
-    htree.d = NULL;
-    htree.len = 0;
-#endif
     return 0;
 }
 
@@ -719,13 +720,8 @@ int main(int argc, char **argv) {
     /* know at this point that are on a byte boundary as all previous fields
      * have been byte sized */
     size_t bit = 0;
-    size_t nbits;
-    uint8_t bfinal;
-    uint8_t blktyp;
-    vec lit_tree;
-    vec dst_tree;
-    vec dynlits;
-    vec dyndists;
+    uint8_t bfinal, blktyp;
+    vec lit_tree, dst_tree, dynlits, dyndists;
     do {
         bfinal = readbits(&strm, &bit, 1);
         blktyp = readbits(&strm, &bit, 2);
@@ -816,21 +812,24 @@ int main(int argc, char **argv) {
                 }
             }
 
-            // TODO(peter): revisit
-            if (blktyp == DYNAMIC_HUFFMAN) {
-                strm.zfree(strm.alloc_data, (void *)dynlits.d);
-                dynlits.d = NULL;
-                dynlits.len = 0;
-                strm.zfree(strm.alloc_data, (void *)dyndists.d);
-                dyndists.d = NULL;
-                dyndists.len = 0;
-            }
         } else {
             panic("Invalid block type: %u", blktyp);
         }
     } while (bfinal == 0);
 
     if (strm.flush(&strm) != 0) panic("write failed: %d", strm.error);
+
+    // TODO(peter): revisit -- only deallocate at the end, and allocate
+    // only if need more size
+    if (dynlits.d) {
+        assert(dynlits.d != NULL && dyndists.d != NULL);
+        strm.zfree(strm.alloc_data, (void *)dynlits.d);
+        dynlits.d = NULL;
+        dynlits.len = 0;
+        strm.zfree(strm.alloc_data, (void *)dyndists.d);
+        dyndists.d = NULL;
+        dyndists.len = 0;
+    }
 
     close_file_stream(&strm);
     return 0;
