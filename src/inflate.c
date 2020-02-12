@@ -258,14 +258,6 @@ FORCE_INLINE static void stream_write_consume(stream *s, size_t n) {
     // TODO(peter): add CRC32 calculation?
 }
 
-FORCE_INLINE static void stream_flush_to_byte_boundary(stream *s) {
-    struct priv_stream_data *data = s->stream_data;
-    if (data->bit != 0) {
-        stream_read_consume(s, 1);
-        data->bit = 0;
-    }
-}
-
 /* only use for reading gzip data because assumes everything is byte oriented */
 static int stream_read(stream *s, void *buf, size_t n) {
     /* fast path: plenty of data available */
@@ -554,7 +546,8 @@ static uint16_t read_huffman_value(stream *s, vec tree) {
         // }
         // index <<= 1;
         // index |= (s->next_in[0] >> bit++) & 0x1u;
-        index = (index << 1) | readbits(s, 1); // TODO(peter): inline readbits(1)?
+        // TODO(peter): inline readbits(1)?
+        index = (index << 1) | readbits(s, 1);
         xassert(index < tree.len, "invalid index");
     } while (tree.d[index] == EMPTY_SENTINEL);
     // data->bit = bit;
@@ -732,17 +725,16 @@ int main(int argc, char **argv) {
     uint8_t bfinal, blktyp;
     vec lit_tree, dst_tree, dynlits, dyndists;
     struct priv_stream_data *priv_data = strm.stream_data;
+    /* safe to reload bitbuffer -- could hoist out of loop */
+    priv_data->buf = strm.next_in[0];
     do {
-        /* safe to reload bitbuffer -- could hoist out of loop */
-        priv_data->buf = strm.next_in[0];
         bfinal = readbits(&strm, 1);
         blktyp = readbits(&strm, 2);
         if (blktyp == NO_COMPRESSION) {
             DEBUG("No Compression Block%s", bfinal ? " -- Final Block" : "");
             /* For "No Compression" blocks, switch to byte-oriented reading,
              * temporarily violate preconditions of bit-oriented state. */
-            if (priv_data->bit != 0)
-                stream_read_consume(&strm, 1);
+            if (priv_data->bit != 0) stream_read_consume(&strm, 1);
             uint16_t len, nlen;
             if (strm.avail_in < 4) refill_or_panic(&strm);
             // 2-byte little endian read
@@ -766,6 +758,7 @@ int main(int argc, char **argv) {
                 stream_read_consume(&strm, avail);
                 len -= avail;
             } while (len > 0);
+
             /* Will always end on byte boundary for "No Compression" blocks.
              * Fixes preconditions of bit-oriented state. */
             priv_data->bit = 0;
