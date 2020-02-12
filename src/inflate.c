@@ -49,7 +49,7 @@ static const uint8_t ID2_GZIP = 139;
 #define EMPTY_SENTINEL UINT16_MAX
 #define READ_BUFFER_SIZE (1u << 16)
 #define WRIT_BUFFER_SIZE (1u << 16)
-#define WINDOW_SIZE      (1u << 16)
+#define WINDOW_SIZE (1u << 16)
 
 /* Header Flags */
 static const uint8_t FTEXT = 1u << 0;
@@ -133,7 +133,7 @@ typedef struct stream stream;
 
 struct priv_stream_data {
     uint8_t buf;
-    size_t  bit;
+    size_t bit;
 
     /* circular buffer window */
     uint32_t mask;
@@ -162,8 +162,7 @@ struct file_write_data {
 typedef struct file_write_data file_write_data;
 
 static void refill_or_panic(stream *s) {
-    if (s->refill(s) != 0)
-        panic("read error: %d", s->error);
+    if (s->refill(s) != 0) panic("read error: %d", s->error);
 }
 
 int refill_file(stream *s) {
@@ -214,7 +213,7 @@ static int init_priv_stream_data(stream *s, size_t size) {
 }
 
 static void init_file_stream(stream *s, file_read_data *read_data,
-                      file_write_data *write_data) {
+                             file_write_data *write_data) {
     s->next_in = &read_data->buf[0];
     s->avail_in = 0;
     s->total_in = 0;
@@ -243,23 +242,31 @@ FORCE_INLINE static void close_file_stream(stream *s) {
     fclose(write_data->fp);
 }
 
-// TODO(peter): force inline?
 FORCE_INLINE static void stream_read_consume(stream *s, size_t n) {
     assert(s->avail_in >= n);
     s->next_in += n;
     s->avail_in -= n;
     s->total_in += n;
-    // TODO(peter): add CRC32 calculatiion
+    // TODO(peter): add CRC32 calculation?
 }
 
-// TODO(peter): force inline?
 FORCE_INLINE static void stream_write_consume(stream *s, size_t n) {
     assert(s->avail_out >= n);
     s->next_out += n;
     s->avail_out -= n;
     s->total_out += n;
+    // TODO(peter): add CRC32 calculation?
 }
 
+FORCE_INLINE static void stream_flush_to_byte_boundary(stream *s) {
+    struct priv_stream_data *data = s->stream_data;
+    if (data->bit != 0) {
+        stream_read_consume(s, 1);
+        data->bit = 0;
+    }
+}
+
+/* only use for reading gzip data because assumes everything is byte oriented */
 static int stream_read(stream *s, void *buf, size_t n) {
     /* fast path: plenty of data available */
     if (s->avail_in >= n) {
@@ -270,8 +277,7 @@ static int stream_read(stream *s, void *buf, size_t n) {
 
     uint8_t *p = buf;
     do {
-        if (s->avail_in < n)
-            refill_or_panic(s);
+        if (s->avail_in < n) refill_or_panic(s);
         xassert(s->avail_in > 0 || s->avail_in == n,
                 "refill did not add any bytes!");
         size_t avail = MIN(n, s->avail_in);
@@ -369,10 +375,10 @@ static int stream_window(stream *s, size_t dist, size_t len) {
     size_t ll1 = MIN(bsize - head, len);
     size_t ll2 = len - ll1;
     for (size_t i = 0; i < ll1; ++i) {
-        w->wnd[head+i] = w->wnd[(start+i) & mask];
+        w->wnd[head + i] = w->wnd[(start + i) & mask];
     }
     for (size_t i = 0; i < ll2; ++i) {
-        w->wnd[   0+i] = w->wnd[(start+ll1+i) & mask];
+        w->wnd[0 + i] = w->wnd[(start + ll1 + i) & mask];
     }
 
     // flush window -- may require 2 writes in case wrapped
@@ -390,10 +396,9 @@ static int stream_window(stream *s, size_t dist, size_t len) {
     size_t len1 = MIN(bsize - start, len);
     size_t len2 = len - len1;
     if (s->avail_out < len)
-        if (s->flush(s) != 0)
-            return s->error;
-    memcpy(s->next_out +    0, &w->wnd[start], len1);
-    memcpy(s->next_out + len1, &w->wnd[    0], len2);
+        if (s->flush(s) != 0) return s->error;
+    memcpy(s->next_out + 0, &w->wnd[start], len1);
+    memcpy(s->next_out + len1, &w->wnd[0], len2);
     stream_write_consume(s, len);
     // w->head = hh;
     w->head = (head + len) & mask;
@@ -436,24 +441,26 @@ static char *read_null_terminated_string(stream *s) {
     }
 }
 
-static uint16_t readbits(stream *s, size_t *bit, size_t nbits) {
+static uint16_t readbits(stream *s, size_t nbits) {
     xassert(0 <= nbits && nbits <= 16, "invalid nbits: %zu", nbits);
+    struct priv_stream_data *data = s->stream_data;
     uint16_t result = 0;
+    size_t bit = data->bit;
     for (size_t i = 0; i < nbits; ++i) {
-        if (*bit == 8) {
+        if (bit == 8) {
             ++s->next_in;
-            if (--s->avail_in == 0)
-                refill_or_panic(s);
-            *bit = 0;
+            if (--s->avail_in == 0) refill_or_panic(s);
+            bit = 0;
         }
-        result |= ((s->next_in[0] >> *bit) & 0x1u) << i;
-        ++*bit;
+        result |= ((s->next_in[0] >> bit) & 0x1u) << i;
+        ++bit;
     }
+    data->bit = bit;
     return result;
 }
 
 static int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
-                      size_t n) {
+                             size_t n) {
     static size_t bl_count[MAX_HCODE_BIT_LENGTH];
     static uint16_t next_code[MAX_HCODE_BIT_LENGTH];
     static uint16_t codes[MAX_HUFFMAN_CODES];
@@ -501,11 +508,10 @@ static int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
     size_t table_size = 1u << (max_bit_length + 1);
     uint16_t *t;
     if (table_size > tree->len) {
-        if (tree->d)
-            s->zfree(s->alloc_data, (void*)tree->d);
+        if (tree->d) s->zfree(s->alloc_data, (void *)tree->d);
         t = s->zalloc(s->alloc_data, table_size, sizeof(*t));
     } else {
-        t = (uint16_t*)tree->d;
+        t = (uint16_t *)tree->d;
     }
     for (int j = 0; j < table_size; ++j) {
         t[j] = EMPTY_SENTINEL;
@@ -530,42 +536,42 @@ static int init_huffman_tree(stream *s, vec *tree, const uint16_t *code_lengths,
     return 0;
 }
 
-static uint16_t read_huffman_value(stream *s, size_t *bitp, vec tree) {
+static uint16_t read_huffman_value(stream *s, vec tree) {
     // TODO(peter): what is the maximum number of bits in a huffman code?
     //    fixed  : 9
     //    dymamic: ?
+    struct priv_stream_data *data = s->stream_data;
     size_t index = 1;
-    size_t bit = *bitp;
+    size_t bit = data->bit;
     do {
         if (bit == 8) {
             ++s->next_in;
-            if (--s->avail_in == 0)
-                refill_or_panic(s);
+            if (--s->avail_in == 0) refill_or_panic(s);
             bit = 0;
         }
         index <<= 1;
         index |= (s->next_in[0] >> bit++) & 0x1u;
         xassert(index < tree.len, "invalid index");
     } while (tree.d[index] == EMPTY_SENTINEL);
-    *bitp = bit;
+    data->bit = bit;
     return tree.d[index];
 }
 
-static int read_dynamic_trees(stream *s, size_t *bit, vec *lits, vec *dists) {
+static int read_dynamic_trees(stream *s, vec *lits, vec *dists) {
 #define NUM_CODE_LENGTHS 19
     const static uint16_t order[NUM_CODE_LENGTHS] = {
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
     static uint16_t lengths[NUM_CODE_LENGTHS];
 #define MAX_HTREE_BIT_LENGTH 8
     static uint16_t htree_data[1u << MAX_HTREE_BIT_LENGTH];
-    vec htree = { sizeof(htree_data), &htree_data[0] };
-    size_t hlit = readbits(s, bit, 5) + 257;
-    size_t hdist = readbits(s, bit, 5) + 1;
-    size_t hclen = readbits(s, bit, 4) + 4;
+    vec htree = {sizeof(htree_data), &htree_data[0]};
+    size_t hlit = readbits(s, 5) + 257;
+    size_t hdist = readbits(s, 5) + 1;
+    size_t hclen = readbits(s, 4) + 4;
     size_t ncodes = hlit + hdist;
     memset(&lengths, 0, sizeof(lengths));
     for (size_t i = 0; i < hclen; ++i) {
-        lengths[order[i]] = readbits(s, bit, 3);
+        lengths[order[i]] = readbits(s, 3);
     }
 
     if (init_huffman_tree(s, &htree, &lengths[0], NUM_CODE_LENGTHS) != 0)
@@ -580,7 +586,7 @@ static int read_dynamic_trees(stream *s, size_t *bit, vec *lits, vec *dists) {
     xassert(ncodes <= MAX_CODE_LENGTHS, "too many dynamic code lengths");
     size_t idx = 0;
     while (idx < ncodes) {
-        uint16_t value = read_huffman_value(s, bit, htree);
+        uint16_t value = read_huffman_value(s, htree);
         if (value <= 15) {
             dynamic_code_lengths[idx++] = value;
         } else if (value <= 18) {
@@ -604,7 +610,7 @@ static int read_dynamic_trees(stream *s, size_t *bit, vec *lits, vec *dists) {
             }
             xassert(16 <= value && value <= 18,
                     "didn't cover all cases for value");
-            int rtimes = readbits(s, bit, nbits) + offset;
+            int rtimes = readbits(s, nbits) + offset;
             xassert(rtimes > 0, "invalid repeat value");
             while (rtimes-- > 0) {
                 dynamic_code_lengths[idx++] = rvalue;
@@ -719,20 +725,16 @@ int main(int argc, char **argv) {
 
     /* know at this point that are on a byte boundary as all previous fields
      * have been byte sized */
-    size_t bit = 0;
     uint8_t bfinal, blktyp;
     vec lit_tree, dst_tree, dynlits, dyndists;
     do {
-        bfinal = readbits(&strm, &bit, 1);
-        blktyp = readbits(&strm, &bit, 2);
+        bfinal = readbits(&strm, 1);
+        blktyp = readbits(&strm, 2);
         if (blktyp == NO_COMPRESSION) {
             DEBUG("No Compression Block%s", bfinal ? " -- Final Block" : "");
-            // flush bit buffer to be on byte boundary
-            if (bit != 0) stream_read_consume(&strm, 1);
-            bit = 0;
+            stream_flush_to_byte_boundary(&strm);
             uint16_t len, nlen;
-            if (strm.avail_in < 4)
-                refill_or_panic(&strm);
+            if (strm.avail_in < 4) refill_or_panic(&strm);
             // 2-byte little endian read
             len = (strm.next_in[1] << 8) | strm.next_in[0];
             // 2-byte little endian read
@@ -740,7 +742,6 @@ int main(int argc, char **argv) {
             stream_read_consume(&strm, 4);
             if ((len & 0xffffu) != (nlen ^ 0xffffu))
                 panic("invalid stored block lengths: %u %u", len, nlen);
-            DEBUG("\tlen = %u, nlen = %u", len, nlen);
             do {
                 if (strm.avail_in < len)
                     // XXX(peter): could hoist error check to end, would write
@@ -768,14 +769,14 @@ int main(int argc, char **argv) {
             } else {
                 DEBUG("Dynamic Huffman Block%s",
                       bfinal ? " -- Final Block" : "");
-                if (read_dynamic_trees(&strm, &bit, &dynlits, &dyndists) != 0)
+                if (read_dynamic_trees(&strm, &dynlits, &dyndists) != 0)
                     panic("failed to read dynamic huffman trees");
                 lit_tree = dynlits;
                 dst_tree = dyndists;
             }
 
             for (;;) {
-                uint16_t value = read_huffman_value(&strm, &bit, lit_tree);
+                uint16_t value = read_huffman_value(&strm, lit_tree);
                 if (value < 256) {
                     uint8_t c = (uint8_t)value;
                     if (stream_write(&strm, &c, sizeof(c)) != 0)
@@ -792,15 +793,14 @@ int main(int argc, char **argv) {
                     value -= LENGTH_BASE_CODE;
                     size_t base_length = LENGTH_BASES[value];
                     size_t extra_length =
-                        readbits(&strm, &bit, LENGTH_EXTRA_BITS[value]);
+                        readbits(&strm, LENGTH_EXTRA_BITS[value]);
                     size_t length = base_length + extra_length;
                     xassert(length <= 258, "invalid length");
-                    size_t distance_code =
-                        read_huffman_value(&strm, &bit, dst_tree);
+                    size_t distance_code = read_huffman_value(&strm, dst_tree);
                     xassert(distance_code < 32, "invalid distance code");
                     size_t base_distance = DISTANCE_BASES[distance_code];
-                    size_t extra_distance = readbits(
-                        &strm, &bit, DISTANCE_EXTRA_BITS[distance_code]);
+                    size_t extra_distance =
+                        readbits(&strm, DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
                     if (check_distance(&strm, distance) != 0)
                         panic("invalid distance: dist=%zu wnd=%zu cap=%zu",
