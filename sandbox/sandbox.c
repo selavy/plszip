@@ -127,7 +127,6 @@ local int gunpipe(z_stream *strm, int infile, int outfile)
 
     /* decompress concatenated gzip streams */
     have = 0;                               /* no input data read in yet */
-    first = 1;                              /* looking for first gzip header */
     strm->next_in = Z_NULL;                 /* so Z_BUF_ERROR means EOF */
     for (;;) {
         /* look for the two magic header bytes for a gzip stream */
@@ -140,10 +139,9 @@ local int gunpipe(z_stream *strm, int infile, int outfile)
         // if (last != 31 || (NEXT() != 139 && last != 157)) {
         if (!(last == 31 && NEXT() == 139)) {
             strm->msg = (char *)"incorrect header check";
-            ret = first ? Z_DATA_ERROR : Z_ERRNO;
+            ret = Z_DATA_ERROR;
             break;                          /* not a gzip or compress header */
         }
-        first = 0;                          /* next non-header is junk */
 
         /* process remainder of gzip header */
         ret = Z_BUF_ERROR;
@@ -232,7 +230,9 @@ local int gunpipe(z_stream *strm, int infile, int outfile)
             break;
         }
 
-        /* go back and look for another gzip stream */
+        if (NEXT() == -1) {
+            ret = Z_OK;
+        }
     }
 
     /* clean up and return */
