@@ -128,111 +128,108 @@ local int gunpipe(z_stream *strm, int infile, int outfile)
     /* decompress concatenated gzip streams */
     have = 0;                               /* no input data read in yet */
     strm->next_in = Z_NULL;                 /* so Z_BUF_ERROR means EOF */
-    for (;;) {
-        /* look for the two magic header bytes for a gzip stream */
-        if (NEXT() == -1) {
-            ret = Z_OK;
-            break;                          /* empty gzip stream is ok */
-        }
 
-        // GZIP => ID1 = 31 (0x1f) ; ID2 = 139 (0x8b)
-        // if (last != 31 || (NEXT() != 139 && last != 157)) {
-        if (!(last == 31 && NEXT() == 139)) {
-            strm->msg = (char *)"incorrect header check";
-            ret = Z_DATA_ERROR;
-            break;                          /* not a gzip or compress header */
-        }
+    if (NEXT() == -1) {
+        ret = Z_OK;
+        return ret;                          /* empty gzip stream is ok */
+    }
 
-        /* process remainder of gzip header */
-        ret = Z_BUF_ERROR;
-        if (NEXT() != 8) {                  /* only deflate method allowed */
-            if (last == -1) break;
-            strm->msg = (char *)"unknown compression method";
-            ret = Z_DATA_ERROR;
-            break;
+    /* look for the two magic header bytes for a gzip stream */
+    if (!(last == 31 && NEXT() == 139)) {
+        strm->msg = (char *)"incorrect header check";
+        ret = Z_DATA_ERROR;
+        return ret;                          /* not a gzip or compress header */
+    }
+
+    /* process remainder of gzip header */
+    ret = Z_BUF_ERROR;
+    if (NEXT() != 8) {                  /* only deflate method allowed */
+        if (last == -1) return ret;
+        strm->msg = (char *)"unknown compression method";
+        ret = Z_DATA_ERROR;
+        return ret;
+    }
+    flags = NEXT();                     /* header flags */
+    NEXT();                             /* discard mod time, xflgs, os */
+    NEXT();
+    NEXT();
+    NEXT();
+    NEXT();
+    NEXT();
+    if (last == -1) return ret;
+    if (flags & 0xe0) {
+        strm->msg = (char *)"unknown header flags set";
+        ret = Z_DATA_ERROR;
+        return ret;
+    }
+    if (flags & 4) {                    /* extra field */
+        len = NEXT();
+        len += (unsigned)(NEXT()) << 8;
+        if (last == -1) return ret;
+        while (len > have) {
+            len -= have;
+            have = 0;
+            if (NEXT() == -1) break;
+            len--;
         }
-        flags = NEXT();                     /* header flags */
-        NEXT();                             /* discard mod time, xflgs, os */
+        if (last == -1) return ret;
+        have -= len;
+        next += len;
+    }
+    if (flags & 8)                      /* file name */
+        while (NEXT() != 0 && last != -1)
+            ;
+    if (flags & 16)                     /* comment */
+        while (NEXT() != 0 && last != -1)
+            ;
+    if (flags & 2) {                    /* header crc */
         NEXT();
         NEXT();
-        NEXT();
-        NEXT();
-        NEXT();
-        if (last == -1) break;
-        if (flags & 0xe0) {
-            strm->msg = (char *)"unknown header flags set";
-            ret = Z_DATA_ERROR;
-            break;
-        }
-        if (flags & 4) {                    /* extra field */
-            len = NEXT();
-            len += (unsigned)(NEXT()) << 8;
-            if (last == -1) break;
-            while (len > have) {
-                len -= have;
-                have = 0;
-                if (NEXT() == -1) break;
-                len--;
-            }
-            if (last == -1) break;
-            have -= len;
-            next += len;
-        }
-        if (flags & 8)                      /* file name */
-            while (NEXT() != 0 && last != -1)
-                ;
-        if (flags & 16)                     /* comment */
-            while (NEXT() != 0 && last != -1)
-                ;
-        if (flags & 2) {                    /* header crc */
-            NEXT();
-            NEXT();
-        }
-        if (last == -1) break;
+    }
+    if (last == -1) return ret;
 
-        /* set up output */
-        outd.outfile = outfile;
-        outd.check = 1;
-        outd.crc = crc32(0L, Z_NULL, 0);
-        outd.total = 0;
+    /* set up output */
+    outd.outfile = outfile;
+    outd.check = 1;
+    outd.crc = crc32(0L, Z_NULL, 0);
+    outd.total = 0;
 
-        /* decompress data to output */
-        strm->next_in = next;
-        strm->avail_in = have;
-        ret = inflateBack(strm, in, indp, out, &outd);
-        if (ret != Z_STREAM_END) break;
-        next = strm->next_in;
-        have = strm->avail_in;
-        strm->next_in = Z_NULL;             /* so Z_BUF_ERROR means EOF */
+    /* decompress data to output */
+    strm->next_in = next;
+    strm->avail_in = have;
+    ret = inflateBack(strm, in, indp, out, &outd);
+    if (ret != Z_STREAM_END) return ret;
+    next = strm->next_in;
+    have = strm->avail_in;
+    strm->next_in = Z_NULL;             /* so Z_BUF_ERROR means EOF */
 
-        /* check trailer */
-        ret = Z_BUF_ERROR;
-        if (NEXT() != (int)(outd.crc & 0xff) ||
+    /* check trailer */
+    ret = Z_BUF_ERROR;
+    if (NEXT() != (int)(outd.crc & 0xff) ||
             NEXT() != (int)((outd.crc >> 8) & 0xff) ||
             NEXT() != (int)((outd.crc >> 16) & 0xff) ||
             NEXT() != (int)((outd.crc >> 24) & 0xff)) {
-            /* crc error */
-            if (last != -1) {
-                strm->msg = (char *)"incorrect data check";
-                ret = Z_DATA_ERROR;
-            }
-            break;
+        /* crc error */
+        if (last != -1) {
+            strm->msg = (char *)"incorrect data check";
+            ret = Z_DATA_ERROR;
         }
-        if (NEXT() != (int)(outd.total & 0xff) ||
+        return ret;
+    }
+    if (NEXT() != (int)(outd.total & 0xff) ||
             NEXT() != (int)((outd.total >> 8) & 0xff) ||
             NEXT() != (int)((outd.total >> 16) & 0xff) ||
             NEXT() != (int)((outd.total >> 24) & 0xff)) {
-            /* length error */
-            if (last != -1) {
-                strm->msg = (char *)"incorrect length check";
-                ret = Z_DATA_ERROR;
-            }
-            break;
+        /* length error */
+        if (last != -1) {
+            strm->msg = (char *)"incorrect length check";
+            ret = Z_DATA_ERROR;
         }
+        return ret;
+    }
 
-        if (NEXT() == -1) {
-            ret = Z_OK;
-        }
+    if (NEXT() == -1) {
+        ret = Z_OK;
     }
 
     /* clean up and return */
