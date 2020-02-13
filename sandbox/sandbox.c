@@ -9,6 +9,8 @@
 #include <utime.h>
 #include "zlib.h"
 
+#define INFBACK 0
+
 /* function declaration */
 #define local static
 
@@ -195,9 +197,39 @@ local int gunpipe(z_stream *strm, int infile, int outfile)
     outd.total = 0;
 
     /* decompress data to output */
+
+    // printf("have = %u\n", have);
+    for (int i = 0; i < 4; ++i) {
+        printf("%02x %02x %02x %02x\n",
+                next[i+0], next[i+1], next[i+2], next[i+3]);
+    }
+
     strm->next_in = next;
     strm->avail_in = have;
+#if INFBACK
     ret = inflateBack(strm, in, indp, out, &outd);
+#else
+    // TEMP TEMP: only works on small buffers, would normally
+    // need to call this in a loop, but just for testing only
+    // calling once.
+    ret = inflate(strm, Z_NO_FLUSH);
+    if (ret == Z_STREAM_END) {
+        size_t len = SIZE - strm->avail_out;
+        printf("Writing data: %zu\n", len);
+        do {
+            unsigned char *buf = outbuf;
+            ret = PIECE;
+            if ((unsigned)ret > len)
+                ret = (int)len;
+            ret = (int)write(outd.outfile, buf, ret);
+            if (ret == -1)
+                return 1;
+            buf += ret;
+            len -= ret;
+        } while (len != 0);
+        ret = Z_STREAM_END;
+    }
+#endif
     if (ret != Z_STREAM_END) return ret;
     next = strm->next_in;
     have = strm->avail_in;
@@ -366,7 +398,12 @@ int main(int argc, char **argv)
     strm.zalloc = Z_NULL;
     strm.zfree = Z_NULL;
     strm.opaque = Z_NULL;
+#if INFBACK
     ret = inflateBackInit(&strm, 15, window);
+#else
+    // ret = inflateInit(&strm);
+    ret = inflateInit2(&strm, 15);
+#endif
     if (ret != Z_OK) {
         fprintf(stderr, "gun out of memory error--aborting\n");
         return 1;
@@ -423,6 +460,10 @@ int main(int argc, char **argv)
         ret = gunzip(&strm, NULL, NULL, test);
 
     /* clean up */
+#if INFBACK
     inflateBackEnd(&strm);
+#else
+    inflateEnd(&strm);
+#endif
     return ret;
 }
