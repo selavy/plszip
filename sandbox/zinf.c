@@ -84,7 +84,8 @@ int main(int argc, char **argv) {
     dst = outname ? fopen(outname, "wb") : stdout;
     if (!src || !dst) panic("failed to open i/o");
 
-#if 1
+#define PARSE_GZIP_HEADER 0
+#if PARSE_GZIP_HEADER
     id1 = next();
     id2 = next();
     if (id1 != 31 && id2 != 139) panic("invalid gzip header: %u %u", id1, id2);
@@ -123,7 +124,13 @@ int main(int argc, char **argv) {
     strm.opaque = Z_NULL;
     strm.avail_in = have;
     strm.next_in = in;
+#if PARSE_GZIP_HEADER
     ret = inflateInit2(&strm, -15);
+#else
+    const int GZIP_ONLY    = 16;
+    const int GZIP_OR_ZLIB = 32;
+    ret = inflateInit2(&strm, 15+GZIP_ONLY);
+#endif
     printf("result of inflateInit: %s\n", xlate(ret));
     if (ret != Z_OK) panic("deflateInit failed: %d", ret);
 
