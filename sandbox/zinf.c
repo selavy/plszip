@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
 #else
     const int GZIP_ONLY    = 16;
     const int GZIP_OR_ZLIB = 32;
-    ret = inflateInit2(&strm, 15+GZIP_ONLY);
+    ret = inflateInit2(&strm, 15+GZIP_OR_ZLIB);
 #endif
     printf("result of inflateInit: %s\n", xlate(ret));
     if (ret != Z_OK) panic("deflateInit failed: %d", ret);
