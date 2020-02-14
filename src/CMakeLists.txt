@@ -11,8 +11,10 @@ target_compile_features(compress PUBLIC cxx_std_17)
 
 add_executable(inflate inflate.c)
 target_compile_features(inflate PUBLIC c_std_99)
+
 add_executable(inflate2 inflate2.cpp)
 target_compile_features(inflate2 PUBLIC cxx_std_17)
+target_link_libraries(inflate2 PUBLIC ZLIB::ZLIB)
 
 add_executable(gen_fixed_huffman gen_fixed_huffman.c)
 target_compile_features(gen_fixed_huffman PUBLIC c_std_99)
