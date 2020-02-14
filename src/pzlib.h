@@ -1,4 +1,4 @@
 #pragma once
 
 #include "zlib.h"
-#define USE_ZLIB
+// #define USE_ZLIB
