@@ -44,9 +44,9 @@ int main(int argc, char **argv) {
     strm.zalloc = Z_NULL;
     strm.zfree = Z_NULL;
     strm.opaque = Z_NULL;
-    ret = inflateInit2(&strm, 15 + 16);
+    ret = inflateInit2(&strm, 15 + 17);
     if (ret != Z_OK) {
-        fprintf(stderr, "error: failed to initialize inflate library\n");
+        fprintf(stderr, "error: failed to initialize inflate library: %s\n", strm.msg);
         goto exit;
     }
 

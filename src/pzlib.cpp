@@ -20,6 +20,11 @@ int inflateInit2_(z_streamp strm, int  windowBits, const char *version, int stre
     if (stream_size != sizeof(z_stream)) {
         return Z_VERSION_ERROR;
     }
+    if (windowBits != 15+16) {
+        strm->msg = "Invalid windowBits parameter -- 31 only supported value";
+        return Z_STREAM_ERROR;
+    }
+
     return Z_OK;
 }
 
@@ -32,7 +37,7 @@ int inflateEnd(z_streamp strm)
 int inflate(z_streamp strm, int flush)
 {
     printf("pzlib::inflate\n");
-    strm->msg = (char*)"Not yet implemented";
+    strm->msg = "Not yet implemented";
     return Z_DATA_ERROR;
 }
 
