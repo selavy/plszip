@@ -7,7 +7,8 @@
 
 /* -------------------------------------------------------------------------- */
 
-#define SIZE 32768U
+// #define SIZE 32768U
+#define SIZE 1U
 #define PARSE_GZIP 16
 
 int main(int argc, char **argv) {
@@ -44,7 +45,7 @@ int main(int argc, char **argv) {
     strm.zalloc = Z_NULL;
     strm.zfree = Z_NULL;
     strm.opaque = Z_NULL;
-    ret = inflateInit2(&strm, 15 + 17);
+    ret = inflateInit2(&strm, 15 + 16);
     if (ret != Z_OK) {
         fprintf(stderr, "error: failed to initialize inflate library: %s\n", strm.msg);
         goto exit;
@@ -63,7 +64,12 @@ int main(int argc, char **argv) {
         do {
             strm.avail_out = SIZE;
             strm.next_out = (Bytef *)obuf;
+// TEMP TEMP: use different name to not confuse gdb
+#ifdef USE_ZLIB
             ret = inflate(&strm, Z_NO_FLUSH);
+#else
+            ret = PZ_inflate(&strm, Z_NO_FLUSH);
+#endif
             switch (ret) {
                 case Z_NEED_DICT:
                 case Z_DATA_ERROR:
