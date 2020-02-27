@@ -70,17 +70,22 @@ int main(int argc, char **argv) {
 #else
             ret = PZ_inflate(&strm, Z_NO_FLUSH);
 #endif
-            switch (ret) {
-                case Z_STREAM_ERROR:
-                case Z_NEED_DICT:
-                case Z_DATA_ERROR:
-                case Z_MEM_ERROR:
-                    inflateEnd(&strm);
-                    fprintf(stderr, "inflate error[%d]: %s\n", ret, strm.msg);
-                    goto exit;
-                default:
-                    break;
+            if (ret < Z_OK) {
+                inflateEnd(&strm);
+                fprintf(stderr, "inflate error[%d]: %s\n", ret, strm.msg);
+                goto exit;
             }
+            // switch (ret) {
+            //     case Z_STREAM_ERROR:
+            //     case Z_NEED_DICT:
+            //     case Z_DATA_ERROR:
+            //     case Z_MEM_ERROR:
+            //         inflateEnd(&strm);
+            //         fprintf(stderr, "inflate error[%d]: %s\n", ret, strm.msg);
+            //         goto exit;
+            //     default:
+            //         break;
+            // }
             have = SIZE - strm.avail_out;
             if (fwrite(obuf, 1, have, dst) != have || ferror(dst)) {
                 ret = errno;
