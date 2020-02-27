@@ -71,11 +71,12 @@ int main(int argc, char **argv) {
             ret = PZ_inflate(&strm, Z_NO_FLUSH);
 #endif
             switch (ret) {
+                case Z_STREAM_ERROR:
                 case Z_NEED_DICT:
                 case Z_DATA_ERROR:
                 case Z_MEM_ERROR:
                     inflateEnd(&strm);
-                    fprintf(stderr, "inflate error: %s\n", strm.msg);
+                    fprintf(stderr, "inflate error[%d]: %s\n", ret, strm.msg);
                     goto exit;
                 default:
                     break;

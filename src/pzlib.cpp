@@ -136,6 +136,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     uLong read = 0;
     uInt use;
     uint8_t id1, id2, cm;
+    uint32_t mtime;
 
     // auto PEEKBITS = [buff, bits](uInt n) -> uInt {
     //     assert(bits >= n);
@@ -167,47 +168,33 @@ int PZ_inflate(z_streamp strm, int flush) {
             DROPBITS(8 + 8 + 8);
 
             mode = FLAGS;
-#if 0
         case FLAGS:
-            if (avail == 0)
-                goto exit;
-            --avail;
-            ++read;
-            state->flg = *next++;
-            DEBUG("\tFLG   = %u", state->flg);
-            have = 0;
-            last = 0;
+            NEEDBITS(8);
+            state->flg = PEEKBITS(8);
+            DEBUG("\tFLG   = %3u", state->flg);
+            DROPBITS(8);
             mode = MTIME;
         case MTIME:
-            while (have < 4) {
-                if (avail == 0)
-                    goto exit;
-                --avail;
-                ++read;
-                last |= *next++ << (8*have++);
-            }
-            DEBUG("\tMTIME = %lu", last);
-            have = 0;
-            last = 0;
+            NEEDBITS(32);
+            mtime = 0;
+            mtime |= ((buff >>  0) & 0xFFu) << 24;
+            mtime |= ((buff >>  8) & 0xFFu) << 16;
+            mtime |= ((buff >> 16) & 0xFFu) <<  8;
+            mtime |= ((buff >> 24) & 0xFFu) <<  0;
+            DEBUG("\tMTIME = %u", mtime);
+            DROPBITS(32);
             mode = XFL;
         case XFL:
-            if (avail == 0)
-                goto exit;
-            --avail;
-            ++read;
-            last = *next++;
-            DEBUG("\tXFL   = %lu", last);
+            NEEDBITS(8);
+            DEBUG("\tXFL   = %lu", buff);
+            DROPBITS(8);
             mode = OS;
         case OS:
-            if (avail == 0)
-                goto exit;
-            --avail;
-            ++read;
-            last = *next++;
-            DEBUG("\tOS    = %lu", last);
+            NEEDBITS(8);
+            DEBUG("\tOS    = %lu", buff);
+            DROPBITS(8);
             mode = FEXTRA;
-            last = 0;
-            have = 0;
+#if 0
         case FEXTRA:
             if ((state->flg & (1u << 2)) != 0) {
                 while (have < 2) {
