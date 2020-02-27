@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string> // TEMP TEMP
 
 #ifdef NDEBUG
 #define DEBUG
@@ -21,6 +22,7 @@ enum inflate_mode {
     XFL,    /* XFL */
     OS,     /* OS */
     FEXTRA, /* FEXTRA fields */
+    FEXTRA_DATA,
     FNAME,
     FCOMMENT,
     FHCRC,
@@ -30,9 +32,11 @@ typedef enum inflate_mode inflate_mode;
 
 struct internal_state {
     inflate_mode mode;
-    uInt bits;  /* # of bits in bit accumulator */
+    uInt  bits; /* # of bits in bit accumulator */
     uLong buff; /* bit accumator */
-    Byte flg;
+    uLong temp;
+    Byte  flag;
+    std::string filename;
 };
 
 voidpf zcalloc(voidpf opaque, uInt items, uInt size) {
@@ -79,6 +83,8 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version,
     strm->state->mode = HEADER;
     strm->state->buff = 0UL;
     strm->state->bits = 0;
+    strm->state->flag = 0;
+    strm->state->temp = 0;
 
     return Z_OK;
 }
@@ -124,7 +130,7 @@ static char msgbuf[1024];
     } while (0)
 
 int PZ_inflate(z_streamp strm, int flush) {
-    printf("pzlib::inflate\n");
+    // printf("pzlib::inflate\n");
 
     int ret = Z_OK;
     struct internal_state *state = strm->state;
@@ -137,6 +143,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     uInt use;
     uint8_t id1, id2, cm;
     uint32_t mtime;
+    uint16_t xlen, crc16;
 
     // auto PEEKBITS = [buff, bits](uInt n) -> uInt {
     //     assert(bits >= n);
@@ -170,8 +177,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             mode = FLAGS;
         case FLAGS:
             NEEDBITS(8);
-            state->flg = PEEKBITS(8);
-            DEBUG("\tFLG   = %3u", state->flg);
+            state->flag = PEEKBITS(8);
+            DEBUG("\tFLG   = %3u", state->flag);
             DROPBITS(8);
             mode = MTIME;
         case MTIME:
@@ -186,71 +193,67 @@ int PZ_inflate(z_streamp strm, int flush) {
             mode = XFL;
         case XFL:
             NEEDBITS(8);
-            DEBUG("\tXFL   = %lu", buff);
+            DEBUG("\tXFL   = %3lu", PEEKBITS(8));
             DROPBITS(8);
             mode = OS;
         case OS:
             NEEDBITS(8);
-            DEBUG("\tOS    = %lu", buff);
+            DEBUG("\tOS    = %3lu", PEEKBITS(8));
             DROPBITS(8);
             mode = FEXTRA;
-#if 0
         case FEXTRA:
-            if ((state->flg & (1u << 2)) != 0) {
-                while (have < 2) {
-                    if (avail == 0)
-                        goto exit;
-                    --avail;
-                    ++read;
-                    last |= *next++ << (8*have++);
-                }
-                DEBUG("\tXLEN = %lu", last);
-                while (last > 0) {
-                    if (avail == 0)
-                        goto exit;
-                    --avail;
-                    --last;
-                }
+            state->temp = 0;
+            if ((state->flag & (1u << 2)) != 0) {
+                NEEDBITS(2*8);
+                state->temp |= ((buff >> 0) & 0xFFu) << 8;
+                state->temp |= ((buff >> 8) & 0xFFu) << 0;
             }
-            last = 0;
-            have = 0;
+            mode = FEXTRA_DATA;
+        case FEXTRA_DATA:
+            while (state->temp > 0) {
+                NEEDBITS(8);
+                DROPBITS(8);
+                state->temp--;
+            }
             mode = FNAME;
         case FNAME:
-            if ((state->flg & (1u << 3)) != 0) {
+            if ((state->flag & (1u << 3)) != 0) {
                 for (;;) {
-                    if (avail == 0)
-                        goto exit;
-                    --avail;
-                    if (*next++ == '\0')
+                    NEEDBITS(8);
+                    state->filename.push_back((char)PEEKBITS(8));
+                    DROPBITS(8);
+                    if (state->filename.back() == '\0') {
+                        state->filename.pop_back();
                         break;
+                    }
                 }
+                DEBUG("Original Filename: '%s'", state->filename.c_str());
             }
             mode = FCOMMENT;
         case FCOMMENT:
-            if ((state->flg & (1u << 4)) != 0) {
+            if ((state->flag & (1u << 4)) != 0) {
                 for (;;) {
-                    if (avail == 0)
-                        goto exit;
-                    --avail;
-                    if (*next++ == '\0')
+                    NEEDBITS(8);
+                    if (PEEKBITS(8) == '\0') {
+                        DROPBITS(8);
                         break;
+                    }
+                    DROPBITS(8);
                 }
             }
             mode = FHCRC;
         case FHCRC:
-            if ((state->flg & (1u << 1)) != 0) {
-                while (have < 2) {
-                    if (avail == 0)
-                        goto exit;
-                    --avail;
-                    last |= *next++ << (8*have++);
-                }
-                DEBUG("\tCRC = %lu", last);
-                have = 0;
-                last = 0;
+            if ((state->flag & (1u << 1)) != 0) {
+                crc16 = 0;
+                crc16 |= ((buff >>  0) & 0xFFu) << 8;
+                crc16 |= ((buff >>  8) & 0xFFu) << 0;
+                NEEDBITS(16);
+                DEBUG("\tCRC = %u", crc16);
+                DROPBITS(16);
             }
             DEBUG("Finished parsing GZIP header");
             mode = BEGIN_BLOCK;
+#if 0
         case BEGIN_BLOCK:
             DEBUG("BEGIN_BLOCK");
             if (have == 0) {
