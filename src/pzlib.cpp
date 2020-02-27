@@ -2,6 +2,7 @@
 
 #ifndef USE_ZLIB
 
+#include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +15,7 @@
 #endif
 
 enum inflate_mode {
-    HEADER, /* | ID1 | ID2 | CM | */
+    HEADER, /* ID1 | ID2 | CM */
     FLAGS,  /* FLG */
     MTIME,  /* MTIME */
     XFL,    /* XFL */
@@ -29,8 +30,8 @@ typedef enum inflate_mode inflate_mode;
 
 struct internal_state {
     inflate_mode mode;
-    uInt have;
-    uLong last;
+    uInt bits;  /* # of bits in bit accumulator */
+    uLong buff; /* bit accumator */
     Byte flg;
 };
 
@@ -76,7 +77,8 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version,
     }
 
     strm->state->mode = HEADER;
-    strm->state->last = 0UL;
+    strm->state->buff = 0UL;
+    strm->state->bits = 0;
 
     return Z_OK;
 }
@@ -98,6 +100,29 @@ static char msgbuf[1024];
         goto exit;                                            \
     } while (0)
 
+#define NEXTBYTE()                    \
+    do {                              \
+        if (avail == 0) goto exit;    \
+        avail--;                      \
+        buff = (buff << 8) | *next++; \
+        read++;                       \
+        bits += 8;                    \
+    } while (0)
+
+#define NEEDBITS(n)                    \
+    do {                               \
+        while (bits < (n)) NEXTBYTE(); \
+    } while (0)
+
+#define PEEKBITS(n) (buff & ((1u << (n)) - 1))
+
+#define DROPBITS(n)          \
+    do {                     \
+        assert(bits >= (n)); \
+        buff >>= (n);        \
+        bits -= (n);         \
+    } while (0)
+
 int PZ_inflate(z_streamp strm, int flush) {
     printf("pzlib::inflate\n");
 
@@ -106,10 +131,16 @@ int PZ_inflate(z_streamp strm, int flush) {
     inflate_mode mode = state->mode;
     z_const Bytef *next = strm->next_in;
     uInt avail = strm->avail_in;
-    uInt have = state->have;
-    uLong last = state->last;
+    uInt bits = state->bits;
+    uLong buff = state->buff;
     uLong read = 0;
     uInt use;
+    uint8_t id1, id2, cm;
+
+    // auto PEEKBITS = [buff, bits](uInt n) -> uInt {
+    //     assert(bits >= n);
+    //     return buff & ((1u << n) - 1);
+    // };
 
     if (strm->next_in == Z_NULL || strm->next_out == Z_NULL) {
         return Z_STREAM_ERROR;
@@ -117,33 +148,26 @@ int PZ_inflate(z_streamp strm, int flush) {
 
     switch (mode) {
         case HEADER:
-            while (have < 3) {
-                if (avail == 0) {
-                    goto exit;
-                }
-                --avail;
-                ++read;
-                ++have;
-                last = (last << 8) | *next++;
-            }
-
-            if (
-                    ((last >> 16) & 0xFFu) != 0x1Fu ||
-                    ((last >>  8) & 0xFFu) != 0x8Bu
-            ) {
+            NEEDBITS(8 + 8 + 8);
+            id1 = (buff >> 16) & 0xFFu;
+            id2 = (buff >> 8) & 0xFFu;
+            cm = (buff >> 0) & 0xFFu;
+            if (id1 != 0x1Fu || id2 != 0x8Bu) {
                 panic(Z_DATA_ERROR, "invalid gzip header bytes: 0x%02x 0x%02x",
-                        (uInt)((last >> 16) & 0xFFu),
-                        (uInt)((last >>  8) & 0xFFu));
+                      id1, id2);
             }
-            if ((last & 0xFFu) != 8) {
-                panic(Z_DATA_ERROR, "invalid compression method: %u", (uInt)(last & 0xFFu));
+            if (cm != 8) {
+                panic(Z_DATA_ERROR, "invalid compression method: %u", cm);
             }
 
             DEBUG("GZIP HEADER");
-            DEBUG("\tID1   = %lu (0x%02lx)", ((last >> 16) & 0xFFu), ((last >> 16) & 0xFFu));
-            DEBUG("\tID2   = %lu (0x%02lx)", ((last >>  8) & 0xFFu), ((last >> 16) & 0xFFu));
-            DEBUG("\tCM    = %lu", ((last >>  0) & 0xFFu));
+            DEBUG("\tID1   = %3u (0x%02x)", id1, id1);
+            DEBUG("\tID2   = %3u (0x%02x)", id2, id2);
+            DEBUG("\tCM    = %3u", cm);
+            DROPBITS(8 + 8 + 8);
+
             mode = FLAGS;
+#if 0
         case FLAGS:
             if (avail == 0)
                 goto exit;
@@ -242,6 +266,13 @@ int PZ_inflate(z_streamp strm, int flush) {
             mode = BEGIN_BLOCK;
         case BEGIN_BLOCK:
             DEBUG("BEGIN_BLOCK");
+            if (have == 0) {
+                if (avail == 0)
+                    goto exit;
+                --avail;
+                last = *next
+            }
+#endif
         default:
             panic(Z_STREAM_ERROR, "state not implemented yet: %d", mode);
     }
@@ -250,8 +281,8 @@ exit:
     strm->next_in = next;
     strm->avail_in = avail;
     strm->total_in += read;
-    state->have = have;
-    state->last = last;
+    state->bits = bits;
+    state->buff = buff;
     state->mode = mode;
 
     return ret;

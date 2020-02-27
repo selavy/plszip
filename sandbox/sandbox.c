@@ -285,7 +285,9 @@ local void copymeta(char *from, char *to)
     (void)chmod(to, was.st_mode & 07777);
 
     /* copy owner's user and group, ignore errors */
-    (void)chown(to, was.st_uid, was.st_gid);
+    if (chown(to, was.st_uid, was.st_gid) != 0) {
+        fprintf(stderr, "failed to chown file\n");
+    }
 
     /* copy access and modify times, ignore errors */
     when.actime = was.st_atime;
