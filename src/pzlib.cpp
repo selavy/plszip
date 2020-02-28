@@ -323,20 +323,33 @@ int PZ_inflate(z_streamp strm, int flush) {
         case NO_COMPRESSION_READ:
             // precondition: on a byte boundary
             // NOTE: switching to byte-oriented reading/writing
-
-            // DEBUG("NO_COMPRESSION_READ: state->len = %u", state->len);
-            while (state->len > 0) {
-                NEEDBITS(8);
-                if (avail_out == 0) goto exit;
-                *out++ = (Bytef)PEEKBITS(8);
-                avail_out--;
-                state->len--;
-                wrote++;
-                DROPBITS(8);
+            {
+                // should be on a byte boundary at this point after flush to byte boundary
+                // then 2 x 2B reads
+                assert(bits % 8 == 0);
+                int bytes = bits / 8;
+                int amount = std::min<int>(bytes, std::min<int>(state->len, avail_out));
+                state->len -= amount;
+                avail_out  -= amount;
+                while (amount-- > 0) {
+                    *out++ = (Bytef)PEEKBITS(8);
+                    DROPBITS(8);
+                }
+                assert(bits == 0);
+                amount = std::min<int>(avail_out, std::min<int>(state->len, avail));
+                state->len -= amount;
+                avail      -= amount;
+                avail_out  -= amount;
+                read       += amount;
+                wrote      += amount;
+                while (amount-- > 0) {
+                    *out++ = *next++;
+                }
+                if (state->len != 0)
+                    goto exit;
             }
-            // DEBUG("After leaving we have writting: %u", wrote);
-            assert(state->len == 0);
 
+            assert(state->len == 0);
             if (state->blkfinal) {
                 ret = Z_STREAM_END;
                 goto exit;
