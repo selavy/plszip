@@ -756,12 +756,13 @@ int main(int argc, char** argv)
     WriteBuffer write_buffer(1u << 16);
     BitReader reader(fp);
     uint8_t bfinal = 0;
+    int block_number = 0;
     do {
         size_t write_length = 0;
         bfinal = reader.read_bit();
         BType btype = static_cast<BType>(reader.read_bits(2));
         if (btype == BType::NO_COMPRESSION) {
-            DEBUG("Block Encoding: No Compression");
+            DEBUG("Block #%d Encoding: No Compression", block_number);
             reader.flush_byte();
             auto read2B_le = [&]() {
                 uint16_t b1 = reader.read_bits(8);
@@ -770,6 +771,7 @@ int main(int argc, char** argv)
             };
             uint16_t len  = read2B_le();
             uint16_t nlen = read2B_le();
+            DEBUG("len = %u nlen = %u", len, nlen);
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
                 panic("invalid stored block lengths: %u %u", len, nlen);
             }
@@ -793,10 +795,10 @@ int main(int argc, char** argv)
             write_length = len;
         } else if (btype == BType::FIXED_HUFFMAN || btype == BType::DYNAMIC_HUFFMAN) {
             if (btype == BType::FIXED_HUFFMAN) {
-                DEBUG("Block Encoding: Fixed Huffman");
+                DEBUG("Block #%d Encoding: Fixed Huffman", block_number);
                 init_fixed_huffman_data(literal_tree, distance_tree);
             } else {
-                DEBUG("Block Encoding: Dynamic Huffman");
+                DEBUG("Block #%d Encoding: Dynamic Huffman", block_number);
                 read_dynamic_huffman_trees(reader, literal_tree, distance_tree);
             }
 
@@ -857,6 +859,8 @@ int main(int argc, char** argv)
         if (write_length > 0) {
             flush_buffer(output, write_buffer, write_length);
         }
+
+        ++block_number;
     } while (bfinal == 0);
 
     //------------------------------------------------

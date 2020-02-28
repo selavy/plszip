@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <string> // TEMP TEMP
+#include <string>  // TEMP TEMP
 
 #ifdef NDEBUG
 #define DEBUG
@@ -26,17 +26,25 @@ enum inflate_mode {
     FNAME,
     FCOMMENT,
     FHCRC,
-    BEGIN_BLOCK
+    BEGIN_BLOCK,
+    NO_COMPRESSION,
+    FIXED_HUFFMAN,
+    DYNAMIC_HUFFMAN,
+    NO_COMPRESSION_READ,
 };
 typedef enum inflate_mode inflate_mode;
 
 struct internal_state {
     inflate_mode mode;
-    uInt  bits; /* # of bits in bit accumulator */
+    uInt bits;  /* # of bits in bit accumulator */
     uLong buff; /* bit accumator */
     uLong temp;
-    Byte  flag;
+    Byte flag;
     std::string filename;
+    Byte blkfinal;
+    Byte blktype;
+    uInt len;
+    int block_number;  // TEMP TEMP
 };
 
 voidpf zcalloc(voidpf opaque, uInt items, uInt size) {
@@ -85,6 +93,9 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version,
     strm->state->bits = 0;
     strm->state->flag = 0;
     strm->state->temp = 0;
+    strm->state->blkfinal = 0;
+    strm->state->blktype = 0;
+    strm->state->block_number = 0;
 
     return Z_OK;
 }
@@ -129,6 +140,12 @@ static char msgbuf[1024];
         bits -= (n);         \
     } while (0)
 
+#define DROPREMBYTE()      \
+    do {                   \
+        buff >>= bits & 7; \
+        bits -= bits & 7;  \
+    } while (0)
+
 int PZ_inflate(z_streamp strm, int flush) {
     // printf("pzlib::inflate\n");
 
@@ -137,13 +154,19 @@ int PZ_inflate(z_streamp strm, int flush) {
     inflate_mode mode = state->mode;
     z_const Bytef *next = strm->next_in;
     uInt avail = strm->avail_in;
+    uLong read = 0;
+
+    Bytef *out = strm->next_out;
+    uInt avail_out = strm->avail_out;
+    uLong wrote = 0;
+
     uInt bits = state->bits;
     uLong buff = state->buff;
-    uLong read = 0;
     uInt use;
     uint8_t id1, id2, cm;
     uint32_t mtime;
     uint16_t xlen, crc16;
+    uInt nlen;
 
     // auto PEEKBITS = [buff, bits](uInt n) -> uInt {
     //     assert(bits >= n);
@@ -184,10 +207,10 @@ int PZ_inflate(z_streamp strm, int flush) {
         case MTIME:
             NEEDBITS(32);
             mtime = 0;
-            mtime |= ((buff >>  0) & 0xFFu) << 24;
-            mtime |= ((buff >>  8) & 0xFFu) << 16;
-            mtime |= ((buff >> 16) & 0xFFu) <<  8;
-            mtime |= ((buff >> 24) & 0xFFu) <<  0;
+            mtime |= ((buff >> 0) & 0xFFu) << 24;
+            mtime |= ((buff >> 8) & 0xFFu) << 16;
+            mtime |= ((buff >> 16) & 0xFFu) << 8;
+            mtime |= ((buff >> 24) & 0xFFu) << 0;
             DEBUG("\tMTIME = %u", mtime);
             DROPBITS(32);
             mode = XFL;
@@ -204,7 +227,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         case FEXTRA:
             state->temp = 0;
             if ((state->flag & (1u << 2)) != 0) {
-                NEEDBITS(2*8);
+                NEEDBITS(2 * 8);
                 state->temp |= ((buff >> 0) & 0xFFu) << 8;
                 state->temp |= ((buff >> 8) & 0xFFu) << 0;
             }
@@ -245,24 +268,88 @@ int PZ_inflate(z_streamp strm, int flush) {
         case FHCRC:
             if ((state->flag & (1u << 1)) != 0) {
                 crc16 = 0;
-                crc16 |= ((buff >>  0) & 0xFFu) << 8;
-                crc16 |= ((buff >>  8) & 0xFFu) << 0;
+                crc16 |= ((buff >> 0) & 0xFFu) << 8;
+                crc16 |= ((buff >> 8) & 0xFFu) << 0;
                 NEEDBITS(16);
                 DEBUG("\tCRC = %u", crc16);
                 DROPBITS(16);
             }
             DEBUG("Finished parsing GZIP header");
             mode = BEGIN_BLOCK;
-#if 0
+        begin_block:
         case BEGIN_BLOCK:
-            DEBUG("BEGIN_BLOCK");
-            if (have == 0) {
-                if (avail == 0)
-                    goto exit;
-                --avail;
-                last = *next
+            NEEDBITS(3);
+            state->blkfinal = PEEKBITS(1);
+            DROPBITS(1);
+            state->blktype = PEEKBITS(2);
+            DROPBITS(2);
+
+            // DEBUG("Final Block: %u", state->blkfinal);
+            // DEBUG("Block Type:  %u", state->blktype);
+            if (state->blktype == 0x0u) {
+                DEBUG("Block #%d Encoding: No Compression%s",
+                      state->block_number++, state->blkfinal ? " -- final" : "");
+                mode = NO_COMPRESSION;
+                goto no_compression_block;
+            } else if (state->blktype == 0x1u) {
+                DEBUG("Block #%d Encoding: Fixed Huffman%s", state->block_number++, state->blkfinal ? " -- final" : "");
+                // TEMP TEMP
+                panic(Z_DATA_ERROR, "invalid block type");
+                // mode = FIXED_HUFFMAN;
+                // goto fixed_huffman_block;
+            } else if (state->blktype == 0x2u) {
+                DEBUG("Block #%d Encoding: Dynamic Huffman%s",
+                      state->block_number++, state->blkfinal ? " -- final" : "");
+                // TEMP TEMP
+                panic(Z_DATA_ERROR, "invalid block type");
+                // mode = DYNAMIC_HUFFMAN;
+                // goto dynamic_huffman_block;
+            } else {
+                panic(Z_DATA_ERROR, "invalid block type: %u", state->blktype);
             }
-#endif
+        no_compression_block:
+        case NO_COMPRESSION:
+            DROPREMBYTE();
+            NEEDBITS(32);
+                   nlen = (((buff >>  8) & 0xFFu) << 0) | (((buff >>  0) & 0xFFu) << 8);
+            state->len  = (((buff >> 24) & 0xFFu) << 0) | (((buff >> 16) & 0xFFu) << 8);
+            DROPBITS(32);
+            DEBUG("len = %u nlen = %u", state->len, nlen);
+            if ((state->len & 0xFFFFu) != (nlen ^ 0xFFFFu)) {
+                panic(Z_DATA_ERROR, "invalid stored block lengths: %u %u",
+                      state->len, nlen);
+            }
+            mode = NO_COMPRESSION_READ;
+        case NO_COMPRESSION_READ:
+            // precondition: on a byte boundary
+            // NOTE: switching to byte-oriented reading/writing
+
+            // DEBUG("NO_COMPRESSION_READ: state->len = %u", state->len);
+            while (state->len > 0) {
+                NEEDBITS(8);
+                if (avail_out == 0) goto exit;
+                *out++ = (Bytef)PEEKBITS(8);
+                avail_out--;
+                state->len--;
+                wrote++;
+                DROPBITS(8);
+            }
+            // DEBUG("After leaving we have writting: %u", wrote);
+            assert(state->len == 0);
+
+            if (state->blkfinal) {
+                ret = Z_STREAM_END;
+                goto exit;
+            } else {
+                mode = BEGIN_BLOCK;
+                goto begin_block;
+            }
+
+        // fixed_huffman_block:
+        // case FIXED_HUFFMAN:
+        // dynamic_huffman_block:
+        // case DYNAMIC_HUFFMAN:
+
         default:
             panic(Z_STREAM_ERROR, "state not implemented yet: %d", mode);
     }
@@ -271,6 +358,9 @@ exit:
     strm->next_in = next;
     strm->avail_in = avail;
     strm->total_in += read;
+    strm->next_out = out;
+    strm->avail_out = avail_out;
+    strm->total_out += wrote;
     state->bits = bits;
     state->buff = buff;
     state->mode = mode;

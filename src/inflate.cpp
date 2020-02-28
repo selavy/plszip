@@ -7,8 +7,23 @@
 
 /* -------------------------------------------------------------------------- */
 
+const char *xlaterc(int rc) {
+    switch (rc) {
+        case Z_OK: return "OK";
+        case Z_STREAM_END: return "StreamEnd";
+        case Z_NEED_DICT: return "NeedDictionary";
+        case Z_ERRNO: return "Errno";
+        case Z_STREAM_ERROR: return "StreamError";
+        case Z_DATA_ERROR: return "DataError";
+        case Z_MEM_ERROR: return "MemoryError";
+        case Z_BUF_ERROR: return "BufferError";
+        case Z_VERSION_ERROR: return "VersionError";
+        default: return "Unknown";
+    }
+}
+
 // #define SIZE 32768U
-#define SIZE 1U
+#define SIZE 256U
 #define PARSE_GZIP 16
 
 int main(int argc, char **argv) {
@@ -70,22 +85,29 @@ int main(int argc, char **argv) {
 #else
             ret = PZ_inflate(&strm, Z_NO_FLUSH);
 #endif
-            if (ret < Z_OK) {
-                inflateEnd(&strm);
-                fprintf(stderr, "inflate error[%d]: %s\n", ret, strm.msg);
-                goto exit;
-            }
-            // switch (ret) {
-            //     case Z_STREAM_ERROR:
-            //     case Z_NEED_DICT:
-            //     case Z_DATA_ERROR:
-            //     case Z_MEM_ERROR:
-            //         inflateEnd(&strm);
-            //         fprintf(stderr, "inflate error[%d]: %s\n", ret, strm.msg);
-            //         goto exit;
-            //     default:
-            //         break;
+            // NOTE(peter): Z_BUF_ERROR is NOT fatal. It will be called if:
+            // "no progress was possible or if there was not enough room in the output
+            // buffer when Z_FINISH is used. Note that Z_BUF_ERROR is not fatal, and
+            // inflate() can be called again with more input and more output space to
+            // continue decompressing."
+
+            // printf("\nRET = [%d] %s\n", ret, xlaterc(ret));
+            // if (ret < Z_OK) {
+            //     inflateEnd(&strm);
+            //     fprintf(stderr, "inflate error[%d]: %s\n", ret, strm.msg);
+            //     goto exit;
             // }
+            switch (ret) {
+                case Z_STREAM_ERROR:
+                case Z_NEED_DICT:
+                case Z_DATA_ERROR:
+                case Z_MEM_ERROR:
+                    inflateEnd(&strm);
+                    fprintf(stderr, "inflate error[%d]: %s\n", ret, strm.msg);
+                    goto exit;
+                default:
+                    break;
+            }
             have = SIZE - strm.avail_out;
             if (fwrite(obuf, 1, have, dst) != have || ferror(dst)) {
                 ret = errno;
