@@ -119,9 +119,9 @@ static char msgbuf[1024];
 
 #define NEXTBYTE()                    \
     do {                              \
-        if (avail == 0) goto exit;    \
-        avail--;                      \
-        buff = (buff << 8) | *next++; \
+        if (avail_in == 0) goto exit;    \
+        avail_in--;                      \
+        buff = (buff << 8) | *in++; \
         read++;                       \
         bits += 8;                    \
     } while (0)
@@ -152,8 +152,8 @@ int PZ_inflate(z_streamp strm, int flush) {
     int ret = Z_OK;
     struct internal_state *state = strm->state;
     inflate_mode mode = state->mode;
-    z_const Bytef *next = strm->next_in;
-    uInt avail = strm->avail_in;
+    z_const Bytef *in = strm->next_in;
+    uInt avail_in = strm->avail_in;
     uLong read = 0;
 
     Bytef *out = strm->next_out;
@@ -173,7 +173,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     //     return buff & ((1u << n) - 1);
     // };
 
-    if (strm->next_in == Z_NULL || strm->next_out == Z_NULL) {
+    if (in == Z_NULL || out == Z_NULL) {
         return Z_STREAM_ERROR;
     }
 
@@ -336,15 +336,16 @@ int PZ_inflate(z_streamp strm, int flush) {
                     DROPBITS(8);
                 }
                 assert(bits == 0);
-                amount = std::min<int>(avail_out, std::min<int>(state->len, avail));
+                amount = std::min<int>(avail_out, std::min<int>(state->len, avail_in));
                 state->len -= amount;
-                avail      -= amount;
+                avail_in   -= amount;
                 avail_out  -= amount;
                 read       += amount;
                 wrote      += amount;
                 while (amount-- > 0) {
-                    *out++ = *next++;
+                    *out++ = *in++;
                 }
+                assert(state->len == 0 || (avail_in == 0 || avail_out == 0));
                 if (state->len != 0)
                     goto exit;
             }
@@ -355,6 +356,8 @@ int PZ_inflate(z_streamp strm, int flush) {
                 goto exit;
             } else {
                 mode = BEGIN_BLOCK;
+                // TODO(peter): why doesn't this work? -- less efficient, but it *should* work...
+                // goto exit;
                 goto begin_block;
             }
 
@@ -368,8 +371,13 @@ int PZ_inflate(z_streamp strm, int flush) {
     }
 
 exit:
-    strm->next_in = next;
-    strm->avail_in = avail;
+    // TODO(peter): remove `read` and `wrote` because already have that information.
+    assert(avail_in  <= strm->avail_in);
+    assert(avail_out <= strm->avail_out);
+    assert(avail_in + read == strm->avail_in);
+    assert(avail_out + wrote == strm->avail_out);
+    strm->next_in = in;
+    strm->avail_in = avail_in;
     strm->total_in += read;
     strm->next_out = out;
     strm->avail_out = avail_out;
