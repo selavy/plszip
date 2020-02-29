@@ -494,18 +494,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             assert(state->len == 0 || (avail_in == 0 || avail_out == 0));
             if (state->len != 0) goto exit;
         }
-
         assert(state->len == 0);
         goto end_block;
-        // if (state->blkfinal) {
-        //     ret = Z_STREAM_END;
-        //     goto exit;
-        // } else {
-        //     mode = BEGIN_BLOCK;
-        //     // TODO(peter): why doesn't this work? -- less efficient, but it
-        //     // *should* work... goto exit;
-        //     goto begin_block;
-        // }
         UNREACHABLE();
         break;
     fixed_huffman_block:
