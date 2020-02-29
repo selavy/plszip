@@ -442,9 +442,12 @@ int PZ_inflate(z_streamp strm, int flush) {
         // TODO(peter): what is maximum size of huffman code?
         NEEDBITS(9);
         DEBUG("All 9 bits = 0x%03lx, buf = 0x%08lx, bits = %u", PEEKBITS(9), buff, bits);
+        size_t index = 1;
         for (int i = 1; i <= 9; ++i) {
-            size_t index = (1u << i) | PEEKBITS(i);
-            DEBUG("PEEKBITS = 0x%03lx index = 0x%03zx", PEEKBITS(i), index);
+            index = (index << 1) | PEEKBITS(1);
+            DROPBITS(1);
+            // size_t index = (1u << i) | PEEKBITS(i);
+            // DEBUG("PEEKBITS = 0x%03lx index = 0x%03zx", PEEKBITS(i), index);
             if (state->lits[index] != EMPTY_SENTINEL) {
                 DEBUG("Found code: index=%zu [%d] %c", index, state->lits[index], state->lits[index]);
                 ret = Z_DATA_ERROR;
