@@ -23,6 +23,31 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
 #endif
 
+#define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
+
+/* Global Static Data */
+static constexpr size_t LENGTH_BASE_CODE = 257;
+static constexpr size_t LENGTH_EXTRA_BITS[29] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+};
+
+static constexpr size_t LENGTH_BASES[29] = {
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
+};
+static_assert(ARRSIZE(LENGTH_EXTRA_BITS) == ARRSIZE(LENGTH_BASES));
+
+static constexpr size_t DISTANCE_EXTRA_BITS[32] = {
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 0, 0,
+};
+
+static constexpr size_t DISTANCE_BASES[32] = {
+    1,   2,   3,   4,   5,    7,    9,    13,   17,   25,   33,   49,    65,    97,    129, 193,
+    257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577, 0,   0,
+};
+
+static constexpr size_t WINDOW_SIZE = 1u << 16;
+
+/* Internal Types */
 enum inflate_mode {
     HEADER, /* ID1 | ID2 | CM */
     FLAGS,  /* FLG */
@@ -41,6 +66,10 @@ enum inflate_mode {
     NO_COMPRESSION_READ,
     HUFFMAN_READ,
     WRITE_HUFFMAN_VALUE,
+    HUFFMAN_LENGTH_CODE,
+    HUFFMAN_DISTANCE_CODE,
+    READ_HUFFMAN_DISTANCE,
+    WRITE_HUFFMAN_LEN_DIST,
     END_BLOCK,
 };
 typedef enum inflate_mode inflate_mode;
@@ -60,6 +89,14 @@ struct internal_state {
     size_t litlen;
     const uint16_t *dists;
     size_t distlen;
+    size_t length;
+    size_t index;
+
+    /* circular buffer window */
+    uint32_t mask;
+    uint32_t head;
+    uint32_t size;
+    Bytef *wnd;  // TODO(peter): just put at end of internal_state with window[1]
 };
 
 voidpf zcalloc(voidpf opaque, uInt items, uInt size) {
@@ -125,13 +162,50 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->litlen = 0;
     strm->state->dists = NULL;
     strm->state->distlen = 0;
+    strm->state->length = 0;
+    strm->state->index = 0;
+
+    // TODO(peter): use windowBits instead
+    strm->state->wnd = reinterpret_cast<Bytef *>(strm->zalloc(strm->opaque, sizeof(Bytef), WINDOW_SIZE));
+    if (!strm->state->wnd) {
+        strm->msg = "failed to allocate memory for window";
+        return Z_MEM_ERROR;
+    }
+    strm->state->mask = WINDOW_SIZE - 1;
+    strm->state->head = 0;
+    strm->state->size = 0;
+    // TEMP TEMP
+    memset(strm->state->wnd, 0, sizeof(strm->state->wnd[0]) * WINDOW_SIZE);
 
     return Z_OK;
 }
 
+static void windowAdd(internal_state *s, const Bytef *buf, uint32_t n) {
+    s->size = std::min(s->size + n, s->mask + 1);
+    size_t n1 = std::min(s->mask + 1 - s->head, n);
+    size_t n2 = n - n1;
+    Bytef *p = &s->wnd[s->head];
+    while (n1-- > 0) {
+        *p++ = *buf++;
+    }
+    p = &s->wnd[0];
+    while (n2-- > 0) {
+        *p++ = *buf++;
+    }
+    s->head = (s->head + n) & s->mask;
+}
+
+static bool checkDistance(const internal_state *s, size_t distance) {
+    return distance <= s->size && distance <= s->mask;
+}
+
 int inflateEnd(z_streamp strm) {
     printf("pzlib::inflateEnd\n");
-    strm->zfree(strm->opaque, strm->state);
+    if (strm->state) {
+        strm->zfree(strm->opaque, strm->state->wnd);
+        strm->state->wnd = Z_NULL;
+        strm->zfree(strm->opaque, strm->state);
+    }
     strm->state = Z_NULL;
     return Z_OK;
 }
@@ -197,6 +271,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     uint32_t mtime;
     uInt crc16;
     uInt nlen;
+    uint16_t val;
 
     // auto PEEKBITS = [buff, bits](uInt n) -> uInt {
     //     assert(bits >= n);
@@ -412,6 +487,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             read += amount;
             wrote += amount;
             while (amount-- > 0) {
+                windowAdd(state, in, sizeof(in));
+                DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(*in), *in);
                 *out++ = *in++;
             }
             assert(state->len == 0 || (avail_in == 0 || avail_out == 0));
@@ -443,6 +520,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     huffman_read:
     case HUFFMAN_READ:
+        // REVISIT(peter): this is the very slow path
         while (state->lits[state->temp] == EMPTY_SENTINEL) {
             NEEDBITS(1);
             state->temp = (state->temp << 1) | PEEKBITS(1);
@@ -451,28 +529,96 @@ int PZ_inflate(z_streamp strm, int flush) {
         }
         assert(state->temp < state->litlen);
         assert(state->lits[state->temp] != EMPTY_SENTINEL);
-        if (state->lits[state->temp] < 256) {
-            Bytef c = static_cast<Bytef>(state->lits[state->temp]);
-            DEBUG("WRITING VALUE: %d '%c'", static_cast<int>(c), c);
+        val = state->lits[state->temp];
+        if (val < 256) {
+            Bytef c = static_cast<Bytef>(val);
+            DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(c), c);
+            windowAdd(state, &c, sizeof(c));
             *out++ = c;
             avail_out--;
             wrote++;
             state->temp = 1;
             mode = HUFFMAN_READ;  // TEMP TEMP: unneeded
             goto huffman_read;
-        } else if (state->lits[state->temp] == 256) {
+        } else if (val == 256) {
             DEBUG("inflate: end of %s huffman block found", "fixed");
-            // TODO: deallocate tables if needed
+            // TODO: deallocate tables if needed for dynamic huffman
             goto end_block;
-        } else if (state->lits[state->temp] <= 285) {
-            panic(Z_DATA_ERROR, "[TEMP TEMP] unsupported huffman value: %u", state->lits[state->temp]);
+        } else if (val <= 285) {
+            assert(257 <= val && val <= 285);
+            state->temp = val - LENGTH_BASE_CODE;
+            mode = HUFFMAN_LENGTH_CODE;
+            goto huffman_length_code;
         } else {
-            panic(Z_DATA_ERROR, "invalid huffman value: %u", state->lits[state->temp]);
+            panic(Z_DATA_ERROR, "invalid huffman value: %u", val);
         }
         UNREACHABLE();
         break;
         // dynamic_huffman_block:
         // case DYNAMIC_HUFFMAN:
+    huffman_length_code:
+    case HUFFMAN_LENGTH_CODE:
+        NEEDBITS(LENGTH_EXTRA_BITS[state->temp]);
+        {
+            assert(state->temp < ARRSIZE(LENGTH_BASES));
+            size_t base_length = LENGTH_BASES[state->temp];
+            size_t extra_length = PEEKBITS(LENGTH_EXTRA_BITS[state->temp]);
+            size_t length = base_length + extra_length;
+            DEBUG("value=%lu, base_length=%zu extra_length=%zu length=%zu", state->temp, base_length, extra_length,
+                  length);
+            state->length = length;
+            state->temp = 1;
+            mode = HUFFMAN_DISTANCE_CODE;
+            goto huffman_distance_code;
+        }
+        UNREACHABLE();
+        break;
+    huffman_distance_code:
+    case HUFFMAN_DISTANCE_CODE:
+        while (state->dists[state->temp] == EMPTY_SENTINEL) {
+            NEEDBITS(1);
+            state->temp = (state->temp << 1) | PEEKBITS(1);
+            DROPBITS(1);
+            assert(state->temp < state->distlen);
+        }
+        assert(state->temp < state->distlen);
+        assert(state->dists[state->temp] != EMPTY_SENTINEL);
+        mode = READ_HUFFMAN_DISTANCE;
+        goto read_huffman_distance;
+        break;
+    read_huffman_distance:
+    case READ_HUFFMAN_DISTANCE:
+        val = state->dists[state->temp];
+        assert(val < 32);  // invalid distance code
+        NEEDBITS(DISTANCE_EXTRA_BITS[val]);
+        {
+            size_t base_distance = DISTANCE_BASES[val];
+            size_t extra_distance = PEEKBITS(DISTANCE_EXTRA_BITS[val]);
+            size_t distance = base_distance + extra_distance;
+            DEBUG("value=%u, base_dist=%zu extra_dist=%zu dist=%zu", val, base_distance, extra_distance, distance);
+            if (!checkDistance(state, distance)) panic(Z_DATA_ERROR, "invalid distance %zu", distance);
+            state->index = (state->head + ((state->mask + 1) - distance));
+            mode = WRITE_HUFFMAN_LEN_DIST;
+            goto write_huffman_len_dist;
+        }
+        break;
+    write_huffman_len_dist:
+    case WRITE_HUFFMAN_LEN_DIST:
+        while (state->length > 0) {
+            if (avail_out == 0) goto exit;
+            Bytef c = state->wnd[state->index & state->mask];
+            *out++ = c;
+            avail_out--;
+            wrote++;
+            DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(c), c);
+            windowAdd(state, &c, sizeof(c));
+            state->index++;
+            state->length--;
+        }
+        state->temp = 1;
+        mode = HUFFMAN_READ;
+        goto huffman_read;
+        break;
     end_block:
     case END_BLOCK:
         if (state->blkfinal) {

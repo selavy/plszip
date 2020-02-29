@@ -46,7 +46,7 @@ static const uint8_t ID2_GZIP = 139;
 #define STRICT_WINDOW_SIZE_CHECK
 #define MAX_HUFFMAN_CODES 512
 #define MAX_HCODE_BIT_LENGTH 16
-#define EMPTY_SENTINEL UINT16_MAX
+// #define EMPTY_SENTINEL UINT16_MAX
 #define READ_BUFFER_SIZE (1u << 16)
 #define WRIT_BUFFER_SIZE (1u << 16)
 #define WINDOW_SIZE (1u << 16)
@@ -796,7 +796,7 @@ int main(int argc, char **argv) {
                     DEBUG("inflate: end of %s huffman block found", "fixed");
                     break;
                 } else if (value <= 285) {
-                    assert(257 <= value <= 285);
+                    assert(257 <= value && value <= 285);
                     // NOTE: 257 <= value <= 285
                     // => 0 <= (value - LENGTH_BASE_CODE) <= 28
                     // => value - LENGTH_BASE_CODE < asize(LENGTH_EXTRA_BITS)
