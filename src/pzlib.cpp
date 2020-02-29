@@ -18,7 +18,7 @@
     } while (0)
 
 #ifdef NDEBUG
-#define DEBUG
+#define DEBUG(fmt, ...)
 #else
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
 #endif
@@ -185,7 +185,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     uLong buff = state->buff;
     uint8_t id1, id2, cm;
     uint32_t mtime;
-    uint16_t crc16;
+    uInt crc16;
     uInt nlen;
 
     // auto PEEKBITS = [buff, bits](uInt n) -> uInt {
@@ -316,10 +316,15 @@ int PZ_inflate(z_streamp strm, int flush) {
     fhcrc:
     case FHCRC:
         if ((state->flag & (1u << 1)) != 0) {
-            crc16 = 0;
-            crc16 |= static_cast<uint16_t>(((buff >> 0) & 0xFFu) << 8);
-            crc16 |= static_cast<uint16_t>(((buff >> 8) & 0xFFu) << 0);
+            // REVISIT(peter): this is a bit ridiculous just to satisfy the spurious
+            // warnings. The issue is that the shift operators promote to an integer...
             NEEDBITS(16);
+            (void)crc16; // unused variable in release mode
+            uInt bytes[2] = {
+                static_cast<uInt>(buff >> 0) & 0xFFu,
+                static_cast<uInt>(buff >> 8) & 0xFFu,
+            };
+            crc16 = bytes[1] | bytes[0];
             DEBUG("\tCRC = %u", crc16);
             DROPBITS(16);
         }
@@ -338,15 +343,18 @@ int PZ_inflate(z_streamp strm, int flush) {
         state->blktype = PEEKBITS(2);
         DROPBITS(2);
         if (state->blktype == 0x0u) {
-            DEBUG("Block #%d Encoding: No Compression%s", state->block_number++, state->blkfinal ? " -- final" : "");
+            DEBUG("Block #%d Encoding: No Compression%s", state->block_number, state->blkfinal ? " -- final" : "");
+            state->block_number++;
             mode = NO_COMPRESSION;
             goto no_compression_block;
         } else if (state->blktype == 0x1u) {
-            DEBUG("Block #%d Encoding: Fixed Huffman%s", state->block_number++, state->blkfinal ? " -- final" : "");
+            DEBUG("Block #%d Encoding: Fixed Huffman%s", state->block_number, state->blkfinal ? " -- final" : "");
+            state->block_number++;
             mode = FIXED_HUFFMAN;
             goto fixed_huffman_block;
         } else if (state->blktype == 0x2u) {
-            DEBUG("Block #%d Encoding: Dynamic Huffman%s", state->block_number++, state->blkfinal ? " -- final" : "");
+            DEBUG("Block #%d Encoding: Dynamic Huffman%s", state->block_number, state->blkfinal ? " -- final" : "");
+            state->block_number++;
             // TEMP TEMP
             panic(Z_DATA_ERROR, "invalid block type: %u", state->blktype);
             // mode = DYNAMIC_HUFFMAN;
