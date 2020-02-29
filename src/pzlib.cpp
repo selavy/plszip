@@ -97,11 +97,19 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
         return Z_STREAM_ERROR;
     }
 
-    strm->state = reinterpret_cast<internal_state *>(strm->zalloc(strm->opaque, 1, sizeof(struct internal_state)));
-    if (!strm->state) {
+    void* mem = strm->zalloc(strm->opaque, 1, sizeof(internal_state));
+    if (!mem) {
         strm->msg = "failed to allocate memory for internal state";
         return Z_MEM_ERROR;
     }
+    // TEMP TEMP: only have to do this because have std::string
+    strm->state = new (mem) internal_state{};
+
+    // strm->state = reinterpret_cast<internal_state *>(strm->zalloc(strm->opaque, 1, sizeof(struct internal_state)));
+    // if (!strm->state) {
+    //     strm->msg = "failed to allocate memory for internal state";
+    //     return Z_MEM_ERROR;
+    // }
 
     strm->state->mode = HEADER;
     strm->state->buff = 0UL;
@@ -320,7 +328,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             // warnings. The issue is that the shift operators promote to an integer...
             NEEDBITS(16);
             (void)crc16; // unused variable in release mode
-            uInt bytes[2] = {
+            const uInt bytes[2] = {
                 static_cast<uInt>(buff >> 0) & 0xFFu,
                 static_cast<uInt>(buff >> 8) & 0xFFu,
             };
