@@ -37,9 +37,11 @@ enum inflate_mode {
     BEGIN_BLOCK,
     NO_COMPRESSION,
     FIXED_HUFFMAN,
-    DYNAMIC_HUFFMAN,
+    // DYNAMIC_HUFFMAN,
     NO_COMPRESSION_READ,
     HUFFMAN_READ,
+    WRITE_HUFFMAN_VALUE,
+    END_BLOCK,
 };
 typedef enum inflate_mode inflate_mode;
 
@@ -97,7 +99,7 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
         return Z_STREAM_ERROR;
     }
 
-    void* mem = strm->zalloc(strm->opaque, 1, sizeof(internal_state));
+    void *mem = strm->zalloc(strm->opaque, 1, sizeof(internal_state));
     if (!mem) {
         strm->msg = "failed to allocate memory for internal state";
         return Z_MEM_ERROR;
@@ -327,7 +329,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             // REVISIT(peter): this is a bit ridiculous just to satisfy the spurious
             // warnings. The issue is that the shift operators promote to an integer...
             NEEDBITS(16);
-            (void)crc16; // unused variable in release mode
+            (void)crc16;  // unused variable in release mode
             const uInt bytes[2] = {
                 static_cast<uInt>(buff >> 0) & 0xFFu,
                 static_cast<uInt>(buff >> 8) & 0xFFu,
@@ -417,15 +419,16 @@ int PZ_inflate(z_streamp strm, int flush) {
         }
 
         assert(state->len == 0);
-        if (state->blkfinal) {
-            ret = Z_STREAM_END;
-            goto exit;
-        } else {
-            mode = BEGIN_BLOCK;
-            // TODO(peter): why doesn't this work? -- less efficient, but it
-            // *should* work... goto exit;
-            goto begin_block;
-        }
+        goto end_block;
+        // if (state->blkfinal) {
+        //     ret = Z_STREAM_END;
+        //     goto exit;
+        // } else {
+        //     mode = BEGIN_BLOCK;
+        //     // TODO(peter): why doesn't this work? -- less efficient, but it
+        //     // *should* work... goto exit;
+        //     goto begin_block;
+        // }
         UNREACHABLE();
         break;
     fixed_huffman_block:
@@ -435,29 +438,50 @@ int PZ_inflate(z_streamp strm, int flush) {
         state->dists = fixed_huffman_distance_tree;
         state->distlen = sizeof(fixed_huffman_distance_tree);
         mode = HUFFMAN_READ;
+        state->temp = 1;
         goto huffman_read;
         break;
     huffman_read:
     case HUFFMAN_READ:
-        // TODO(peter): what is maximum size of huffman code?
-        NEEDBITS(9);
-        DEBUG("All 9 bits = 0x%03lx, buf = 0x%08lx, bits = %u", PEEKBITS(9), buff, bits);
-        size_t index = 1;
-        for (int i = 1; i <= 9; ++i) {
-            index = (index << 1) | PEEKBITS(1);
+        while (state->lits[state->temp] == EMPTY_SENTINEL) {
+            NEEDBITS(1);
+            state->temp = (state->temp << 1) | PEEKBITS(1);
             DROPBITS(1);
-            // size_t index = (1u << i) | PEEKBITS(i);
-            // DEBUG("PEEKBITS = 0x%03lx index = 0x%03zx", PEEKBITS(i), index);
-            if (state->lits[index] != EMPTY_SENTINEL) {
-                DEBUG("Found code: index=%zu [%d] %c", index, state->lits[index], state->lits[index]);
-                ret = Z_DATA_ERROR;
-                goto exit;
-            }
+            assert(state->temp < state->litlen);
         }
-        panic(Z_STREAM_ERROR, "oh-no %d", 1); // TEMP TEMP
+        assert(state->temp < state->litlen);
+        assert(state->lits[state->temp] != EMPTY_SENTINEL);
+        if (state->lits[state->temp] < 256) {
+            Bytef c = static_cast<Bytef>(state->lits[state->temp]);
+            DEBUG("WRITING VALUE: %d '%c'", static_cast<int>(c), c);
+            *out++ = c;
+            avail_out--;
+            wrote++;
+            state->temp = 1;
+            mode = HUFFMAN_READ;  // TEMP TEMP: unneeded
+            goto huffman_read;
+        } else if (state->lits[state->temp] == 256) {
+            DEBUG("inflate: end of %s huffman block found", "fixed");
+            // TODO: deallocate tables if needed
+            goto end_block;
+        } else if (state->lits[state->temp] <= 285) {
+            panic(Z_DATA_ERROR, "[TEMP TEMP] unsupported huffman value: %u", state->lits[state->temp]);
+        } else {
+            panic(Z_DATA_ERROR, "invalid huffman value: %u", state->lits[state->temp]);
+        }
+        UNREACHABLE();
         break;
         // dynamic_huffman_block:
         // case DYNAMIC_HUFFMAN:
+    end_block:
+    case END_BLOCK:
+        if (state->blkfinal) {
+            ret = Z_STREAM_END;
+            goto exit;
+        } else {
+            mode = BEGIN_BLOCK;
+            goto begin_block;
+        }
     default:
         panic(Z_STREAM_ERROR, "state not implemented yet: %d", mode);
     }

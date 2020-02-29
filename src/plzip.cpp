@@ -446,12 +446,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
 
 uint16_t read_huffman_value(const uint16_t* tree, size_t length, BitReader& reader)
 {
-    char buf[128];
-    size_t bufidx = 0;
-    memset(&buf[0], 0, sizeof(buf));
-
     size_t index = 1;
-    buf[bufidx++] = '1';
     do {
         index <<= 1;
         index += reader.read_bit() ? 1 : 0;
