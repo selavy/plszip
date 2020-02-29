@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#define EMPTY_SENTINEL 65535
+
 static const uint16_t fixed_huffman_literals_tree[1024] = {
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, // (   0)
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, // (   8)

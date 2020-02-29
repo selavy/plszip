@@ -1,0 +1,24 @@
+(N.B. my codes are prefixed with a 1 so they have an extra bit -- hence why
+codes below have 9 bits instead of 8)
+
+// Fixed Huffman Codes:
+
+Lit Value    Bits        Codes
+---------    ----        -----
+ 0 - 143     8          00110000 through
+                        10111111
+144 - 255     9          110010000 through
+                        111111111
+256 - 279     7          0000000 through
+                        0010111
+280 - 287     8          11000000 through
+                        11000111
+
+Letter | Dec |  Code (Dec) | Code (Hex) | Code (Bin)  | Code in data |
+======================================================================
+'T'    |  84 |         388 |      0x184 | 1 1000 0100 | 10000100     |
+'h'    | 104 |         408 |      0x198 | 1 1001 1000 | 10011000     |
+'i'    | 105 |         409 |      0x199 | 1 1001 1001 | 10011001     |
+'s'    | 115 |         419 |      0x1a3 | 1 1010 0011 | 10100011     |
+
+

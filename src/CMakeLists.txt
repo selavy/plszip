@@ -16,7 +16,7 @@ add_executable(inflate
     pzlib.cpp
     inflate.cpp)
 target_compile_features(inflate PUBLIC cxx_std_17)
-target_link_libraries(inflate PUBLIC ZLIB::ZLIB)
+target_link_libraries(inflate PUBLIC ZLIB::ZLIB PRIVATE project_warnings)
 
 add_executable(gen_fixed_huffman gen_fixed_huffman.c)
 target_compile_features(gen_fixed_huffman PUBLIC c_std_99)

@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
     }
 
     do {
-        strm.avail_in = fread(ibuf, 1, SIZE, src);
+        strm.avail_in = static_cast<uInt>(fread(ibuf, 1, SIZE, src));
         if (ferror(src)) {
             ret = errno;
             inflateEnd(&strm);
@@ -75,10 +75,10 @@ int main(int argc, char **argv) {
             goto exit;
         }
         if (strm.avail_in == 0) break;
-        strm.next_in = (Bytef *)ibuf;
+        strm.next_in = reinterpret_cast<Bytef *>(ibuf);
         do {
             strm.avail_out = SIZE;
-            strm.next_out = (Bytef *)obuf;
+            strm.next_out = reinterpret_cast<Bytef *>(obuf);
 // TEMP TEMP: use different name to not confuse gdb
 #ifdef USE_ZLIB
             ret = inflate(&strm, Z_NO_FLUSH);
