@@ -100,6 +100,7 @@ struct internal_state {
     size_t distlen;
     size_t length;
     size_t index;
+    size_t code;
     size_t hlit;
     size_t hdist;
     size_t hclen;
@@ -179,6 +180,7 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->distlen = 0;
     strm->state->length = 0;
     strm->state->index = 0;
+    strm->state->code = 1;
     strm->state->hlit = 0;
     strm->state->hdist = 0;
     strm->state->hclen = 0;
@@ -480,11 +482,11 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     fextra:
     case FEXTRA:
-        state->temp = 0;
+        state->index = 0;
         if ((state->flag & (1u << 2)) != 0) {
             NEEDBITS(16);
-            state->temp |= ((buff >> 0) & 0xFFu) << 8;
-            state->temp |= ((buff >> 8) & 0xFFu) << 0;
+            state->index |= ((buff >> 0) & 0xFFu) << 8;
+            state->index |= ((buff >> 8) & 0xFFu) << 0;
             DROPBITS(16);
         }
         mode = FEXTRA_DATA;
@@ -492,10 +494,10 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     fextra_data:
     case FEXTRA_DATA:
-        while (state->temp > 0) {
+        while (state->index > 0) {
             NEEDBITS(8);
             DROPBITS(8);
-            state->temp--;
+            state->index--;
         }
         mode = FNAME;
         goto fname;
@@ -649,7 +651,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         state->dists = fixed_huffman_distance_tree;
         state->distlen = sizeof(fixed_huffman_distance_tree);
         mode = HUFFMAN_READ;
-        state->temp = 1;
+        state->code = 1;
         goto huffman_read;
         break;
     dynamic_huffman_block:
@@ -686,22 +688,22 @@ int PZ_inflate(z_streamp strm, int flush) {
         DEBUG0("Initialized header tree!");
         memset(dynamic_code_lengths, 0, sizeof(dynamic_code_lengths));
         state->index = 0;
-        state->temp = 1;
+        state->code = 1;
         mode = DYNAMIC_CODE_LENGTHS;
         goto dynamic_code_lengths;
     dynamic_code_lengths:
     case DYNAMIC_CODE_LENGTHS:
         while (state->index < state->ncodes) {
             // REVISIT(peter): this is the very slow path
-            while (htree_data[state->temp] == EMPTY_SENTINEL) {
+            while (htree_data[state->code] == EMPTY_SENTINEL) {
                 NEEDBITS(1);
-                state->temp = (state->temp << 1) | PEEKBITS(1);
+                state->code = (state->code << 1) | PEEKBITS(1);
                 DROPBITS(1);
-                assert(state->temp < sizeof(htree_data));
+                assert(state->code < sizeof(htree_data));
             }
-            assert(state->temp < sizeof(htree_data));
-            assert(htree_data[state->temp] != EMPTY_SENTINEL);
-            value = htree_data[state->temp];
+            assert(state->code < sizeof(htree_data));
+            assert(htree_data[state->code] != EMPTY_SENTINEL);
+            value = htree_data[state->code];
             uInt nbits, offset;
             uint16_t rvalue;
             if (value <= 15) {
@@ -738,7 +740,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             } else {
                 panic(Z_STREAM_ERROR, "invalid dynamic code length: %u", value);
             }
-            state->temp = 1;
+            state->code = 1;
         }
         DEBUG0("Finished reading dynamic header!");
 
@@ -751,22 +753,22 @@ int PZ_inflate(z_streamp strm, int flush) {
         state->litlen = state->dynlits.len;
         state->dists = state->dyndists.d;
         state->distlen = state->dyndists.len;
-        state->temp = 1;
+        state->code = 1;
         mode = HUFFMAN_READ;
         goto huffman_read;
         break;
     huffman_read:
     case HUFFMAN_READ:
         // REVISIT(peter): this is the very slow path
-        while (state->lits[state->temp] == EMPTY_SENTINEL) {
+        while (state->lits[state->code] == EMPTY_SENTINEL) {
             NEEDBITS(1);
-            state->temp = (state->temp << 1) | PEEKBITS(1);
+            state->code = (state->code << 1) | PEEKBITS(1);
             DROPBITS(1);
-            assert(state->temp < state->litlen);
+            assert(state->code < state->litlen);
         }
-        assert(state->temp < state->litlen);
-        assert(state->lits[state->temp] != EMPTY_SENTINEL);
-        value = state->lits[state->temp];
+        assert(state->code < state->litlen);
+        assert(state->lits[state->code] != EMPTY_SENTINEL);
+        value = state->lits[state->code];
         if (value < 256) {
             if (avail_out == 0) goto exit;
             Bytef c = static_cast<Bytef>(value);
@@ -776,7 +778,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             avail_out--;
             wrote++;
             CHECK_IO();
-            state->temp = 1;
+            state->code = 1;
             mode = HUFFMAN_READ;  // TEMP TEMP: unneeded
             goto huffman_read;
         } else if (value == 256) {
@@ -791,6 +793,7 @@ int PZ_inflate(z_streamp strm, int flush) {
                 state->dyndists.d = NULL;
                 state->dyndists.len = 0;
             }
+            state->code = 1;
             mode = END_BLOCK;
             goto end_block;
         } else if (value <= 285) {
@@ -812,27 +815,27 @@ int PZ_inflate(z_streamp strm, int flush) {
         DROPBITS(extra);
         DEBUG("value=%lu length=%zu", state->temp, length);
         state->length = length;
-        state->temp = 1;
+        state->code = 1;
         mode = HUFFMAN_DISTANCE_CODE;
         goto huffman_distance_code;
         break;
     }
     huffman_distance_code:
     case HUFFMAN_DISTANCE_CODE:
-        while (state->dists[state->temp] == EMPTY_SENTINEL) {
+        while (state->dists[state->code] == EMPTY_SENTINEL) {
             NEEDBITS(1);
-            state->temp = (state->temp << 1) | PEEKBITS(1);
+            state->code = (state->code << 1) | PEEKBITS(1);
             DROPBITS(1);
-            assert(state->temp < state->distlen);
+            assert(state->code < state->distlen);
         }
-        assert(state->temp < state->distlen);
-        assert(state->dists[state->temp] != EMPTY_SENTINEL);
+        assert(state->code < state->distlen);
+        assert(state->dists[state->code] != EMPTY_SENTINEL);
         mode = READ_HUFFMAN_DISTANCE;
         goto read_huffman_distance;
         break;
     read_huffman_distance:
     case READ_HUFFMAN_DISTANCE: {
-        value = state->dists[state->temp];
+        value = state->dists[state->code];
         assert(value < 32);  // invalid distance code
         uInt extra = DISTANCE_EXTRA_BITS[value];
         NEEDBITS(extra);
@@ -861,7 +864,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             state->index++;
             state->length--;
         }
-        state->temp = 1;
+        state->code = 1;
         mode = HUFFMAN_READ;
         goto huffman_read;
         break;
