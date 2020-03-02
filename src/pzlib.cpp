@@ -444,8 +444,8 @@ int PZ_inflate(z_streamp strm, int flush) {
     case FLAGS:
         NEEDBITS(8);
         state->flag = PEEKBITS(8);
-        DEBUG("\tFLG   = %3u", state->flag);
         DROPBITS(8);
+        DEBUG("\tFLG   = %3u", state->flag);
         mode = MTIME;
         goto mtime;
         break;
@@ -457,8 +457,8 @@ int PZ_inflate(z_streamp strm, int flush) {
         mtime |= static_cast<uint32_t>(((buff >> 8) & 0xFFu) << 16);
         mtime |= static_cast<uint32_t>(((buff >> 16) & 0xFFu) << 8);
         mtime |= static_cast<uint32_t>(((buff >> 24) & 0xFFu) << 0);
-        DEBUG("\tMTIME = %u", mtime);
         DROPBITS(32);
+        DEBUG("\tMTIME = %u", mtime);
         mode = XFL;
         goto xfl;
         break;
@@ -482,9 +482,10 @@ int PZ_inflate(z_streamp strm, int flush) {
     case FEXTRA:
         state->temp = 0;
         if ((state->flag & (1u << 2)) != 0) {
-            NEEDBITS(2 * 8);
+            NEEDBITS(16);
             state->temp |= ((buff >> 0) & 0xFFu) << 8;
             state->temp |= ((buff >> 8) & 0xFFu) << 0;
+            DROPBITS(16);
         }
         mode = FEXTRA_DATA;
         goto fextra_data;
@@ -519,14 +520,12 @@ int PZ_inflate(z_streamp strm, int flush) {
     fcomment:
     case FCOMMENT:
         if ((state->flag & (1u << 4)) != 0) {
-            for (;;) {
+            Bytef c;
+            do {
                 NEEDBITS(8);
-                if (PEEKBITS(8) == '\0') {
-                    DROPBITS(8);
-                    break;
-                }
+                c = static_cast<Bytef>(PEEKBITS(8));
                 DROPBITS(8);
-            }
+            } while (c != '\0');
         }
         mode = FHCRC;
         goto fhcrc;
@@ -805,21 +804,19 @@ int PZ_inflate(z_streamp strm, int flush) {
         UNREACHABLE();
         break;
     huffman_length_code:
-    case HUFFMAN_LENGTH_CODE:
-        NEEDBITS(LENGTH_EXTRA_BITS[state->temp]);
-        {
-            assert(state->temp < ARRSIZE(LENGTH_BASES));
-            uInt extra = LENGTH_EXTRA_BITS[state->temp];
-            size_t length = LENGTH_BASES[state->temp] + PEEKBITS(extra);
-            DROPBITS(extra);
-            DEBUG("value=%lu length=%zu", state->temp, length);
-            state->length = length;
-            state->temp = 1;
-            mode = HUFFMAN_DISTANCE_CODE;
-            goto huffman_distance_code;
-        }
-        UNREACHABLE();
+    case HUFFMAN_LENGTH_CODE: {
+        assert(state->temp < ARRSIZE(LENGTH_BASES));
+        uInt extra = LENGTH_EXTRA_BITS[state->temp];
+        NEEDBITS(extra);
+        size_t length = LENGTH_BASES[state->temp] + PEEKBITS(extra);
+        DROPBITS(extra);
+        DEBUG("value=%lu length=%zu", state->temp, length);
+        state->length = length;
+        state->temp = 1;
+        mode = HUFFMAN_DISTANCE_CODE;
+        goto huffman_distance_code;
         break;
+    }
     huffman_distance_code:
     case HUFFMAN_DISTANCE_CODE:
         while (state->dists[state->temp] == EMPTY_SENTINEL) {
@@ -837,8 +834,8 @@ int PZ_inflate(z_streamp strm, int flush) {
     case READ_HUFFMAN_DISTANCE: {
         value = state->dists[state->temp];
         assert(value < 32);  // invalid distance code
-        NEEDBITS(DISTANCE_EXTRA_BITS[value]);
         uInt extra = DISTANCE_EXTRA_BITS[value];
+        NEEDBITS(extra);
         size_t distance = DISTANCE_BASES[value] + PEEKBITS(extra);
         DROPBITS(extra);
         DEBUG("value=%u dist=%zu", value, distance);
@@ -846,10 +843,10 @@ int PZ_inflate(z_streamp strm, int flush) {
             panic(Z_STREAM_ERROR, "invalid distance %zu", distance);
         }
         state->index = (state->head + ((state->mask + 1) - distance));
-    }
         mode = WRITE_HUFFMAN_LEN_DIST;
         goto write_huffman_len_dist;
         break;
+    }
     write_huffman_len_dist:
     case WRITE_HUFFMAN_LEN_DIST:
         while (state->length > 0) {
