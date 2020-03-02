@@ -22,8 +22,9 @@ const char *xlaterc(int rc) {
     }
 }
 
-// #define SIZE 32768U
-#define SIZE 256U
+#define SIZE 32768U
+// #define SIZE 256U
+// #define SIZE 1U
 #define PARSE_GZIP 16
 
 int main(int argc, char **argv) {

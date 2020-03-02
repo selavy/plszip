@@ -228,12 +228,12 @@ int inflateEnd(z_streamp strm) {
         strm->zfree(strm->opaque, strm->state->wnd);
         strm->state->wnd = Z_NULL;
         if (strm->state->dynlits.len != 0) {
-            strm->zfree(strm->opaque, const_cast<uint16_t*>(strm->state->dynlits.d));
+            strm->zfree(strm->opaque, const_cast<uint16_t *>(strm->state->dynlits.d));
             strm->state->dynlits.d = Z_NULL;
             strm->state->dynlits.len = 0;
         }
         if (strm->state->dyndists.len != 0) {
-            strm->zfree(strm->opaque, const_cast<uint16_t*>(strm->state->dyndists.d));
+            strm->zfree(strm->opaque, const_cast<uint16_t *>(strm->state->dyndists.d));
             strm->state->dyndists.d = Z_NULL;
             strm->state->dyndists.len = 0;
         }
@@ -373,6 +373,14 @@ static bool init_huffman_tree(z_streamp s, vec *tree, const uint16_t *code_lengt
     tree->len = table_size;
     return true;
 }
+
+#define CHECK_IO()                                    \
+    do {                                              \
+        assert(avail_in <= strm->avail_in);           \
+        assert(avail_out <= strm->avail_out);         \
+        assert(avail_in + read == strm->avail_in);    \
+        assert(avail_out + wrote == strm->avail_out); \
+    } while (0)
 
 int PZ_inflate(z_streamp strm, int flush) {
     // printf("pzlib::inflate\n");
@@ -588,34 +596,48 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     no_compression_read:
     case NO_COMPRESSION_READ:
+        // DEBUG0("NO_COMPRESSION_READ");
         // precondition: on a byte boundary
         // NOTE: switching to byte-oriented reading/writing
         {
             // should be on a byte boundary at this point after flush to
             // byte boundary then 2 x 2B reads
+
+            // Step 1. Flush remaining bytes in bit buffer to output
             assert(bits % 8 == 0);
             uInt bytes = bits / 8;
-            uInt amount = std::min<uInt>(bytes, std::min<uInt>(state->len, avail_out));
+            uInt amount = std::min<uInt>(state->len, std::min<uInt>(bytes, avail_out));
+            // DEBUG("NO_COMPRESSION_READ: avail_out=%u state->len=%u bytes=%u amount=%u", avail_out, state->len, bytes,
+            //       amount);
             state->len -= amount;
             avail_out -= amount;
+            read -= amount;
+            wrote += amount;
             while (amount-- > 0) {
                 *out++ = static_cast<Bytef>(PEEKBITS(8));
                 DROPBITS(8);
             }
             assert(bits == 0);
-            amount = std::min<uInt>(avail_out, std::min<uInt>(state->len, avail_in));
+
+            // Step 2. Stream directly from input to output
+            amount = std::min<uInt>(state->len, std::min<uInt>(avail_in, avail_out));
+            // DEBUG("NO_COMPRESSION_READ: avail_out=%u state->len=%u avail_in=%u amount=%u", avail_out, state->len,
+            //       avail_in, amount);
             state->len -= amount;
             avail_in -= amount;
             avail_out -= amount;
             read += amount;
             wrote += amount;
             while (amount-- > 0) {
-                windowAdd(state, in, sizeof(in));
-                DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(*in), *in);
+                windowAdd(state, in, sizeof(*in));
+                // DEBUG("WRITING VALUE(%d): [%d] %d '%c'", __LINE__, amount, static_cast<int>(*in), *in);
                 *out++ = *in++;
             }
+            CHECK_IO();
             assert(state->len == 0 || (avail_in == 0 || avail_out == 0));
-            if (state->len != 0) goto exit;
+            if (state->len != 0) {
+                goto exit;
+            }
         }
         assert(state->len == 0);
         mode = END_BLOCK;
@@ -747,14 +769,14 @@ int PZ_inflate(z_streamp strm, int flush) {
         assert(state->lits[state->temp] != EMPTY_SENTINEL);
         value = state->lits[state->temp];
         if (value < 256) {
-            if (avail_out == 0)
-                goto exit;
+            if (avail_out == 0) goto exit;
             Bytef c = static_cast<Bytef>(value);
-            DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(c), c);
+            // DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(c), c);
             windowAdd(state, &c, sizeof(c));
             *out++ = c;
             avail_out--;
             wrote++;
+            CHECK_IO();
             state->temp = 1;
             mode = HUFFMAN_READ;  // TEMP TEMP: unneeded
             goto huffman_read;
@@ -812,20 +834,19 @@ int PZ_inflate(z_streamp strm, int flush) {
         goto read_huffman_distance;
         break;
     read_huffman_distance:
-    case READ_HUFFMAN_DISTANCE:
-        {
-            value = state->dists[state->temp];
-            assert(value < 32);  // invalid distance code
-            NEEDBITS(DISTANCE_EXTRA_BITS[value]);
-            uInt extra = DISTANCE_EXTRA_BITS[value];
-            size_t distance = DISTANCE_BASES[value] + PEEKBITS(extra);
-            DROPBITS(extra);
-            DEBUG("value=%u dist=%zu", value, distance);
-            if (!checkDistance(state, distance)) {
-                panic(Z_STREAM_ERROR, "invalid distance %zu", distance);
-            }
-            state->index = (state->head + ((state->mask + 1) - distance));
+    case READ_HUFFMAN_DISTANCE: {
+        value = state->dists[state->temp];
+        assert(value < 32);  // invalid distance code
+        NEEDBITS(DISTANCE_EXTRA_BITS[value]);
+        uInt extra = DISTANCE_EXTRA_BITS[value];
+        size_t distance = DISTANCE_BASES[value] + PEEKBITS(extra);
+        DROPBITS(extra);
+        DEBUG("value=%u dist=%zu", value, distance);
+        if (!checkDistance(state, distance)) {
+            panic(Z_STREAM_ERROR, "invalid distance %zu", distance);
         }
+        state->index = (state->head + ((state->mask + 1) - distance));
+    }
         mode = WRITE_HUFFMAN_LEN_DIST;
         goto write_huffman_len_dist;
         break;
@@ -837,8 +858,9 @@ int PZ_inflate(z_streamp strm, int flush) {
             *out++ = c;
             avail_out--;
             wrote++;
-            DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(c), c);
+            // DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(c), c);
             windowAdd(state, &c, sizeof(c));
+            CHECK_IO();
             state->index++;
             state->length--;
         }
