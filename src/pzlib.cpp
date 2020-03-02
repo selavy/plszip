@@ -68,9 +68,7 @@ enum inflate_mode {
     NO_COMPRESSION_READ,
     HUFFMAN_READ,
     WRITE_HUFFMAN_VALUE,
-    // HUFFMAN_LENGTH_CODE,
     HUFFMAN_DISTANCE_CODE,
-    READ_HUFFMAN_DISTANCE,
     WRITE_HUFFMAN_LEN_DIST,
     HEADER_TREE,
     DYNAMIC_CODE_LENGTHS,
@@ -385,8 +383,6 @@ static bool init_huffman_tree(z_streamp s, vec *tree, const uint16_t *code_lengt
     } while (0)
 
 int PZ_inflate(z_streamp strm, int flush) {
-    // printf("pzlib::inflate\n");
-
     (void)flush;
 
     int ret = Z_OK;
@@ -407,11 +403,6 @@ int PZ_inflate(z_streamp strm, int flush) {
     uInt crc16;
     uInt nlen;
     uint16_t value;
-
-    // auto PEEKBITS = [buff, bits](uInt n) -> uInt {
-    //     assert(bits >= n);
-    //     return buff & ((1u << n) - 1);
-    // };
 
     if (in == Z_NULL || out == Z_NULL) {
         return Z_STREAM_ERROR;
@@ -597,7 +588,6 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     no_compression_read:
     case NO_COMPRESSION_READ:
-        // DEBUG0("NO_COMPRESSION_READ");
         // precondition: on a byte boundary
         // NOTE: switching to byte-oriented reading/writing
         {
@@ -608,8 +598,6 @@ int PZ_inflate(z_streamp strm, int flush) {
             assert(bits % 8 == 0);
             uInt bytes = bits / 8;
             uInt amount = std::min<uInt>(state->len, std::min<uInt>(bytes, avail_out));
-            // DEBUG("NO_COMPRESSION_READ: avail_out=%u state->len=%u bytes=%u amount=%u", avail_out, state->len, bytes,
-            //       amount);
             state->len -= amount;
             avail_out -= amount;
             read -= amount;
@@ -622,8 +610,6 @@ int PZ_inflate(z_streamp strm, int flush) {
 
             // Step 2. Stream directly from input to output
             amount = std::min<uInt>(state->len, std::min<uInt>(avail_in, avail_out));
-            // DEBUG("NO_COMPRESSION_READ: avail_out=%u state->len=%u avail_in=%u amount=%u", avail_out, state->len,
-            //       avail_in, amount);
             state->len -= amount;
             avail_in -= amount;
             avail_out -= amount;
@@ -701,8 +687,6 @@ int PZ_inflate(z_streamp strm, int flush) {
                 DROPBITS(1);
                 assert(state->code < sizeof(htree_data));
             }
-            assert(state->code < sizeof(htree_data));
-            assert(htree_data[state->code] != EMPTY_SENTINEL);
             value = htree_data[state->code];
             uInt nbits, offset;
             uint16_t rvalue;
@@ -766,8 +750,6 @@ int PZ_inflate(z_streamp strm, int flush) {
             DROPBITS(1);
             assert(state->code < state->litlen);
         }
-        assert(state->code < state->litlen);
-        assert(state->lits[state->code] != EMPTY_SENTINEL);
         value = state->lits[state->code];
         if (value < 256) {
             if (avail_out == 0) goto exit;
@@ -815,20 +797,13 @@ int PZ_inflate(z_streamp strm, int flush) {
         UNREACHABLE();
         break;
     huffman_distance_code:
-    case HUFFMAN_DISTANCE_CODE:
+    case HUFFMAN_DISTANCE_CODE: {
         while (state->dists[state->code] == EMPTY_SENTINEL) {
             NEEDBITS(1);
             state->code = (state->code << 1) | PEEKBITS(1);
             DROPBITS(1);
             assert(state->code < state->distlen);
         }
-        assert(state->code < state->distlen);
-        assert(state->dists[state->code] != EMPTY_SENTINEL);
-        mode = READ_HUFFMAN_DISTANCE;
-        goto read_huffman_distance;
-        break;
-    read_huffman_distance:
-    case READ_HUFFMAN_DISTANCE: {
         value = state->dists[state->code];
         assert(value < 32);  // invalid distance code
         uInt extra = DISTANCE_EXTRA_BITS[value];
