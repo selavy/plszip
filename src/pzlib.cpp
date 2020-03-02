@@ -62,7 +62,7 @@ enum inflate_mode {
     BEGIN_BLOCK,
     NO_COMPRESSION,
     FIXED_HUFFMAN,
-    // DYNAMIC_HUFFMAN,
+    DYNAMIC_HUFFMAN,
     NO_COMPRESSION_READ,
     HUFFMAN_READ,
     WRITE_HUFFMAN_VALUE,
@@ -70,6 +70,8 @@ enum inflate_mode {
     HUFFMAN_DISTANCE_CODE,
     READ_HUFFMAN_DISTANCE,
     WRITE_HUFFMAN_LEN_DIST,
+    HEADER_TREE,
+    DYNAMIC_CODE_LENGTHS,
     END_BLOCK,
 };
 typedef enum inflate_mode inflate_mode;
@@ -91,6 +93,10 @@ struct internal_state {
     size_t distlen;
     size_t length;
     size_t index;
+    size_t hlit;
+    size_t hdist;
+    size_t hclen;
+    size_t ncodes;
 
     /* circular buffer window */
     uint32_t mask;
@@ -164,6 +170,10 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->distlen = 0;
     strm->state->length = 0;
     strm->state->index = 0;
+    strm->state->hlit = 0;
+    strm->state->hdist = 0;
+    strm->state->hclen = 0;
+    strm->state->ncodes = 0;
 
     // TODO(peter): use windowBits instead
     strm->state->wnd = reinterpret_cast<Bytef *>(strm->zalloc(strm->opaque, sizeof(Bytef), WINDOW_SIZE));
@@ -179,6 +189,11 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
 
     return Z_OK;
 }
+
+struct vec {
+    size_t len;
+    const uint16_t *d;
+};
 
 static void windowAdd(internal_state *s, const Bytef *buf, uint32_t n) {
     s->size = std::min(s->size + n, s->mask + 1);
@@ -220,13 +235,13 @@ static char msgbuf[1024];
         goto exit;                                            \
     } while (0)
 
-#define NEXTBYTE()                    \
-    do {                              \
-        if (avail_in == 0) goto exit; \
-        avail_in--;                   \
-        buff = (buff << 8) | *in++;   \
-        read++;                       \
-        bits += 8;                    \
+#define NEXTBYTE()                                 \
+    do {                                           \
+        if (avail_in == 0) goto exit;              \
+        avail_in--;                                \
+        buff += static_cast<uLong>(*in++) << bits; \
+        read++;                                    \
+        bits += 8;                                 \
     } while (0)
 
 #define NEEDBITS(n)                    \
@@ -248,6 +263,89 @@ static char msgbuf[1024];
         buff >>= bits & 7; \
         bits -= bits & 7;  \
     } while (0)
+
+static constexpr size_t NUM_CODE_LENGTHS = 19;
+static size_t order[NUM_CODE_LENGTHS] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
+static uint16_t hlengths[NUM_CODE_LENGTHS];
+static constexpr size_t MAX_HTREE_BIT_LENGTH = 8;
+// TODO(peter): need to move this into internal_state
+static uint16_t htree_data[1u << MAX_HTREE_BIT_LENGTH];
+static vec htree = {sizeof(htree_data), &htree_data[0]};
+static constexpr size_t MAX_CODE_LENGTHS = 322;
+static uint16_t dynamic_code_lengths[MAX_CODE_LENGTHS];
+
+static bool init_huffman_tree(z_streamp s, vec *tree, const uint16_t *code_lengths, size_t n) {
+    constexpr size_t MAX_HCODE_BIT_LENGTH = 16;
+    constexpr size_t MAX_HUFFMAN_CODES = 512;
+    static size_t bl_count[MAX_HCODE_BIT_LENGTH];
+    static uint16_t next_code[MAX_HCODE_BIT_LENGTH];
+    static uint16_t codes[MAX_HUFFMAN_CODES];
+
+    if (!(n < MAX_HUFFMAN_CODES)) {
+        assert(n < MAX_HUFFMAN_CODES);
+        return false;
+    }
+
+    // 1) Count the number of codes for each code length. Let bl_count[N] be the
+    // number of codes of length N, N >= 1.
+    memset(&bl_count[0], 0, sizeof(bl_count));
+    size_t max_bit_length = 0;
+    for (size_t i = 0; i < n; ++i) {
+        assert(code_lengths[i] <= MAX_HCODE_BIT_LENGTH);
+        ++bl_count[code_lengths[i]];
+        max_bit_length = code_lengths[i] > max_bit_length ? code_lengths[i] : max_bit_length;
+    }
+    bl_count[0] = 0;
+
+    // 2) Find the numerical value of the smallest code for each code length:
+    memset(&next_code[0], 0, sizeof(next_code));
+    size_t code = 0;
+    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
+        code = (code + bl_count[bits - 1]) << 1;
+        next_code[bits] = static_cast<uint16_t>(code);
+    }
+
+    // 3) Assign numerical values to all codes, using consecutive values for all
+    // codes of the same length with the base values determined at step 2. Codes
+    // that are never used (which have a bit length of zero) must not be
+    // assigned a value.
+    memset(&codes[0], 0, sizeof(codes));
+    for (size_t i = 0; i < n; ++i) {
+        if (code_lengths[i] != 0) {
+            codes[i] = next_code[code_lengths[i]]++;
+            assert((16 - __builtin_clz(codes[i])) <= code_lengths[i]);
+        }
+    }
+
+    // Table size is 2**(max_bit_length + 1)
+    size_t table_size = 1u << (max_bit_length + 1);
+    uint16_t *t;
+    if (table_size > tree->len) {
+        if (tree->d) s->zfree(s->opaque, const_cast<uint16_t *>(tree->d));
+        t = reinterpret_cast<uint16_t*>(s->zalloc(s->opaque, static_cast<uInt>(table_size), sizeof(*t)));
+    } else {
+        t = const_cast<uint16_t *>(tree->d);
+    }
+    for (size_t j = 0; j < table_size; ++j) {
+        t[j] = EMPTY_SENTINEL;
+    }
+    for (size_t value = 0; value < n; ++value) {
+        int len = code_lengths[value];
+        if (len == 0) {
+            continue;
+        }
+        code = codes[value];
+        size_t index = 1;
+        for (int i = len - 1; i >= 0; --i) {
+            index = (index << 1) | ((code >> i) & 0x1u);
+        }
+        assert(t[index] == EMPTY_SENTINEL);
+        t[index] = static_cast<uint16_t>(value);
+    }
+    tree->d = t;
+    tree->len = table_size;
+    return true;
+}
 
 int PZ_inflate(z_streamp strm, int flush) {
     // printf("pzlib::inflate\n");
@@ -271,7 +369,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     uint32_t mtime;
     uInt crc16;
     uInt nlen;
-    uint16_t val;
+    uint16_t value;
 
     // auto PEEKBITS = [buff, bits](uInt n) -> uInt {
     //     assert(bits >= n);
@@ -285,16 +383,18 @@ int PZ_inflate(z_streamp strm, int flush) {
     switch (mode) {
     case HEADER:
         NEEDBITS(8 + 8 + 8);
-        id1 = (buff >> 16) & 0xFFu;
-        id2 = (buff >> 8) & 0xFFu;
-        cm = (buff >> 0) & 0xFFu;
+        id1 = PEEKBITS(8);
+        DROPBITS(8);
+        id2 = PEEKBITS(8);
+        DROPBITS(8);
+        cm = PEEKBITS(8);
+        DROPBITS(8);
         if (id1 != 0x1Fu || id2 != 0x8Bu) {
             panic(Z_DATA_ERROR, "invalid gzip header bytes: 0x%02x 0x%02x", id1, id2);
         }
         if (cm != 8) {
             panic(Z_DATA_ERROR, "invalid compression method: %u", cm);
         }
-
         // TODO(peter): figure out solution for:
         // "error: ISO C++11 requires at least one argument for the "..." in
         // a variadic macro [-Werror]"
@@ -302,8 +402,6 @@ int PZ_inflate(z_streamp strm, int flush) {
         DEBUG("\tID1   = %3u (0x%02x)", id1, id1);
         DEBUG("\tID2   = %3u (0x%02x)", id2, id2);
         DEBUG("\tCM    = %3u", cm);
-        DROPBITS(8 + 8 + 8);
-
         mode = FLAGS;
         goto flags;
         break;
@@ -440,10 +538,8 @@ int PZ_inflate(z_streamp strm, int flush) {
         } else if (state->blktype == 0x2u) {
             DEBUG("Block #%d Encoding: Dynamic Huffman%s", state->block_number, state->blkfinal ? " -- final" : "");
             state->block_number++;
-            // TEMP TEMP
-            panic(Z_DATA_ERROR, "invalid block type: %u", state->blktype);
-            // mode = DYNAMIC_HUFFMAN;
-            // goto dynamic_huffman_block;
+            mode = DYNAMIC_HUFFMAN;
+            goto dynamic_huffman_block;
         } else {
             panic(Z_DATA_ERROR, "invalid block type: %u", state->blktype);
         }
@@ -508,6 +604,90 @@ int PZ_inflate(z_streamp strm, int flush) {
         state->temp = 1;
         goto huffman_read;
         break;
+    dynamic_huffman_block:
+    case DYNAMIC_HUFFMAN:
+        NEEDBITS(5 + 5 + 4);
+        state->hlit = PEEKBITS(5) + 257;
+        DROPBITS(5);
+        state->hdist = PEEKBITS(5) + 1;
+        DROPBITS(5);
+        state->hclen = PEEKBITS(4) + 4;
+        DROPBITS(4);
+        state->ncodes = state->hlit + state->hdist;
+        state->index = 0;
+        DEBUG("hlit=%zu hdist=%zu hclen=%zu ncodes=%zu", state->hlit, state->hdist, state->hclen, state->ncodes);
+        assert(state->hlit <= 286);
+        assert(state->hdist <= 30);
+        assert(state->hclen < NUM_CODE_LENGTHS);
+        memset(&hlengths, 0, sizeof(hlengths));
+        mode = HEADER_TREE;
+        goto header_tree;
+        break;
+    header_tree:
+    case HEADER_TREE:
+        while (state->index < state->hclen) {
+            NEEDBITS(3);
+            hlengths[order[state->index++]] = PEEKBITS(3);
+            DROPBITS(3);
+        }
+        if (!init_huffman_tree(strm, &htree, hlengths, NUM_CODE_LENGTHS))
+            panic(Z_DATA_ERROR, "%s", "unable to initialize huffman header tree");
+        DEBUG("%s", "Initialized header tree!");
+        memset(dynamic_code_lengths, 0, sizeof(dynamic_code_lengths));
+        state->index = 0;
+        mode = DYNAMIC_CODE_LENGTHS;
+        goto dynamic_code_lengths;
+    dynamic_code_lengths:
+    case DYNAMIC_CODE_LENGTHS:
+        while (state->index < state->ncodes) {
+            // REVISIT(peter): this is the very slow path
+            while (htree_data[state->temp] == EMPTY_SENTINEL) {
+                NEEDBITS(1);
+                state->temp = (state->temp << 1) | PEEKBITS(1);
+                DROPBITS(1);
+                assert(state->temp < sizeof(htree_data));
+            }
+            assert(state->temp < sizeof(htree_data));
+            assert(htree_data[state->temp] != EMPTY_SENTINEL);
+            value = htree_data[state->temp];
+            size_t nbits, offset;
+            uint16_t rvalue;
+            if (value <= 15) {
+                dynamic_code_lengths[state->index++] = value;
+            } else if (value <= 18) {
+                switch (value) {
+                    case 16:
+                        nbits = 2;
+                        offset = 3;
+                        panic(Z_DATA_ERROR, "invalid repeat code %u with no previous code lengths", value);
+                        rvalue = dynamic_code_lengths[state->index - 1];
+                        break;
+                    case 17:
+                        nbits = 3;
+                        offset = 3;
+                        rvalue = 0;
+                        break;
+                    case 18:
+                        nbits = 7;
+                        offset = 11;
+                        rvalue = 0;
+                        break;
+                    default:
+                        UNREACHABLE();
+                }
+                NEEDBITS(nbits);
+                uLong repeat = PEEKBITS(nbits) + offset;
+                while (repeat-- > 0) {
+                    dynamic_code_lengths[state->index++] = rvalue;
+                }
+                state->temp = 1;
+            } else {
+                panic(Z_DATA_ERROR, "invalid dynamic code length: %u", value);
+            }
+        }
+        DEBUG("%s", "Finished reading dynamic header!");
+        panic(Z_DATA_ERROR, "%s", "need to finish reading dyanmic block after loading trees!");
+        break;
     huffman_read:
     case HUFFMAN_READ:
         // REVISIT(peter): this is the very slow path
@@ -519,9 +699,9 @@ int PZ_inflate(z_streamp strm, int flush) {
         }
         assert(state->temp < state->litlen);
         assert(state->lits[state->temp] != EMPTY_SENTINEL);
-        val = state->lits[state->temp];
-        if (val < 256) {
-            Bytef c = static_cast<Bytef>(val);
+        value = state->lits[state->temp];
+        if (value < 256) {
+            Bytef c = static_cast<Bytef>(value);
             DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(c), c);
             windowAdd(state, &c, sizeof(c));
             *out++ = c;
@@ -530,22 +710,20 @@ int PZ_inflate(z_streamp strm, int flush) {
             state->temp = 1;
             mode = HUFFMAN_READ;  // TEMP TEMP: unneeded
             goto huffman_read;
-        } else if (val == 256) {
+        } else if (value == 256) {
             DEBUG("inflate: end of %s huffman block found", "fixed");
             // TODO: deallocate tables if needed for dynamic huffman
             goto end_block;
-        } else if (val <= 285) {
-            assert(257 <= val && val <= 285);
-            state->temp = val - LENGTH_BASE_CODE;
+        } else if (value <= 285) {
+            assert(257 <= value && value <= 285);
+            state->temp = value - LENGTH_BASE_CODE;
             mode = HUFFMAN_LENGTH_CODE;
             goto huffman_length_code;
         } else {
-            panic(Z_DATA_ERROR, "invalid huffman value: %u", val);
+            panic(Z_DATA_ERROR, "invalid huffman value: %u", value);
         }
         UNREACHABLE();
         break;
-        // dynamic_huffman_block:
-        // case DYNAMIC_HUFFMAN:
     huffman_length_code:
     case HUFFMAN_LENGTH_CODE:
         NEEDBITS(LENGTH_EXTRA_BITS[state->temp]);
@@ -578,14 +756,14 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     read_huffman_distance:
     case READ_HUFFMAN_DISTANCE:
-        val = state->dists[state->temp];
-        assert(val < 32);  // invalid distance code
-        NEEDBITS(DISTANCE_EXTRA_BITS[val]);
+        value = state->dists[state->temp];
+        assert(value < 32);  // invalid distance code
+        NEEDBITS(DISTANCE_EXTRA_BITS[value]);
         {
-            size_t base_distance = DISTANCE_BASES[val];
-            size_t extra_distance = PEEKBITS(DISTANCE_EXTRA_BITS[val]);
+            size_t base_distance = DISTANCE_BASES[value];
+            size_t extra_distance = PEEKBITS(DISTANCE_EXTRA_BITS[value]);
             size_t distance = base_distance + extra_distance;
-            DEBUG("value=%u, base_dist=%zu extra_dist=%zu dist=%zu", val, base_distance, extra_distance, distance);
+            DEBUG("value=%u, base_dist=%zu extra_dist=%zu dist=%zu", value, base_distance, extra_distance, distance);
             if (!checkDistance(state, distance)) panic(Z_DATA_ERROR, "invalid distance %zu", distance);
             state->index = (state->head + ((state->mask + 1) - distance));
             mode = WRITE_HUFFMAN_LEN_DIST;

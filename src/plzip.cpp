@@ -477,6 +477,8 @@ void read_dynamic_huffman_trees(BitReader& reader,
     size_t hdist = reader.read_bits(5) + 1;
     size_t hclen = reader.read_bits(4) + 4;
     size_t ncodes = hlit + hdist;
+    DEBUG("hlit=%zu hdist=%zu hclen=%zu ncodes=%zu", hlit, hdist, hclen, ncodes);
+    exit(0);
 
     std::vector<uint16_t> header_tree;
     if (!read_dynamic_header_tree(reader, hclen, header_tree)) {

@@ -32,3 +32,19 @@ DEBUG: index = 0050 = 0x0032
 DEBUG: index = 0100 = 0x0064
 DEBUG: index = 0201 = 0x00c9
 DEBUG: index = 0403 = 0x0193
+
+
+
+DEBUG: buff=0x000e544d bits=21
+
+CORRECT: hlit=271 hdist=21 hclen=14 ncodes=292
+hlit  = 271 - 257 = 14
+hdist =  21 -   1 = 20
+hclen =  14 -   4 = 10
+
+5 bits 14 => 0b01110
+5 bits 20 => 0b10100
+4 bits 10 => 0b1010
+
+0x000e544d = 0000 0000 000 | 0 1110 0101 0100 0100 1101
+                             0b1110 0101 0100 0100 1101
