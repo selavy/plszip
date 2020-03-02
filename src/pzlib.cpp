@@ -28,7 +28,7 @@
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 /* Global Static Data */
-static constexpr size_t LENGTH_BASE_CODE = 257;
+static constexpr uint16_t LENGTH_BASE_CODE = 257;
 static constexpr uInt LENGTH_EXTRA_BITS[29] = {
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
 };
@@ -68,7 +68,7 @@ enum inflate_mode {
     NO_COMPRESSION_READ,
     HUFFMAN_READ,
     WRITE_HUFFMAN_VALUE,
-    HUFFMAN_LENGTH_CODE,
+    // HUFFMAN_LENGTH_CODE,
     HUFFMAN_DISTANCE_CODE,
     READ_HUFFMAN_DISTANCE,
     WRITE_HUFFMAN_LEN_DIST,
@@ -798,28 +798,22 @@ int PZ_inflate(z_streamp strm, int flush) {
             goto end_block;
         } else if (value <= 285) {
             assert(257 <= value && value <= 285);
-            state->temp = value - LENGTH_BASE_CODE;
-            mode = HUFFMAN_LENGTH_CODE;
-            goto huffman_length_code;
+            value = static_cast<uint16_t>(value - 257);
+            assert(value < ARRSIZE(LENGTH_BASES));
+            uInt extra = LENGTH_EXTRA_BITS[value];
+            NEEDBITS(extra);
+            size_t length = LENGTH_BASES[value] + PEEKBITS(extra);
+            DROPBITS(extra);
+            DEBUG("value=%u length=%zu", value, length);
+            state->length = length;
+            state->code = 1;
+            mode = HUFFMAN_DISTANCE_CODE;
+            goto huffman_distance_code;
         } else {
             panic(Z_STREAM_ERROR, "invalid huffman value: %u", value);
         }
         UNREACHABLE();
         break;
-    huffman_length_code:
-    case HUFFMAN_LENGTH_CODE: {
-        assert(state->temp < ARRSIZE(LENGTH_BASES));
-        uInt extra = LENGTH_EXTRA_BITS[state->temp];
-        NEEDBITS(extra);
-        size_t length = LENGTH_BASES[state->temp] + PEEKBITS(extra);
-        DROPBITS(extra);
-        DEBUG("value=%lu length=%zu", state->temp, length);
-        state->length = length;
-        state->code = 1;
-        mode = HUFFMAN_DISTANCE_CODE;
-        goto huffman_distance_code;
-        break;
-    }
     huffman_distance_code:
     case HUFFMAN_DISTANCE_CODE:
         while (state->dists[state->code] == EMPTY_SENTINEL) {
