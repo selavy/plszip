@@ -29,7 +29,7 @@
 
 /* Global Static Data */
 static constexpr size_t LENGTH_BASE_CODE = 257;
-static constexpr size_t LENGTH_EXTRA_BITS[29] = {
+static constexpr uInt LENGTH_EXTRA_BITS[29] = {
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
 };
 
@@ -38,7 +38,7 @@ static constexpr size_t LENGTH_BASES[29] = {
 };
 static_assert(ARRSIZE(LENGTH_EXTRA_BITS) == ARRSIZE(LENGTH_BASES));
 
-static constexpr size_t DISTANCE_EXTRA_BITS[32] = {
+static constexpr uInt DISTANCE_EXTRA_BITS[32] = {
     0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 0, 0,
 };
 
@@ -227,6 +227,16 @@ int inflateEnd(z_streamp strm) {
     if (strm->state) {
         strm->zfree(strm->opaque, strm->state->wnd);
         strm->state->wnd = Z_NULL;
+        if (strm->state->dynlits.len != 0) {
+            strm->zfree(strm->opaque, const_cast<uint16_t*>(strm->state->dynlits.d));
+            strm->state->dynlits.d = Z_NULL;
+            strm->state->dynlits.len = 0;
+        }
+        if (strm->state->dyndists.len != 0) {
+            strm->zfree(strm->opaque, const_cast<uint16_t*>(strm->state->dyndists.d));
+            strm->state->dyndists.d = Z_NULL;
+            strm->state->dyndists.len = 0;
+        }
         strm->zfree(strm->opaque, strm->state);
     }
     strm->state = Z_NULL;
@@ -407,10 +417,10 @@ int PZ_inflate(z_streamp strm, int flush) {
         cm = PEEKBITS(8);
         DROPBITS(8);
         if (id1 != 0x1Fu || id2 != 0x8Bu) {
-            panic(Z_DATA_ERROR, "invalid gzip header bytes: 0x%02x 0x%02x", id1, id2);
+            panic(Z_STREAM_ERROR, "invalid gzip header bytes: 0x%02x 0x%02x", id1, id2);
         }
         if (cm != 8) {
-            panic(Z_DATA_ERROR, "invalid compression method: %u", cm);
+            panic(Z_STREAM_ERROR, "invalid compression method: %u", cm);
         }
         // TODO(peter): figure out solution for:
         // "error: ISO C++11 requires at least one argument for the "..." in
@@ -558,7 +568,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             mode = DYNAMIC_HUFFMAN;
             goto dynamic_huffman_block;
         } else {
-            panic(Z_DATA_ERROR, "invalid block type: %u", state->blktype);
+            panic(Z_STREAM_ERROR, "invalid block type: %u", state->blktype);
         }
         UNREACHABLE();
         break;
@@ -571,7 +581,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         DROPBITS(32);
         DEBUG("len = %u nlen = %u", state->len, nlen);
         if ((state->len & 0xFFFFu) != (nlen ^ 0xFFFFu)) {
-            panic(Z_DATA_ERROR, "invalid stored block lengths: %u %u", state->len, nlen);
+            panic(Z_STREAM_ERROR, "invalid stored block lengths: %u %u", state->len, nlen);
         }
         mode = NO_COMPRESSION_READ;
         goto no_compression_read;
@@ -608,8 +618,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             if (state->len != 0) goto exit;
         }
         assert(state->len == 0);
+        mode = END_BLOCK;
         goto end_block;
-        UNREACHABLE();
         break;
     fixed_huffman_block:
     case FIXED_HUFFMAN:
@@ -649,11 +659,13 @@ int PZ_inflate(z_streamp strm, int flush) {
         }
         // TEMP TEMP -- for debugging only?
         memset(&htree_data, 0, sizeof(htree_data));
-        if (!init_huffman_tree(strm, &htree, hlengths, NUM_CODE_LENGTHS))
-            panic(Z_DATA_ERROR, "%s", "unable to initialize huffman header tree");
-        DEBUG("%s", "Initialized header tree!");
+        if (!init_huffman_tree(strm, &htree, hlengths, NUM_CODE_LENGTHS)) {
+            panic(Z_MEM_ERROR, "%s", "unable to initialize huffman header tree");
+        }
+        DEBUG0("Initialized header tree!");
         memset(dynamic_code_lengths, 0, sizeof(dynamic_code_lengths));
         state->index = 0;
+        state->temp = 1;
         mode = DYNAMIC_CODE_LENGTHS;
         goto dynamic_code_lengths;
     dynamic_code_lengths:
@@ -669,7 +681,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             assert(state->temp < sizeof(htree_data));
             assert(htree_data[state->temp] != EMPTY_SENTINEL);
             value = htree_data[state->temp];
-            size_t nbits, offset;
+            uInt nbits, offset;
             uint16_t rvalue;
             if (value <= 15) {
                 dynamic_code_lengths[state->index++] = value;
@@ -678,7 +690,8 @@ int PZ_inflate(z_streamp strm, int flush) {
                 case 16:
                     nbits = 2;
                     offset = 3;
-                    panic(Z_DATA_ERROR, "invalid repeat code %u with no previous code lengths", value);
+                    if (state->index == 0)
+                        panic(Z_STREAM_ERROR, "invalid repeat code %u with no previous code lengths", value);
                     rvalue = dynamic_code_lengths[state->index - 1];
                     break;
                 case 17:
@@ -695,16 +708,18 @@ int PZ_inflate(z_streamp strm, int flush) {
                     UNREACHABLE();
                 }
                 NEEDBITS(nbits);
-                uLong repeat = PEEKBITS(nbits) + offset;
+                uLong repeat = PEEKBITS(nbits);
+                DROPBITS(nbits);
+                repeat += offset;
                 while (repeat-- > 0) {
                     dynamic_code_lengths[state->index++] = rvalue;
                 }
-                state->temp = 1;
             } else {
-                panic(Z_DATA_ERROR, "invalid dynamic code length: %u", value);
+                panic(Z_STREAM_ERROR, "invalid dynamic code length: %u", value);
             }
+            state->temp = 1;
         }
-        DEBUG("%s", "Finished reading dynamic header!");
+        DEBUG0("Finished reading dynamic header!");
 
         if (!init_huffman_tree(strm, &state->dynlits, &dynamic_code_lengths[0], state->hlit))
             panic0(Z_MEM_ERROR, "failed to initialize dynamic huffman literals tree");
@@ -717,6 +732,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         state->distlen = state->dyndists.len;
         state->temp = 1;
         mode = HUFFMAN_READ;
+        goto huffman_read;
         break;
     huffman_read:
     case HUFFMAN_READ:
@@ -731,6 +747,8 @@ int PZ_inflate(z_streamp strm, int flush) {
         assert(state->lits[state->temp] != EMPTY_SENTINEL);
         value = state->lits[state->temp];
         if (value < 256) {
+            if (avail_out == 0)
+                goto exit;
             Bytef c = static_cast<Bytef>(value);
             DEBUG("WRITING VALUE(%d): %d '%c'", __LINE__, static_cast<int>(c), c);
             windowAdd(state, &c, sizeof(c));
@@ -760,7 +778,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             mode = HUFFMAN_LENGTH_CODE;
             goto huffman_length_code;
         } else {
-            panic(Z_DATA_ERROR, "invalid huffman value: %u", value);
+            panic(Z_STREAM_ERROR, "invalid huffman value: %u", value);
         }
         UNREACHABLE();
         break;
@@ -769,11 +787,10 @@ int PZ_inflate(z_streamp strm, int flush) {
         NEEDBITS(LENGTH_EXTRA_BITS[state->temp]);
         {
             assert(state->temp < ARRSIZE(LENGTH_BASES));
-            size_t base_length = LENGTH_BASES[state->temp];
-            size_t extra_length = PEEKBITS(LENGTH_EXTRA_BITS[state->temp]);
-            size_t length = base_length + extra_length;
-            DEBUG("value=%lu, base_length=%zu extra_length=%zu length=%zu", state->temp, base_length, extra_length,
-                  length);
+            uInt extra = LENGTH_EXTRA_BITS[state->temp];
+            size_t length = LENGTH_BASES[state->temp] + PEEKBITS(extra);
+            DROPBITS(extra);
+            DEBUG("value=%lu length=%zu", state->temp, length);
             state->length = length;
             state->temp = 1;
             mode = HUFFMAN_DISTANCE_CODE;
@@ -796,21 +813,21 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     read_huffman_distance:
     case READ_HUFFMAN_DISTANCE:
-        value = state->dists[state->temp];
-        assert(value < 32);  // invalid distance code
-        NEEDBITS(DISTANCE_EXTRA_BITS[value]);
         {
-            size_t base_distance = DISTANCE_BASES[value];
-            size_t extra_distance = PEEKBITS(DISTANCE_EXTRA_BITS[value]);
-            size_t distance = base_distance + extra_distance;
-            DEBUG("value=%u, base_dist=%zu extra_dist=%zu dist=%zu", value, base_distance, extra_distance, distance);
+            value = state->dists[state->temp];
+            assert(value < 32);  // invalid distance code
+            NEEDBITS(DISTANCE_EXTRA_BITS[value]);
+            uInt extra = DISTANCE_EXTRA_BITS[value];
+            size_t distance = DISTANCE_BASES[value] + PEEKBITS(extra);
+            DROPBITS(extra);
+            DEBUG("value=%u dist=%zu", value, distance);
             if (!checkDistance(state, distance)) {
-                panic(Z_DATA_ERROR, "invalid distance %zu", distance);
+                panic(Z_STREAM_ERROR, "invalid distance %zu", distance);
             }
             state->index = (state->head + ((state->mask + 1) - distance));
-            mode = WRITE_HUFFMAN_LEN_DIST;
-            goto write_huffman_len_dist;
         }
+        mode = WRITE_HUFFMAN_LEN_DIST;
+        goto write_huffman_len_dist;
         break;
     write_huffman_len_dist:
     case WRITE_HUFFMAN_LEN_DIST:
