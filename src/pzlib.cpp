@@ -87,38 +87,38 @@ typedef enum inflate_mode inflate_mode;
 
 struct internal_state {
     inflate_mode mode;
+    gz_header* head;
     uInt bits;   // # of bits in bit accumulator
     uLong buff;  // bit accumator
     Byte flags;
-    std::string filename;
     Byte blkfinal;
     Byte blktype;
     uInt len;
     int block_number;  // TEMP TEMP
-    const uint16_t *lits;
+    const uint16_t* lits;
     // either points to `fixed_huffman_literals_codelens` or into `dynlens`
-    const uint16_t *litlens;
+    const uint16_t* litlens;
     size_t litmaxlen;
-    const uint16_t *dsts;
+    const uint16_t* dsts;
     // either points to `fixed_huffman_distance_codelens` or into `dynlens`
-    const uint16_t *dstlens;
+    const uint16_t* dstlens;
     size_t dstmaxlen;
     size_t index;
     size_t hlit;
     size_t hdist;
     size_t hclen;
     size_t ncodes;
-    uint16_t *dynlits;
-    uint16_t *dyndsts;
+    uint16_t* dynlits;
+    uint16_t* dyndsts;
 
     uint16_t htree[HTREE_TABLE_SIZE];
     uint16_t dynlens[MAX_CODE_LENGTHS];
     uint16_t hlengths[NUM_CODE_LENGTHS];
 
     /* circular buffer window */
-    uint32_t mask;
-    uint32_t head;
-    uint32_t size;
+    uint32_t wnd_mask;
+    uint32_t wnd_head;
+    uint32_t wnd_size;
     Bytef wnd[1];
 };
 
@@ -189,17 +189,17 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->ncodes = 0;
     strm->state->dynlits = nullptr;
     strm->state->dyndsts = nullptr;
-    strm->state->mask = static_cast<uint32_t>(window_size - 1);
-    strm->state->head = 0;
-    strm->state->size = 0;
+    strm->state->wnd_mask = static_cast<uint32_t>(window_size - 1);
+    strm->state->wnd_head = 0;
+    strm->state->wnd_size = 0;
     return Z_OK;
 }
 
 static void windowAdd(internal_state *s, const Bytef *buf, uint32_t n) {
-    s->size = std::min(s->size + n, s->mask + 1);
-    size_t n1 = std::min(s->mask + 1 - s->head, n);
+    s->wnd_size = std::min(s->wnd_size + n, s->wnd_mask + 1);
+    size_t n1 = std::min(s->wnd_mask + 1 - s->wnd_head, n);
     size_t n2 = n - n1;
-    Bytef *p = &s->wnd[s->head];
+    Bytef *p = &s->wnd[s->wnd_head];
     while (n1-- > 0) {
         *p++ = *buf++;
     }
@@ -207,11 +207,11 @@ static void windowAdd(internal_state *s, const Bytef *buf, uint32_t n) {
     while (n2-- > 0) {
         *p++ = *buf++;
     }
-    s->head = (s->head + n) & s->mask;
+    s->wnd_head = (s->wnd_head + n) & s->wnd_mask;
 }
 
 static bool checkDistance(const internal_state *s, size_t distance) {
-    return distance <= s->size && distance <= s->mask;
+    return distance <= s->wnd_size && distance <= s->wnd_mask;
 }
 
 int inflateEnd(z_streamp strm) {
@@ -472,6 +472,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             DROPBITS(8);
             state->index--;
         }
+        state->len = 0;
         mode = FNAME;
         goto fname;
         break;
@@ -480,14 +481,17 @@ int PZ_inflate(z_streamp strm, int flush) {
         if ((state->flags & (1u << 3)) != 0) {
             for (;;) {
                 NEEDBITS(8);
-                state->filename.push_back(static_cast<char>(PEEKBITS(8)));
+                auto c = static_cast<Bytef>(PEEKBITS(8));
+                if (state->head && state->len < state->head->name_max) {
+                    state->head->name[state->len++] = c;
+                }
                 DROPBITS(8);
-                if (state->filename.back() == '\0') {
-                    state->filename.pop_back();
+                if (c == '\0') {
                     break;
                 }
             }
-            DEBUG("Original Filename: '%s'", state->filename.c_str());
+            if (state->head)
+                DEBUG("Original Filename: '%s'", state->head->name);
         }
         mode = FCOMMENT;
         goto fcomment;
@@ -777,7 +781,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         if (!checkDistance(state, distance)) {
             panic(Z_STREAM_ERROR, "invalid distance %zu", distance);
         }
-        state->index = (state->head + ((state->mask + 1) - distance));
+        state->index = (state->wnd_head + ((state->wnd_mask + 1) - distance));
         mode = WRITE_HUFFMAN_LEN_DIST;
         goto write_huffman_len_dist;
         break;
@@ -786,7 +790,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     case WRITE_HUFFMAN_LEN_DIST:
         while (state->len > 0) {
             if (avail_out == 0) goto exit;
-            Bytef c = state->wnd[state->index & state->mask];
+            Bytef c = state->wnd[state->index & state->wnd_mask];
             *out++ = c;
             avail_out--;
             wrote++;
