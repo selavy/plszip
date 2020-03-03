@@ -49,7 +49,7 @@ run_test() {
 	echo -n "$TEST... "
     gzip -c $ORIG > $COMPRESSED || die "Failed to compress with gzip"
     run_inflate $PLZIP $2
-    run_inflate $INFLATE $2
+    # run_inflate $INFLATE $2
     echo ""
     rm -f $COMPRESSED
 }

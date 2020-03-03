@@ -101,44 +101,63 @@ int refill_file(Reader* r)
 
 struct BitReader
 {
-    BitReader(FILE* f) noexcept : fp(f), buffer(0), index(bufsize()) {}
+    BitReader(FILE* f) noexcept : fp(f), buff(0), bits(0) {}
 
-    // TODO: error handling
+    void nextbyte() noexcept
+    {
+        uint8_t byte;
+        if (fread(&byte, sizeof(byte), 1, fp) != 1) {
+            panic("ran out of input when more was expected");
+        }
+        buff += static_cast<uint32_t>(byte) << bits;
+        bits += 8;
+    }
+
+    uint16_t peek(size_t nbits) noexcept
+    {
+        xassert(nbits <= bits, "tried to peek %zu bits, but only have %zu bits", nbits, bits);
+        return buff & ((1u << nbits) - 1);
+    }
+
+    void need(size_t nbits) noexcept
+    {
+        while (bits < nbits)
+            nextbyte();
+    }
+
     bool read_bit() noexcept
     {
-        if (index >= bufsize()) {
-            assert(index == bufsize());
-            if (fread(&buffer, sizeof(buffer), 1, fp) != 1) {
-                panic("short read");
-            }
-            index = 0;
-        }
-        bool result = (buffer & (1u << index)) != 0;
-        ++index;
-        return result;
+        return read_bits(1) ? true : false;
     }
 
     uint16_t read_bits(size_t nbits) noexcept
     {
-        xassert(nbits <= 16, "can't read more than 16 bits at a time");
-        uint16_t result = 0;
-        for (size_t i = 0; i < nbits; ++i) {
-            result |= (read_bit() ? 1u : 0u) << i;
-        }
+        assert(0 <= nbits && nbits <= 15);
+        need(nbits);
+        auto result = peek(nbits);
+        drop(nbits);
         return result;
+    }
+
+    void drop(size_t nbits) noexcept
+    {
+        xassert(nbits <= bits, "tried to drop %zu bits, but only have %zu", nbits, bits);
+        buff >>= nbits;
+        bits -= nbits;
     }
 
     void read_aligned_to_buffer(uint8_t* buf, size_t nbytes) noexcept
     {
         // precondition: either should know are aligned to byte boundary, or
         //               need to have called flush_byte() before calling this
-        xassert(index % 8 == 0, "index should be byte-aligned");
-        xassert(index <= bufsize(), "invalid index");
-        size_t bytes_left = (bufsize() - index) / 8;
-        bytes_left = std::min(bytes_left, nbytes);
+        xassert(bits % 8 == 0, "index should be byte-aligned");
+        size_t bytes_left = std::min(bits / 8, nbytes);
         for (size_t i = 0; i < bytes_left; ++i) {
-            *buf++ = read_bits(8);
+            *buf++ = peek(8);
+            drop(8);
         }
+        assert(buff == 0u);
+        assert(bits == 0);
         nbytes -= bytes_left;
         if (nbytes > 0) {
             if (fread(buf, nbytes, 1, fp) != 1) {
@@ -147,21 +166,16 @@ struct BitReader
         }
     }
 
-    size_t bufsize() const noexcept { return sizeof(buffer)*8; }
-
     // force the next call to read_bit(s) to grab another byte
     void flush_byte() noexcept
     {
-        auto bits_used_in_byte = index % 8;
-        if (bits_used_in_byte > 0) {
-            index += 8 - bits_used_in_byte;
-        }
-        xassert(index % 8 == 0, "index should be byte-aligned");
+        buff >>= bits % 8;
+        bits -= bits % 8;
     }
 
     FILE*    fp;
-    uint32_t buffer;
-    uint32_t index;
+    uint32_t buff;
+    size_t   bits;
 };
 
 class WriteBuffer {
@@ -386,42 +400,68 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     static size_t bl_count[MaxBitLength];
     static uint16_t next_code[MaxBitLength];
     static uint16_t codes[MaxCodes];
+    size_t max_bit_length = 0;
 
     if (!(n < MaxCodes)) {
         xassert(n < MaxCodes, "code lengths too long");
         return false;
     }
 
-    // 1) Count the number of codes for each code length. Let bl_count[N] be the number
-    // of codes of length N, N >= 1.
-    memset(&bl_count[0], 0, sizeof(bl_count));
-    size_t max_bit_length = 0;
-    for (size_t i = 0; i < n; ++i) {
-        xassert(code_lengths[i] <= MaxBitLength, "Unsupported bit length");
-        ++bl_count[code_lengths[i]];
-        max_bit_length = std::max<uint16_t>(code_lengths[i], max_bit_length);
-    }
-    bl_count[0] = 0;
-
-    // 2) Find the numerical value of the smallest code for each code length:
-    memset(&next_code[0], 0, sizeof(next_code));
-    uint32_t code = 0;
-    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
-        code = (code + bl_count[bits-1]) << 1;
-        next_code[bits] = code;
+    { // 1) Count the number of codes for each code length. Let bl_count[N] be the number
+        // of codes of length N, N >= 1.
+        memset(&bl_count[0], 0, sizeof(bl_count));
+        for (size_t i = 0; i < n; ++i) {
+            xassert(code_lengths[i] <= MaxBitLength, "Unsupported bit length");
+            ++bl_count[code_lengths[i]];
+            max_bit_length = std::max<uint16_t>(code_lengths[i], max_bit_length);
+        }
+        bl_count[0] = 0;
     }
 
-    // 3) Assign numerical values to all codes, using consecutive values for all codes of
-    // the same length with the base values determined at step 2.  Codes that are never
-    // used (which have a bit length of zero) must not be assigned a value.
-    memset(&codes[0], 0, sizeof(codes));
-    for (size_t i = 0; i < n; ++i) {
-        if (code_lengths[i] != 0) {
-            codes[i] = next_code[code_lengths[i]]++;
-            xassert((16 - __builtin_clz(codes[i])) <= code_lengths[i], "overflowed code length");
+    { // 2) Find the numerical value of the smallest code for each code length:
+        memset(&next_code[0], 0, sizeof(next_code));
+        uint32_t code = 0;
+        for (size_t bits = 1; bits <= max_bit_length; ++bits) {
+            code = (code + bl_count[bits-1]) << 1;
+            next_code[bits] = code;
         }
     }
 
+    { // 3) Assign numerical values to all codes, using consecutive values for all codes of
+        // the same length with the base values determined at step 2.  Codes that are never
+        // used (which have a bit length of zero) must not be assigned a value.
+        memset(&codes[0], 0, sizeof(codes));
+        for (size_t i = 0; i < n; ++i) {
+            if (code_lengths[i] != 0) {
+                codes[i] = next_code[code_lengths[i]]++;
+                xassert((16 - __builtin_clz(codes[i])) <= code_lengths[i], "overflowed code length");
+            }
+        }
+    }
+
+#if 0
+    // 4) Generate dense table. This means that can read `max_bit_length` bits at a
+    // time, and do a lookup immediately; should then use `code_lengths` to
+    // determine how many of the peek'd bits should be removed.
+    size_t tablesz = 1u << max_bit_length;
+    newtree.assign(tablesz, EmptySentinel);
+    for (size_t i = 0; i < code_lengths.size(); ++i) {
+        if (code_lengths[i] == 0) continue;
+        uint16_t code = codes[i];
+        uint16_t codelen = code_lengths[i];
+        uint16_t value = static_cast<uint16_t>(i);
+        size_t empty_bits = max_bit_length - codelen;
+        code = static_cast<uint16_t>(code << empty_bits);
+        uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
+        uint16_t maxcode = code | lowbits;
+        while (code <= maxcode) {
+            xassert(newtree[code] == EmptySentinel, "reused index: %u", code);
+            newtree[code++] = value;
+        }
+    }
+#endif
+
+#if 1
     // Table size is 2**(max_bit_length + 1)
     size_t table_size = 1u << (max_bit_length + 1);
     tree.assign(table_size, EmptySentinel);
@@ -440,6 +480,7 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
         tree[index] = value;
     }
     assert(tree.size() == table_size);
+#endif
 
     return true;
 }
