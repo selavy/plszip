@@ -62,7 +62,6 @@ static constexpr size_t MAX_CODE_LENGTHS = 322;
 /* Internal Types */
 enum inflate_mode {
     HEADER, /* ID1 | ID2 | CM */
-    FLAGS,  /* FLG */
     MTIME,  /* MTIME */
     XFL,    /* XFL */
     OS,     /* OS */
@@ -398,7 +397,6 @@ int PZ_inflate(z_streamp strm, int flush) {
     uLong buff = state->buff;
     uint8_t id1, id2, cm;
     uint32_t mtime;
-    uInt crc16;
     uint16_t value;
     vec htreevec;
 
@@ -408,7 +406,7 @@ int PZ_inflate(z_streamp strm, int flush) {
 
     switch (mode) {
     case HEADER:
-        NEEDBITS(8 + 8 + 8);
+        NEEDBITS(8 + 8 + 8 + 8);
         id1 = PEEKBITS(8);
         DROPBITS(8);
         id2 = PEEKBITS(8);
@@ -421,18 +419,12 @@ int PZ_inflate(z_streamp strm, int flush) {
         if (cm != 8) {
             panic(Z_STREAM_ERROR, "invalid compression method: %u", cm);
         }
+        state->flag = PEEKBITS(8);
+        DROPBITS(8);
         DEBUG0("GZIP HEADER");
         DEBUG("\tID1   = %3u (0x%02x)", id1, id1);
         DEBUG("\tID2   = %3u (0x%02x)", id2, id2);
         DEBUG("\tCM    = %3u", cm);
-        mode = FLAGS;
-        goto flags;
-        break;
-    flags:
-    case FLAGS:
-        NEEDBITS(8);
-        state->flag = PEEKBITS(8);
-        DROPBITS(8);
         DEBUG("\tFLG   = %3u", state->flag);
         mode = MTIME;
         goto mtime;
@@ -452,15 +444,9 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     xfl:
     case XFL:
-        NEEDBITS(8);
+        NEEDBITS(8+8);
         DEBUG("\tXFL   = %3lu", PEEKBITS(8));
         DROPBITS(8);
-        mode = OS;
-        goto os;
-        break;
-    os:
-    case OS:
-        NEEDBITS(8);
         DEBUG("\tOS    = %3lu", PEEKBITS(8));
         DROPBITS(8);
         mode = FEXTRA;
@@ -521,16 +507,8 @@ int PZ_inflate(z_streamp strm, int flush) {
     fhcrc:
     case FHCRC:
         if ((state->flag & (1u << 1)) != 0) {
-            // REVISIT(peter): this is a bit ridiculous just to satisfy the spurious
-            // warnings. The issue is that the shift operators promote to an integer...
             NEEDBITS(16);
-            (void)crc16;  // unused variable in release mode
-            const uInt bytes[2] = {
-                static_cast<uInt>(buff >> 0) & 0xFFu,
-                static_cast<uInt>(buff >> 8) & 0xFFu,
-            };
-            crc16 = bytes[1] | bytes[0];
-            DEBUG("\tCRC = %u", crc16);
+            DEBUG("\tCRC = %lu", PEEKBITS(16));
             DROPBITS(16);
         }
         DEBUG0("Finished parsing GZIP header");
@@ -573,11 +551,6 @@ int PZ_inflate(z_streamp strm, int flush) {
         }
         state->len = buff & 0xFFFFu;
         DROPBITS(32);
-
-        // TEMP TEMP TEMP
-        state->temp = 0;
-        state->code = state->len;
-
         mode = NO_COMPRESSION_READ;
         goto no_compression_read;
         break;
@@ -600,7 +573,6 @@ int PZ_inflate(z_streamp strm, int flush) {
             while (amount-- > 0) {
                 *out++ = static_cast<Bytef>(PEEKBITS(8));
                 DROPBITS(8);
-                state->temp++;
             }
             assert(bits == 0);
             assert(buff == 0);
@@ -615,7 +587,6 @@ int PZ_inflate(z_streamp strm, int flush) {
             while (amount-- > 0) {
                 windowAdd(state, in, sizeof(*in));
                 *out++ = *in++;
-                state->temp++;
             }
             CHECK_IO();
             assert(state->len == 0 || (avail_in == 0 || avail_out == 0));
@@ -623,7 +594,6 @@ int PZ_inflate(z_streamp strm, int flush) {
                 goto exit;
             }
         }
-        assert(state->temp == state->code);
         assert(state->len == 0);
         mode = END_BLOCK;
         goto end_block;
