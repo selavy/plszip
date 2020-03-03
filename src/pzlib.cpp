@@ -1,5 +1,8 @@
 #include "pzlib.h"
 
+// TODO: faster huffman code reading using linked-listed LUT implementation
+// TODO: can I remove the allocation for the dynamic trees?
+
 #ifndef USE_ZLIB
 
 #include <cassert>
@@ -120,7 +123,7 @@ struct internal_state {
     uint32_t mask;
     uint32_t head;
     uint32_t size;
-    Bytef *wnd;  // TODO(peter): just put at end of internal_state with window[1]
+    Bytef wnd[1];
 };
 
 voidpf zcalloc(voidpf opaque, uInt items, uInt size) {
@@ -160,7 +163,10 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
         return Z_STREAM_ERROR;
     }
 
-    void *mem = strm->zalloc(strm->opaque, 1, sizeof(internal_state));
+    size_t window_size = (1u << windowBits);
+    size_t window_bytes = sizeof(Bytef) * window_size;
+    size_t alloc_size = sizeof(internal_state) + window_bytes;
+    void *mem = strm->zalloc(strm->opaque, 1, static_cast<uInt>(alloc_size));
     if (!mem) {
         strm->msg = "failed to allocate memory for internal state";
         return Z_MEM_ERROR;
@@ -197,21 +203,9 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->dynlits.len = 0;
     strm->state->dyndists.d = NULL;
     strm->state->dyndists.len = 0;
-    memset(strm->state->htree, 0, sizeof(strm->state->htree));
-    memset(strm->state->dyncodelens, 0, sizeof(strm->state->dyncodelens));
-
-    // TODO(peter): use windowBits instead
-    strm->state->wnd = reinterpret_cast<Bytef *>(strm->zalloc(strm->opaque, sizeof(Bytef), WINDOW_SIZE));
-    if (!strm->state->wnd) {
-        strm->msg = "failed to allocate memory for window";
-        return Z_MEM_ERROR;
-    }
-    strm->state->mask = WINDOW_SIZE - 1;
+    strm->state->mask = static_cast<uint32_t>(window_size - 1);
     strm->state->head = 0;
     strm->state->size = 0;
-    // TEMP TEMP
-    memset(strm->state->wnd, 0, sizeof(strm->state->wnd[0]) * WINDOW_SIZE);
-
     return Z_OK;
 }
 
@@ -237,8 +231,6 @@ static bool checkDistance(const internal_state *s, size_t distance) {
 int inflateEnd(z_streamp strm) {
     printf("pzlib::inflateEnd\n");
     if (strm->state) {
-        strm->zfree(strm->opaque, strm->state->wnd);
-        strm->state->wnd = Z_NULL;
         if (strm->state->dynlits.len != 0) {
             strm->zfree(strm->opaque, const_cast<uint16_t *>(strm->state->dynlits.d));
             strm->state->dynlits.d = Z_NULL;
