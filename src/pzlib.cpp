@@ -89,7 +89,7 @@ struct internal_state {
     inflate_mode mode;
     uInt bits;   // # of bits in bit accumulator
     uLong buff;  // bit accumator
-    Byte flag;
+    Byte flags;
     std::string filename;
     Byte blkfinal;
     Byte blktype;
@@ -172,7 +172,7 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->mode = HEADER;
     strm->state->buff = 0UL;
     strm->state->bits = 0;
-    strm->state->flag = 0;
+    strm->state->flags = 0;
     strm->state->blkfinal = 0;
     strm->state->blktype = 0;
     strm->state->block_number = 0;
@@ -420,13 +420,13 @@ int PZ_inflate(z_streamp strm, int flush) {
         if (cm != 8) {
             panic(Z_STREAM_ERROR, "invalid compression method: %u", cm);
         }
-        state->flag = PEEKBITS(8);
+        state->flags = PEEKBITS(8);
         DROPBITS(8);
         DEBUG0("GZIP HEADER");
         DEBUG("\tID1   = %3u (0x%02x)", id1, id1);
         DEBUG("\tID2   = %3u (0x%02x)", id2, id2);
         DEBUG("\tCM    = %3u", cm);
-        DEBUG("\tFLG   = %3u", state->flag);
+        DEBUG("\tFLG   = %3u", state->flags);
         mode = MTIME;
         goto mtime;
         break;
@@ -456,7 +456,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     fextra:
     case FEXTRA:
         state->index = 0;
-        if ((state->flag & (1u << 2)) != 0) {
+        if ((state->flags & (1u << 2)) != 0) {
             NEEDBITS(16);
             state->index |= ((buff >> 0) & 0xFFu) << 8;
             state->index |= ((buff >> 8) & 0xFFu) << 0;
@@ -477,7 +477,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     fname:
     case FNAME:
-        if ((state->flag & (1u << 3)) != 0) {
+        if ((state->flags & (1u << 3)) != 0) {
             for (;;) {
                 NEEDBITS(8);
                 state->filename.push_back(static_cast<char>(PEEKBITS(8)));
@@ -494,7 +494,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     fcomment:
     case FCOMMENT:
-        if ((state->flag & (1u << 4)) != 0) {
+        if ((state->flags & (1u << 4)) != 0) {
             Bytef c;
             do {
                 NEEDBITS(8);
@@ -507,7 +507,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     fhcrc:
     case FHCRC:
-        if ((state->flag & (1u << 1)) != 0) {
+        if ((state->flags & (1u << 1)) != 0) {
             NEEDBITS(16);
             DEBUG("\tCRC = %lu", PEEKBITS(16));
             DROPBITS(16);
