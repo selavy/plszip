@@ -55,8 +55,6 @@ static uint16_t hlengths[NUM_CODE_LENGTHS];
 static constexpr size_t MAX_HTREE_BIT_LENGTH = 8;
 static constexpr size_t HTREE_TABLE_SIZE = 1u << MAX_HTREE_BIT_LENGTH;
 static constexpr size_t MAX_CODE_LENGTHS = 322;
-// TODO(peter): need to move into internal_state
-static uint16_t dynamic_code_lengths[MAX_CODE_LENGTHS];
 
 /* Internal Types */
 enum inflate_mode {
@@ -115,8 +113,8 @@ struct internal_state {
     vec dynlits;
     vec dyndists;
 
-    // TODO(peter): need to move this into internal_state
     uint16_t htree[HTREE_TABLE_SIZE];
+    uint16_t dyncodelens[MAX_CODE_LENGTHS];
 
     /* circular buffer window */
     uint32_t mask;
@@ -199,6 +197,8 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->dynlits.len = 0;
     strm->state->dyndists.d = NULL;
     strm->state->dyndists.len = 0;
+    memset(strm->state->htree, 0, sizeof(strm->state->htree));
+    memset(strm->state->dyncodelens, 0, sizeof(strm->state->dyncodelens));
 
     // TODO(peter): use windowBits instead
     strm->state->wnd = reinterpret_cast<Bytef *>(strm->zalloc(strm->opaque, sizeof(Bytef), WINDOW_SIZE));
@@ -429,10 +429,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         if (cm != 8) {
             panic(Z_STREAM_ERROR, "invalid compression method: %u", cm);
         }
-        // TODO(peter): figure out solution for:
-        // "error: ISO C++11 requires at least one argument for the "..." in
-        // a variadic macro [-Werror]"
-        DEBUG("%s", "GZIP HEADER");
+        DEBUG0("GZIP HEADER");
         DEBUG("\tID1   = %3u (0x%02x)", id1, id1);
         DEBUG("\tID2   = %3u (0x%02x)", id2, id2);
         DEBUG("\tCM    = %3u", cm);
@@ -544,10 +541,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             DEBUG("\tCRC = %u", crc16);
             DROPBITS(16);
         }
-        // TODO(peter): figure out solution for:
-        // "error: ISO C++11 requires at least one argument for the "..." in
-        // a variadic macro [-Werror]"
-        DEBUG("%s", "Finished parsing GZIP header");
+        DEBUG0("Finished parsing GZIP header");
         mode = BEGIN_BLOCK;
         goto begin_block;
         break;
@@ -681,7 +675,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         htreevec.d = state->htree;
         if (!init_huffman_tree<false>(strm, &htreevec, hlengths, NUM_CODE_LENGTHS))
             panic(Z_MEM_ERROR, "%s", "unable to initialize huffman header tree");
-        memset(dynamic_code_lengths, 0, sizeof(dynamic_code_lengths));
+        memset(state->dyncodelens, 0, sizeof(state->dyncodelens));
         state->index = 0;
         state->code = 1;
         mode = DYNAMIC_CODE_LENGTHS;
@@ -700,7 +694,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             uInt nbits, offset;
             uint16_t rvalue;
             if (value <= 15) {
-                dynamic_code_lengths[state->index++] = value;
+                state->dyncodelens[state->index++] = value;
             } else if (value <= 18) {
                 switch (value) {
                 case 16:
@@ -708,7 +702,7 @@ int PZ_inflate(z_streamp strm, int flush) {
                     offset = 3;
                     if (state->index == 0)
                         panic(Z_STREAM_ERROR, "invalid repeat code %u with no previous code lengths", value);
-                    rvalue = dynamic_code_lengths[state->index - 1];
+                    rvalue = state->dyncodelens[state->index - 1];
                     break;
                 case 17:
                     nbits = 3;
@@ -728,16 +722,16 @@ int PZ_inflate(z_streamp strm, int flush) {
                 DROPBITS(nbits);
                 repeat += offset;
                 while (repeat-- > 0) {
-                    dynamic_code_lengths[state->index++] = rvalue;
+                    state->dyncodelens[state->index++] = rvalue;
                 }
             } else {
                 panic(Z_STREAM_ERROR, "invalid dynamic code length: %u", value);
             }
             state->code = 1;
         }
-        if (!init_huffman_tree<true>(strm, &state->dynlits, &dynamic_code_lengths[0], state->hlit))
+        if (!init_huffman_tree<true>(strm, &state->dynlits, &state->dyncodelens[0], state->hlit))
             panic0(Z_MEM_ERROR, "failed to initialize dynamic huffman literals tree");
-        if (!init_huffman_tree<true>(strm, &state->dyndists, &dynamic_code_lengths[state->hlit], state->hdist))
+        if (!init_huffman_tree<true>(strm, &state->dyndists, &state->dyncodelens[state->hlit], state->hdist))
             panic0(Z_MEM_ERROR, "failed to initialize dynamic huffman distances tree");
 
         state->lits = state->dynlits.d;
