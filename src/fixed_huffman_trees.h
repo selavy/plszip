@@ -114,17 +114,17 @@ static constexpr uint16_t fixed_huffman_literals_codes[512] = {
 static constexpr uint16_t fixed_huffman_distance_maxlen = 5;
 
 static constexpr uint16_t fixed_huffman_distance_codelens[32] = {
-        8,     8,     8,     8,     8,     8,     8,     8,    // (   0)
-        8,     8,     8,     8,     8,     8,     8,     8,    // (   8)
-        8,     8,     8,     8,     8,     8,     8,     8,    // (  16)
-        8,     8,     8,     8,     8,     8,     8,     8,    // (  24)
+        5,     5,     5,     5,     5,     5,     5,     5,    // (   0)
+        5,     5,     5,     5,     5,     5,     5,     5,    // (   8)
+        5,     5,     5,     5,     5,     5,     5,     5,    // (  16)
+        5,     5,     5,     5,     5,     5,     5,     5,    // (  24)
     };
 
-static constexpr uint16_t fixed_huffman_distance_tree[32] = {
-        0, 65535,    16, 65535,     8, 65535,    24, 65535,    // (   0)
-        4, 65535,    20, 65535,    12, 65535,    28, 65535,    // (   8)
-        2, 65535,    18, 65535,    10, 65535,    26, 65535,    // (  16)
-        6, 65535,    22, 65535,    14, 65535,    30, 65535,    // (  24)
+static constexpr uint16_t fixed_huffman_distance_codes[32] = {
+        0,    16,     8,    24,     4,    20,    12,    28,    // (   0)
+        2,    18,    10,    26,     6,    22,    14,    30,    // (   8)
+        1,    17,     9,    25,     5,    21,    13,    29,    // (  16)
+        3,    19,    11,    27,     7,    23,    15,    31,    // (  24)
     };
 
 #endif // FIXED_HUFFMAN_TREES__H_

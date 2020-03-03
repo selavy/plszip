@@ -8,6 +8,9 @@
 #include <cassert>
 #include <memory>
 
+// TEMP TEMP
+#include "fixed_huffman_trees.h"
+
 #define BUFFERSZ size_t(1u << 15)
 
 #define panic(fmt, ...) do { fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); exit(1); } while(0)
@@ -399,6 +402,7 @@ const size_t DISTANCE_BASES[32] = {
      257,  385,  513,   769,  1025,  1537, 2049, 3073,
     4097, 6145, 8193, 12289, 16385, 24577,    0,    0,
 };
+
 static const unsigned char BitReverseTable256[256] = 
 {
 #   define R2(n)     n,     n + 2*64,     n + 1*64,     n + 3*64
@@ -479,14 +483,6 @@ void init_huffman_tree(HTree& tree)
         uint16_t codelen = code_lengths[i];
         uint16_t value = static_cast<uint16_t>(i);
         size_t empty_bits = max_bit_length - codelen;
-        // uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
-        // for (uint16_t mask; mask <= lowbits; ++mask) {
-        //     uint16_t newcode = (mask << codelen) | code;
-        //     xassert(tree.codes[newcode] == EmptySentinel,
-        //             "reused index %u for code %u value %u", newcode, code, value);
-        //     tree.codes[newcode] = value;
-        // }
-
         code = static_cast<uint16_t>(code << empty_bits);
         uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
         uint16_t maxcode = code | lowbits;
@@ -621,6 +617,27 @@ void init_fixed_huffman_data(HTree& lit_tree, HTree& dist_tree) noexcept
     dist_tree.maxlen = 0;
     init_huffman_tree(dist_tree);
     assert(dist_tree.maxlen != 0);
+
+    // TEMP TEMP
+    assert(lit_tree.maxlen          == fixed_huffman_literals_maxlen);
+    assert(lit_tree.codes.size()    == (sizeof(fixed_huffman_literals_codes)    / sizeof(uint16_t)));
+    assert(lit_tree.codelens.size() == (sizeof(fixed_huffman_literals_codelens) / sizeof(uint16_t)));
+    for (size_t i = 0; i < lit_tree.codes.size(); ++i) {
+        assert(lit_tree.codes[i]    == fixed_huffman_literals_codes[i]);
+    }
+    for (size_t i = 0; i < lit_tree.codelens.size(); ++i) {
+        assert(lit_tree.codelens[i] == fixed_huffman_literals_codelens[i]);
+    }
+
+    assert(dist_tree.maxlen          == fixed_huffman_distance_maxlen);
+    assert(dist_tree.codes.size()    == (sizeof(fixed_huffman_distance_codes)    / sizeof(uint16_t)));
+    assert(dist_tree.codelens.size() == (sizeof(fixed_huffman_distance_codelens) / sizeof(uint16_t)));
+    for (size_t i = 0; i < dist_tree.codes.size(); ++i) {
+        assert(dist_tree.codes[i]    == fixed_huffman_distance_codes[i]);
+    }
+    for (size_t i = 0; i < dist_tree.codelens.size(); ++i) {
+        assert(dist_tree.codelens[i] == fixed_huffman_distance_codelens[i]);
+    }
 }
 
 void flush_buffer(FILE* fp, const WriteBuffer& buffer, size_t nbytes) noexcept

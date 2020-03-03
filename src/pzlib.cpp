@@ -5,6 +5,7 @@
 
 #ifndef USE_ZLIB
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -54,8 +55,7 @@ static constexpr size_t WINDOW_SIZE = 1u << 16;
 
 static constexpr size_t NUM_CODE_LENGTHS = 19;
 static size_t order[NUM_CODE_LENGTHS] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
-static uint16_t hlengths[NUM_CODE_LENGTHS];
-static constexpr size_t MAX_HTREE_BIT_LENGTH = 8;
+static constexpr size_t MAX_HTREE_BIT_LENGTH = 7;
 static constexpr size_t HTREE_TABLE_SIZE = 1u << MAX_HTREE_BIT_LENGTH;
 static constexpr size_t MAX_CODE_LENGTHS = 322;
 
@@ -85,16 +85,10 @@ enum inflate_mode {
 };
 typedef enum inflate_mode inflate_mode;
 
-struct vec {
-    size_t len;
-    const uint16_t *d;
-};
-
 struct internal_state {
     inflate_mode mode;
-    uInt bits;  /* # of bits in bit accumulator */
-    uLong buff; /* bit accumator */
-    uLong temp;
+    uInt bits;   // # of bits in bit accumulator
+    uLong buff;  // bit accumator
     Byte flag;
     std::string filename;
     Byte blkfinal;
@@ -102,21 +96,24 @@ struct internal_state {
     uInt len;
     int block_number;  // TEMP TEMP
     const uint16_t *lits;
-    size_t litlen;
-    const uint16_t *dists;
-    size_t distlen;
-    size_t length;
+    // either points to `fixed_huffman_literals_codelens` or into `dynlens`
+    const uint16_t *litlens;
+    size_t litmaxlen;
+    const uint16_t *dsts;
+    // either points to `fixed_huffman_distance_codelens` or into `dynlens`
+    const uint16_t *dstlens;
+    size_t dstmaxlen;
     size_t index;
-    size_t code;
     size_t hlit;
     size_t hdist;
     size_t hclen;
     size_t ncodes;
-    vec dynlits;
-    vec dyndists;
+    uint16_t *dynlits;
+    uint16_t *dyndsts;
 
     uint16_t htree[HTREE_TABLE_SIZE];
-    uint16_t dyncodelens[MAX_CODE_LENGTHS];
+    uint16_t dynlens[MAX_CODE_LENGTHS];
+    uint16_t hlengths[NUM_CODE_LENGTHS];
 
     /* circular buffer window */
     uint32_t mask;
@@ -172,36 +169,26 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     }
     // TEMP TEMP: only have to do this because have std::string
     strm->state = new (mem) internal_state{};
-
-    // strm->state = reinterpret_cast<internal_state *>(strm->zalloc(strm->opaque, 1, sizeof(struct internal_state)));
-    // if (!strm->state) {
-    //     strm->msg = "failed to allocate memory for internal state";
-    //     return Z_MEM_ERROR;
-    // }
-
     strm->state->mode = HEADER;
     strm->state->buff = 0UL;
     strm->state->bits = 0;
     strm->state->flag = 0;
-    strm->state->temp = 0;
     strm->state->blkfinal = 0;
     strm->state->blktype = 0;
     strm->state->block_number = 0;
-    strm->state->lits = NULL;
-    strm->state->litlen = 0;
-    strm->state->dists = NULL;
-    strm->state->distlen = 0;
-    strm->state->length = 0;
+    strm->state->lits = nullptr;
+    strm->state->litlens = nullptr;
+    strm->state->litmaxlen = 0;
+    strm->state->dsts = nullptr;
+    strm->state->dstlens = nullptr;
+    strm->state->dstmaxlen = 0;
     strm->state->index = 0;
-    strm->state->code = 1;
     strm->state->hlit = 0;
     strm->state->hdist = 0;
     strm->state->hclen = 0;
     strm->state->ncodes = 0;
-    strm->state->dynlits.d = NULL;
-    strm->state->dynlits.len = 0;
-    strm->state->dyndists.d = NULL;
-    strm->state->dyndists.len = 0;
+    strm->state->dynlits = nullptr;
+    strm->state->dyndsts = nullptr;
     strm->state->mask = static_cast<uint32_t>(window_size - 1);
     strm->state->head = 0;
     strm->state->size = 0;
@@ -230,15 +217,13 @@ static bool checkDistance(const internal_state *s, size_t distance) {
 int inflateEnd(z_streamp strm) {
     printf("pzlib::inflateEnd\n");
     if (strm->state) {
-        if (strm->state->dynlits.len != 0) {
-            strm->zfree(strm->opaque, const_cast<uint16_t *>(strm->state->dynlits.d));
-            strm->state->dynlits.d = Z_NULL;
-            strm->state->dynlits.len = 0;
+        if (strm->state->dynlits) {
+            strm->zfree(strm->opaque, strm->state->dynlits);
+            strm->state->dynlits = nullptr;
         }
-        if (strm->state->dyndists.len != 0) {
-            strm->zfree(strm->opaque, const_cast<uint16_t *>(strm->state->dyndists.d));
-            strm->state->dyndists.d = Z_NULL;
-            strm->state->dyndists.len = 0;
+        if (strm->state->dyndsts) {
+            strm->zfree(strm->opaque, strm->state->dyndsts);
+            strm->state->dyndsts = nullptr;
         }
         strm->zfree(strm->opaque, strm->state);
     }
@@ -293,82 +278,99 @@ static char msgbuf[1024];
         bits -= bits & 7;  \
     } while (0)
 
+static const unsigned char BitReverseTable256[256] = {
+// clang-format off
+#   define R2(n)     n,     n + 2*64,     n + 1*64,     n + 3*64
+#   define R4(n) R2(n), R2(n + 2*16), R2(n + 1*16), R2(n + 3*16)
+#   define R6(n) R4(n), R4(n + 2*4 ), R4(n + 1*4 ), R4(n + 3*4 )
+    R6(0), R6(2), R6(1), R6(3)
+#undef R2
+#undef R4
+#undef R6
+    // clang-format on
+};
 
-template <bool DynAllocate>
-static bool init_huffman_tree(z_streamp s, vec *tree, const uint16_t *code_lengths, size_t n) {
+uint16_t flip_u16(uint16_t v) noexcept {
+    // clang-format off
+    return static_cast<uint16_t>(
+        (BitReverseTable256[(v >> 0) & 0xff] << 8) |
+        (BitReverseTable256[(v >> 8) & 0xff] << 0)
+    );
+    // clang-format on
+}
+
+uint16_t flip_code(uint16_t code, size_t codelen) {
+    assert(0 < codelen && codelen <= 16);
+    return static_cast<uint16_t>(flip_u16(code) >> (16 - codelen));
+}
+
+static void init_huffman_tree(uint16_t *tree, const size_t maxlen, const uint16_t *codelens, size_t ncodes) {
     constexpr size_t MAX_HCODE_BIT_LENGTH = 16;
     constexpr size_t MAX_HUFFMAN_CODES = 512;
-    static size_t bl_count[MAX_HCODE_BIT_LENGTH];
-    static uint16_t next_code[MAX_HCODE_BIT_LENGTH];
-    static uint16_t codes[MAX_HUFFMAN_CODES];
+    size_t bl_count[MAX_HCODE_BIT_LENGTH];
+    uint16_t next_code[MAX_HCODE_BIT_LENGTH];
+    uint16_t codes[MAX_HUFFMAN_CODES];
 
-    if (!(n < MAX_HUFFMAN_CODES)) {
-        assert(n < MAX_HUFFMAN_CODES);
-        return false;
+    assert(ncodes < MAX_HUFFMAN_CODES);
+
+    {
+        // 1) Count the number of codes for each code length. Let bl_count[N] be the
+        // number of codes of length N, N >= 1.
+        memset(&bl_count[0], 0, sizeof(bl_count));
+        for (size_t i = 0; i < ncodes; ++i) {
+            assert(codelens[i] <= MAX_HCODE_BIT_LENGTH);
+            assert(codelens[i] <= maxlen);
+            ++bl_count[codelens[i]];
+        }
+        bl_count[0] = 0;
     }
 
-    // 1) Count the number of codes for each code length. Let bl_count[N] be the
-    // number of codes of length N, N >= 1.
-    memset(&bl_count[0], 0, sizeof(bl_count));
-    size_t max_bit_length = 0;
-    for (size_t i = 0; i < n; ++i) {
-        assert(code_lengths[i] <= MAX_HCODE_BIT_LENGTH);
-        ++bl_count[code_lengths[i]];
-        max_bit_length = code_lengths[i] > max_bit_length ? code_lengths[i] : max_bit_length;
-    }
-    bl_count[0] = 0;
-
-    // 2) Find the numerical value of the smallest code for each code length:
-    memset(&next_code[0], 0, sizeof(next_code));
-    size_t code = 0;
-    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
-        code = (code + bl_count[bits - 1]) << 1;
-        next_code[bits] = static_cast<uint16_t>(code);
-    }
-
-    // 3) Assign numerical values to all codes, using consecutive values for all
-    // codes of the same length with the base values determined at step 2. Codes
-    // that are never used (which have a bit length of zero) must not be
-    // assigned a value.
-    memset(&codes[0], 0, sizeof(codes));
-    for (size_t i = 0; i < n; ++i) {
-        if (code_lengths[i] != 0) {
-            codes[i] = next_code[code_lengths[i]]++;
-            assert((16 - __builtin_clz(codes[i])) <= code_lengths[i]);
+    {
+        // 2) Find the numerical value of the smallest code for each code length:
+        memset(&next_code[0], 0, sizeof(next_code));
+        uint16_t code = 0;
+        for (size_t bits = 1; bits <= maxlen; ++bits) {
+            code = static_cast<uint16_t>((code + bl_count[bits - 1]) << 1);
+            next_code[bits] = code;
         }
     }
 
-    // Table size is 2**(max_bit_length + 1)
-    size_t table_size = 1u << (max_bit_length + 1);
-    uint16_t *t;
-    if (DynAllocate && table_size > tree->len) {
-        if (tree->d) {
-            s->zfree(s->opaque, const_cast<uint16_t *>(tree->d));
+    {
+        // 3) Assign numerical values to all codes, using consecutive values for all
+        // codes of the same length with the base values determined at step 2. Codes
+        // that are never used (which have a bit length of zero) must not be
+        // assigned a value.
+        memset(&codes[0], 0, sizeof(codes));
+        for (size_t i = 0; i < ncodes; ++i) {
+            if (codelens[i] != 0) {
+                codes[i] = next_code[codelens[i]]++;
+                assert((16 - __builtin_clz(codes[i])) <= codelens[i]);
+            }
         }
-        t = reinterpret_cast<uint16_t *>(s->zalloc(s->opaque, static_cast<uInt>(table_size), sizeof(*t)));
-    } else {
-        assert(table_size <= tree->len);
-        t = const_cast<uint16_t *>(tree->d);
     }
-    for (size_t j = 0; j < table_size; ++j) {
-        t[j] = EMPTY_SENTINEL;
-    }
-    for (size_t value = 0; value < n; ++value) {
-        int len = code_lengths[value];
-        if (len == 0) {
-            continue;
+
+    {
+        // 4) Generate dense table. This means that can read `max_bit_length` bits at a
+        // time, and do a lookup immediately; should then use `code_lengths` to
+        // determine how many of the peek'd bits should be removed.
+        memset(tree, 0xff, (1u << maxlen) * sizeof(tree[0]));
+        for (size_t i = 0; i < ncodes; ++i) {
+            if (codelens[i] == 0) continue;
+            uint16_t code = codes[i];
+            uint16_t codelen = codelens[i];
+            uint16_t value = static_cast<uint16_t>(i);
+            size_t empty_bits = maxlen - codelen;
+            code = static_cast<uint16_t>(code << empty_bits);
+            uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
+            uint16_t maxcode = code | lowbits;
+            while (code <= maxcode) {
+                uint16_t flipped = flip_code(code, maxlen);
+                assert(tree[flipped] == 0xffffu);
+                tree[flipped] = value;
+                ++code;
+            }
         }
-        code = codes[value];
-        size_t index = 1;
-        for (int i = len - 1; i >= 0; --i) {
-            index = (index << 1) | ((code >> i) & 0x1u);
-        }
-        assert(t[index] == EMPTY_SENTINEL);
-        t[index] = static_cast<uint16_t>(value);
     }
-    tree->d = t;
-    tree->len = table_size;
-    return true;
 }
 
 #define CHECK_IO()                                    \
@@ -398,7 +400,6 @@ int PZ_inflate(z_streamp strm, int flush) {
     uint8_t id1, id2, cm;
     uint32_t mtime;
     uint16_t value;
-    vec htreevec;
 
     if (in == Z_NULL || out == Z_NULL) {
         return Z_STREAM_ERROR;
@@ -444,7 +445,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     xfl:
     case XFL:
-        NEEDBITS(8+8);
+        NEEDBITS(8 + 8);
         DEBUG("\tXFL   = %3lu", PEEKBITS(8));
         DROPBITS(8);
         DEBUG("\tOS    = %3lu", PEEKBITS(8));
@@ -565,7 +566,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             // Step 1. Flush remaining bytes in bit buffer to output
             assert(bits % 8 == 0);
             uInt bytes = bits / 8;
-            uInt amount = std::min<uInt>(state->len, std::min<uInt>(bytes, avail_out));
+            uInt amount = std::min(state->len, std::min(bytes, avail_out));
             state->len -= amount;
             avail_out -= amount;
             read -= amount;
@@ -578,7 +579,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             assert(buff == 0);
 
             // Step 2. Stream directly from input to output
-            amount = std::min<uInt>(state->len, std::min<uInt>(avail_in, avail_out));
+            amount = std::min(state->len, std::min(avail_in, avail_out));
             state->len -= amount;
             avail_in -= amount;
             avail_out -= amount;
@@ -600,12 +601,13 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     fixed_huffman_block:
     case FIXED_HUFFMAN:
-        state->lits = fixed_huffman_literals_tree;
-        state->litlen = sizeof(fixed_huffman_literals_tree);
-        state->dists = fixed_huffman_distance_tree;
-        state->distlen = sizeof(fixed_huffman_distance_tree);
+        state->lits = fixed_huffman_literals_codes;
+        state->litlens = fixed_huffman_literals_codelens;
+        state->litmaxlen = fixed_huffman_literals_maxlen;
+        state->dsts = fixed_huffman_distance_codes;
+        state->dstlens = fixed_huffman_distance_codelens;
+        state->dstmaxlen = fixed_huffman_distance_maxlen;
         mode = HUFFMAN_READ;
-        state->code = 1;
         goto huffman_read;
         break;
     dynamic_huffman_block:
@@ -622,7 +624,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         assert(state->hlit <= 286);
         assert(state->hdist <= 30);
         assert(state->hclen <= NUM_CODE_LENGTHS);
-        memset(&hlengths, 0, sizeof(hlengths));
+        memset(&state->hlengths, 0, sizeof(state->hlengths));
         mode = HEADER_TREE;
         goto header_tree;
         break;
@@ -630,33 +632,28 @@ int PZ_inflate(z_streamp strm, int flush) {
     case HEADER_TREE:
         while (state->index < state->hclen) {
             NEEDBITS(3);
-            hlengths[order[state->index++]] = PEEKBITS(3);
+            state->hlengths[order[state->index++]] = PEEKBITS(3);
             DROPBITS(3);
         }
-        htreevec.len = HTREE_TABLE_SIZE;
-        htreevec.d = state->htree;
-        if (!init_huffman_tree<false>(strm, &htreevec, hlengths, NUM_CODE_LENGTHS))
-            panic(Z_MEM_ERROR, "%s", "unable to initialize huffman header tree");
-        memset(state->dyncodelens, 0, sizeof(state->dyncodelens));
+        init_huffman_tree(state->htree, 7, state->hlengths, NUM_CODE_LENGTHS);
+        memset(state->dynlens, 0, sizeof(state->dynlens));
         state->index = 0;
-        state->code = 1;
         mode = DYNAMIC_CODE_LENGTHS;
         goto dynamic_code_lengths;
     dynamic_code_lengths:
     case DYNAMIC_CODE_LENGTHS:
         while (state->index < state->ncodes) {
-            // REVISIT(peter): this is the very slow path
-            while (state->htree[state->code] == EMPTY_SENTINEL) {
-                NEEDBITS(1);
-                state->code = (state->code << 1) | PEEKBITS(1);
-                DROPBITS(1);
-                assert(state->code < HTREE_TABLE_SIZE);
+            NEEDBITS(7);  // TODO: track actual max(hlengths)?
+            value = state->htree[PEEKBITS(7)];
+            if (value == 0xffffu) {
+                panic(Z_STREAM_ERROR, "invalid bit sequence: 0x%x len=7", static_cast<Bytef>(PEEKBITS(7)));
             }
-            value = state->htree[state->code];
+            DROPBITS(state->hlengths[value]);
+
             uInt nbits, offset;
             uint16_t rvalue;
             if (value <= 15) {
-                state->dyncodelens[state->index++] = value;
+                state->dynlens[state->index++] = value;
             } else if (value <= 18) {
                 switch (value) {
                 case 16:
@@ -664,7 +661,7 @@ int PZ_inflate(z_streamp strm, int flush) {
                     offset = 3;
                     if (state->index == 0)
                         panic(Z_STREAM_ERROR, "invalid repeat code %u with no previous code lengths", value);
-                    rvalue = state->dyncodelens[state->index - 1];
+                    rvalue = state->dynlens[state->index - 1];
                     break;
                 case 17:
                     nbits = 3;
@@ -684,36 +681,47 @@ int PZ_inflate(z_streamp strm, int flush) {
                 DROPBITS(nbits);
                 repeat += offset;
                 while (repeat-- > 0) {
-                    state->dyncodelens[state->index++] = rvalue;
+                    state->dynlens[state->index++] = rvalue;
                 }
             } else {
                 panic(Z_STREAM_ERROR, "invalid dynamic code length: %u", value);
             }
-            state->code = 1;
         }
-        if (!init_huffman_tree<true>(strm, &state->dynlits, &state->dyncodelens[0], state->hlit))
-            panic0(Z_MEM_ERROR, "failed to initialize dynamic huffman literals tree");
-        if (!init_huffman_tree<true>(strm, &state->dyndists, &state->dyncodelens[state->hlit], state->hdist))
-            panic0(Z_MEM_ERROR, "failed to initialize dynamic huffman distances tree");
 
-        state->lits = state->dynlits.d;
-        state->litlen = state->dynlits.len;
-        state->dists = state->dyndists.d;
-        state->distlen = state->dyndists.len;
-        state->code = 1;
-        mode = HUFFMAN_READ;
-        goto huffman_read;
-        break;
+        {
+            // TODO(peter): do this during reading?
+            state->litlens = &state->dynlens[0];
+            state->dstlens = &state->dynlens[state->hlit];
+            state->litmaxlen = *std::max_element(&state->litlens[0], &state->litlens[state->hlit]);
+            state->dstmaxlen = *std::max_element(&state->dstlens[0], &state->dstlens[state->hdist]);
+            if (state->dynlits) {
+                assert(state->dynlits && state->dyndsts);
+                strm->zfree(strm->opaque, state->dynlits);
+                strm->zfree(strm->opaque, state->dyndsts);
+            }
+            uInt nlits = 1u << state->litmaxlen;
+            uInt ndsts = 1u << state->dstmaxlen;
+            state->dynlits = reinterpret_cast<uint16_t *>(strm->zalloc(strm->opaque, sizeof(uint16_t), nlits));
+            state->dyndsts = reinterpret_cast<uint16_t *>(strm->zalloc(strm->opaque, sizeof(uint16_t), ndsts));
+            if (!state->dynlits || !state->dyndsts) panic0(Z_MEM_ERROR, "unable to allocate space for huffman tables");
+            init_huffman_tree(state->dynlits, state->litmaxlen, state->litlens, state->hlit);
+            init_huffman_tree(state->dyndsts, state->dstmaxlen, state->dstlens, state->hdist);
+            // TODO(peter): can save 2 pointers (at the cost of const safety) by just using `lits` and `dsts` directly
+            state->lits = state->dynlits;
+            state->dsts = state->dyndsts;
+            mode = HUFFMAN_READ;
+            goto huffman_read;
+            break;
+        }
     huffman_read:
     case HUFFMAN_READ:
-        // REVISIT(peter): this is the very slow path
-        while (state->lits[state->code] == EMPTY_SENTINEL) {
-            NEEDBITS(1);
-            state->code = (state->code << 1) | PEEKBITS(1);
-            DROPBITS(1);
-            assert(state->code < state->litlen);
+        NEEDBITS(state->litmaxlen);
+        value = state->lits[PEEKBITS(state->litmaxlen)];
+        if (value == 0xffffu) {
+            panic(Z_STREAM_ERROR, "invalid bit sequence: 0x%04lx length=%zu", PEEKBITS(state->litmaxlen),
+                  state->litmaxlen);
         }
-        value = state->lits[state->code];
+        DROPBITS(state->litlens[value]);
         if (value < 256) {
             if (avail_out == 0) goto exit;
             Bytef c = static_cast<Bytef>(value);
@@ -722,22 +730,18 @@ int PZ_inflate(z_streamp strm, int flush) {
             avail_out--;
             wrote++;
             CHECK_IO();
-            state->code = 1;
             mode = HUFFMAN_READ;  // TEMP TEMP: unneeded
             goto huffman_read;
         } else if (value == 256) {
             DEBUG0("inflate: end of fixed huffman block found");
-            if (state->lits != &fixed_huffman_literals_tree[0]) {
-                assert(state->lits == state->dynlits.d);
-                assert(state->dists == state->dyndists.d);
-                strm->zfree(strm->opaque, const_cast<uint16_t *>(state->dynlits.d));
-                strm->zfree(strm->opaque, const_cast<uint16_t *>(state->dyndists.d));
-                state->dynlits.d = NULL;
-                state->dynlits.len = 0;
-                state->dyndists.d = NULL;
-                state->dyndists.len = 0;
+            if (state->lits != &fixed_huffman_literals_codes[0]) {
+                assert(state->lits == state->dynlits);
+                assert(state->dsts == state->dyndsts);
+                strm->zfree(strm->opaque, state->dynlits);
+                strm->zfree(strm->opaque, state->dyndsts);
+                state->dynlits = nullptr;
+                state->dyndsts = nullptr;
             }
-            state->code = 1;
             mode = END_BLOCK;
             goto end_block;
         } else if (value <= 285) {
@@ -746,10 +750,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             assert(value < ARRSIZE(LENGTH_BASES));
             uInt extra = LENGTH_EXTRA_BITS[value];
             NEEDBITS(extra);
-            size_t length = LENGTH_BASES[value] + PEEKBITS(extra);
+            state->len = static_cast<uInt>(LENGTH_BASES[value] + PEEKBITS(extra));
             DROPBITS(extra);
-            state->length = length;
-            state->code = 1;
             mode = HUFFMAN_DISTANCE_CODE;
             goto huffman_distance_code;
         } else {
@@ -759,13 +761,14 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     huffman_distance_code:
     case HUFFMAN_DISTANCE_CODE: {
-        while (state->dists[state->code] == EMPTY_SENTINEL) {
-            NEEDBITS(1);
-            state->code = (state->code << 1) | PEEKBITS(1);
-            DROPBITS(1);
-            assert(state->code < state->distlen);
+        NEEDBITS(state->dstmaxlen);
+        value = state->dsts[PEEKBITS(state->dstmaxlen)];
+        if (value == 0xffffu) {
+            panic(Z_STREAM_ERROR, "invalid bit sequence: 0x%04lx length=%zu", PEEKBITS(state->dstmaxlen),
+                  state->dstmaxlen);
         }
-        value = state->dists[state->code];
+        DROPBITS(state->dstlens[value]);
+
         assert(value < 32);  // invalid distance code
         uInt extra = DISTANCE_EXTRA_BITS[value];
         NEEDBITS(extra);
@@ -781,7 +784,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     }
     write_huffman_len_dist:
     case WRITE_HUFFMAN_LEN_DIST:
-        while (state->length > 0) {
+        while (state->len > 0) {
             if (avail_out == 0) goto exit;
             Bytef c = state->wnd[state->index & state->mask];
             *out++ = c;
@@ -790,9 +793,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             windowAdd(state, &c, sizeof(c));
             CHECK_IO();
             state->index++;
-            state->length--;
+            state->len--;
         }
-        state->code = 1;
         mode = HUFFMAN_READ;
         goto huffman_read;
         break;

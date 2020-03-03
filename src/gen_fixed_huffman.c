@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
 
     {
         for (i = 0; i < 32; ++i)
-            dstlens[i++] = 5;
+            dstlens[i] = 5;
         init_huffman_tree(&dsts, dstlens, ARRSIZE(dstlens));
     }
 
@@ -204,10 +204,10 @@ int main(int argc, char **argv) {
     WRITE("static constexpr uint16_t fixed_huffman_distance_maxlen = 5;");
     WRITE("");
     WRITE("static constexpr uint16_t fixed_huffman_distance_codelens[%zu] = {", ARRSIZE(dstlens));
-    print_tree(litlens, ARRSIZE(dstlens));
+    print_tree(dstlens, ARRSIZE(dstlens));
     WRITE("};");
     WRITE("");
-    WRITE("static constexpr uint16_t fixed_huffman_distance_tree[%zu] = {", dsts.len);
+    WRITE("static constexpr uint16_t fixed_huffman_distance_codes[%zu] = {", dsts.len);
     print_tree(dsts.d, dsts.len);
     WRITE("};");
     WRITE("");
