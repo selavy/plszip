@@ -450,8 +450,14 @@ int PZ_inflate(z_streamp strm, int flush) {
     case XFL:
         NEEDBITS(8 + 8);
         DEBUG("\tXFL   = %3lu", PEEKBITS(8));
+        if (state->head) {
+            state->head->xflags = static_cast<int>(PEEKBITS(8));
+        }
         DROPBITS(8);
         DEBUG("\tOS    = %3lu", PEEKBITS(8));
+        if (state->head) {
+            state->head->os = static_cast<int>(PEEKBITS(8));
+        }
         DROPBITS(8);
         mode = FEXTRA;
         goto fextra;
