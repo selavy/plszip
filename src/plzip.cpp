@@ -348,6 +348,13 @@ const char* BTypeStr[] =
     "RESERVED",
 };
 
+struct HTree
+{
+    std::vector<uint16_t> codes;    // code  -> value
+    std::vector<uint16_t> codelens; // value -> codelen
+    size_t maxlen;                  // max bit length
+};
+
 bool read_null_terminated_string(FILE* fp, std::string& result)
 {
     char c;
@@ -392,8 +399,30 @@ const size_t DISTANCE_BASES[32] = {
      257,  385,  513,   769,  1025,  1537, 2049, 3073,
     4097, 6145, 8193, 12289, 16385, 24577,    0,    0,
 };
+static const unsigned char BitReverseTable256[256] = 
+{
+#   define R2(n)     n,     n + 2*64,     n + 1*64,     n + 3*64
+#   define R4(n) R2(n), R2(n + 2*16), R2(n + 1*16), R2(n + 3*16)
+#   define R6(n) R4(n), R4(n + 2*4 ), R4(n + 1*4 ), R4(n + 3*4 )
+    R6(0), R6(2), R6(1), R6(3)
+};
 
-bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths, size_t n)
+uint16_t flip_u16(uint16_t v) noexcept
+{
+    return
+        (BitReverseTable256[(v >> 0) & 0xff] << 8) |
+        (BitReverseTable256[(v >> 8) & 0xff] << 0) ;
+}
+
+uint16_t flip_code(uint16_t code, size_t codelen)
+{
+    assert(0 < codelen && codelen <= 16);
+    code = flip_u16(code);
+    code >>= (16 - codelen);
+    return code;
+}
+
+void init_huffman_tree(HTree& tree)
 {
     constexpr size_t MaxCodes = 512;
     constexpr size_t MaxBitLength = 16;
@@ -402,10 +431,10 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
     static uint16_t codes[MaxCodes];
     size_t max_bit_length = 0;
 
-    if (!(n < MaxCodes)) {
-        xassert(n < MaxCodes, "code lengths too long");
-        return false;
-    }
+    const std::vector<uint16_t>& code_lengths = tree.codelens;
+    const size_t n = code_lengths.size();
+
+    xassert(n < MaxCodes, "code lengths too long");
 
     { // 1) Count the number of codes for each code length. Let bl_count[N] be the number
         // of codes of length N, N >= 1.
@@ -439,95 +468,81 @@ bool init_huffman_tree(std::vector<uint16_t>& tree, const uint16_t* code_lengths
         }
     }
 
-#if 0
     // 4) Generate dense table. This means that can read `max_bit_length` bits at a
     // time, and do a lookup immediately; should then use `code_lengths` to
     // determine how many of the peek'd bits should be removed.
     size_t tablesz = 1u << max_bit_length;
-    newtree.assign(tablesz, EmptySentinel);
+    tree.codes.assign(tablesz, EmptySentinel);
     for (size_t i = 0; i < code_lengths.size(); ++i) {
         if (code_lengths[i] == 0) continue;
         uint16_t code = codes[i];
         uint16_t codelen = code_lengths[i];
         uint16_t value = static_cast<uint16_t>(i);
         size_t empty_bits = max_bit_length - codelen;
+        // uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
+        // for (uint16_t mask; mask <= lowbits; ++mask) {
+        //     uint16_t newcode = (mask << codelen) | code;
+        //     xassert(tree.codes[newcode] == EmptySentinel,
+        //             "reused index %u for code %u value %u", newcode, code, value);
+        //     tree.codes[newcode] = value;
+        // }
+
         code = static_cast<uint16_t>(code << empty_bits);
         uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
         uint16_t maxcode = code | lowbits;
         while (code <= maxcode) {
-            xassert(newtree[code] == EmptySentinel, "reused index: %u", code);
-            newtree[code++] = value;
+            uint16_t flipped = flip_code(code, max_bit_length);
+            xassert(tree.codes[flipped] == EmptySentinel, "reused index: %u", flipped);
+            tree.codes[flipped] = value;
+            ++code;
         }
     }
-#endif
-
-#if 1
-    // Table size is 2**(max_bit_length + 1)
-    size_t table_size = 1u << (max_bit_length + 1);
-    tree.assign(table_size, EmptySentinel);
-    for (size_t value = 0; value < n; ++value) {
-        size_t len = code_lengths[value];
-        if (len == 0) {
-            continue;
-        }
-        uint16_t code = codes[value];
-        size_t index = 1;
-        for (int i = len - 1; i >= 0; --i) {
-            size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
-            index = 2*index + isset;
-        }
-        xassert(tree[index] == EmptySentinel, "Assigned multiple values to same index");
-        tree[index] = value;
-    }
-    assert(tree.size() == table_size);
-#endif
-
-    return true;
+    tree.maxlen = max_bit_length;
 }
 
-uint16_t read_huffman_value(const uint16_t* tree, size_t length, BitReader& reader)
+uint16_t read_huffman_value(BitReader& reader, HTree& tree)
 {
-    size_t index = 1;
-    do {
-        index <<= 1;
-        index += reader.read_bit() ? 1 : 0;
-        xassert(index < length, "invalid index");
-    } while (tree[index] == EmptySentinel);
-    return tree[index];
+    reader.need(tree.maxlen);
+    auto bits = reader.peek(tree.maxlen);
+    auto value = tree.codes[bits];
+    if (value == EmptySentinel)
+        panic("invalid huffman bit pattern: 0x%04x (%zu bits)", bits, tree.maxlen);
+    assert(0 <= value && value < tree.codelens.size());
+    reader.drop(tree.codelens[value]);
+    return value;
 }
 
-bool read_dynamic_header_tree(BitReader& reader, size_t hclen,
-        std::vector<uint16_t>& header_tree)
+void read_dynamic_header_tree(BitReader& reader, size_t hclen, HTree& header_tree)
 {
     constexpr size_t NumCodeLengths = 19;
     constexpr static uint16_t order[NumCodeLengths] = {
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
     };
-    static uint16_t lengths[NumCodeLengths];
-    memset(&lengths[0], 0, sizeof(lengths));
+    header_tree.codes.clear(); // TEMP TEMP
+    header_tree.codelens.assign(NumCodeLengths, 0); // TODO: should this be `hclen`?
+    header_tree.maxlen = 0; // TEMP TEMP
     for (size_t i = 0; i < hclen; ++i) {
-        lengths[order[i]] = reader.read_bits(3);
+        header_tree.codelens[order[i]] = reader.read_bits(3);
     }
-    return init_huffman_tree(header_tree, &lengths[0], NumCodeLengths);
+    init_huffman_tree(header_tree);
+    assert(header_tree.maxlen != 0);
 }
 
-void read_dynamic_huffman_trees(BitReader& reader,
-        std::vector<uint16_t>& literal_tree, std::vector<uint16_t>& distance_tree)
+void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& distance_tree)
 {
+    reader.need(5 + 5 + 4);
     size_t hlit = reader.read_bits(5) + 257;
     size_t hdist = reader.read_bits(5) + 1;
     size_t hclen = reader.read_bits(4) + 4;
     size_t ncodes = hlit + hdist;
 
-    std::vector<uint16_t> header_tree;
-    if (!read_dynamic_header_tree(reader, hclen, header_tree)) {
-        panic("failed to initialize dynamic huffman tree header.");
-    }
+    HTree header_tree;
+    read_dynamic_header_tree(reader, hclen, header_tree);
 
     std::vector<uint16_t> dynamic_code_lengths;
     dynamic_code_lengths.reserve(ncodes);
     while (dynamic_code_lengths.size() < ncodes) {
-        uint16_t value = read_huffman_value(header_tree.data(), header_tree.size(), reader);
+        uint16_t value = read_huffman_value(reader, header_tree);
         if (value <= 15) {
             dynamic_code_lengths.push_back(value);
         } else if (value <= 18) {
@@ -561,23 +576,27 @@ void read_dynamic_huffman_trees(BitReader& reader,
     xassert(dynamic_code_lengths.size() == ncodes, "Went over the number of expected codes");
     xassert(dynamic_code_lengths.size() > 256 && dynamic_code_lengths[256] != 0, "invalid code -- missing end-of-block");
 
-    if (!init_huffman_tree(literal_tree, dynamic_code_lengths.data(), hlit)) {
-        panic("failed to initialize dynamic huffman tree");
-    }
+    literal_tree.codes.clear();
+    literal_tree.codelens.assign(&dynamic_code_lengths[0], &dynamic_code_lengths[hlit]);
+    literal_tree.maxlen = 0;
+    init_huffman_tree(literal_tree);
+    assert(literal_tree.maxlen != 0);
     xassert((dynamic_code_lengths.size() - hlit) == hdist,
             "invalid number distance codes: received %zu, expected %zu",
             dynamic_code_lengths.size() - hlit, hdist);
-    if (!init_huffman_tree(distance_tree, dynamic_code_lengths.data() + hlit, dynamic_code_lengths.size() - hlit)) {
-        panic("failed to initialize dynamic distance tree");
-    }
+    distance_tree.codes.clear();
+    distance_tree.codelens.assign(&dynamic_code_lengths[hlit], &dynamic_code_lengths[ncodes]);
+    distance_tree.maxlen = 0;
+    init_huffman_tree(distance_tree);
+    assert(distance_tree.maxlen != 0);
 }
 
-void init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16_t>& dist_tree) noexcept
+void init_fixed_huffman_data(HTree& lit_tree, HTree& dist_tree) noexcept
 {
-    static uint16_t codes[288];
-
     // Literal Tree
-
+    lit_tree.codes.clear();
+    lit_tree.codelens.assign(288, 0);
+    lit_tree.maxlen = 0;
     struct LiteralCodeTableEntry {
         size_t start, stop, bits;
     } xs[] = {
@@ -587,26 +606,21 @@ void init_fixed_huffman_data(std::vector<uint16_t>& lit_tree, std::vector<uint16
         {    256,  279,    7, },
         {    280,  287,    8, },
     };
-
     for (size_t j = 0; j < ARRSIZE(xs); ++j) {
         for (size_t i = xs[j].start; i <= xs[j].stop; ++i) {
-            codes[i] = xs[j].bits;
+            lit_tree.codelens[i] = xs[j].bits;
         }
     }
-
-    if (!init_huffman_tree(lit_tree, &codes[0], 288)) {
-        panic("failed to initialize fixed huffman tree.");
-    }
+    assert(lit_tree.codelens.size() == 288);
+    init_huffman_tree(lit_tree);
+    assert(lit_tree.maxlen != 0);
 
     // Distance Tree
-
-    for (size_t i = 0; i < 32; ++i) {
-        codes[i] = 5;
-    }
-
-    if (!init_huffman_tree(dist_tree, &codes[0], 32)) {
-        panic("failed to initialize fixed distance huffman tree.");
-    }
+    dist_tree.codes.clear();
+    dist_tree.codelens.assign(32, 5);
+    dist_tree.maxlen = 0;
+    init_huffman_tree(dist_tree);
+    assert(dist_tree.maxlen != 0);
 }
 
 void flush_buffer(FILE* fp, const WriteBuffer& buffer, size_t nbytes) noexcept
@@ -642,8 +656,8 @@ int main(int argc, char** argv)
         exit(0);
     }
 
-    std::vector<uint16_t> literal_tree;
-    std::vector<uint16_t> distance_tree;
+    HTree literal_tree;
+    HTree distance_tree;
 
     FileHandle fp = fopen(input_filename, "rb");
     if (!fp) {
@@ -795,12 +809,14 @@ int main(int argc, char** argv)
     int block_number = 0;
     do {
         size_t write_length = 0;
-        bfinal = reader.read_bit();
+        reader.need(1 + 2);
+        bfinal = reader.read_bits(1);
         BType btype = static_cast<BType>(reader.read_bits(2));
         if (btype == BType::NO_COMPRESSION) {
             DEBUG("Block #%d Encoding: No Compression", block_number);
             reader.flush_byte();
             auto read2B_le = [&]() {
+                reader.need(8 + 8);
                 uint16_t b1 = reader.read_bits(8);
                 uint16_t b2 = reader.read_bits(8);
                 return (b2 << 8) | b1;
@@ -839,10 +855,7 @@ int main(int argc, char** argv)
             }
 
             for (;;) {
-                uint16_t value = read_huffman_value(
-                                    literal_tree.data(),
-                                    literal_tree.size(),
-                                    reader);
+                uint16_t value = read_huffman_value(reader, literal_tree);
                 if (value < 256) {
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
@@ -856,10 +869,7 @@ int main(int argc, char** argv)
                     size_t extra_length = reader.read_bits(LENGTH_EXTRA_BITS[value]);
                     size_t length = base_length + extra_length;
                     xassert(length <= 258, "invalid length");
-                    size_t distance_code = read_huffman_value(
-                            distance_tree.data(),
-                            distance_tree.size(),
-                            reader);
+                    size_t distance_code = read_huffman_value(reader, distance_tree);
                     xassert(distance_code < 32, "invalid distance code");
                     size_t base_distance = DISTANCE_BASES[distance_code];
                     size_t extra_distance = reader.read_bits(

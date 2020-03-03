@@ -39,13 +39,22 @@ void gen_dense_tree(Vec& newtree, const Vec& code_lengths, size_t max_bit_length
         uint16_t codelen = code_lengths[i];
         uint16_t value = static_cast<uint16_t>(i);
         size_t empty_bits = max_bit_length - codelen;
-        code = static_cast<uint16_t>(code << empty_bits);
+
         uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
-        uint16_t maxcode = code | lowbits;
-        while (code <= maxcode) {
-            xassert(newtree[code] == EmptySentinel, "reused index: %u", code);
-            newtree[code++] = value;
+        for (uint16_t mask = 0; mask <= lowbits; ++mask) {
+            uint16_t newcode = static_cast<uint16_t>((mask << codelen) | code);
+            printf("code=0x%04x len=%u mask=0x%04x newcode=0x%04x value=%u\n", code, codelen, mask, newcode, value);
+            xassert(newtree[newcode] == EmptySentinel, "reused index %u for code %u value %u", newcode, code, value);
+            newtree[newcode] = value;
         }
+
+        // code = static_cast<uint16_t>(code << empty_bits);
+        // uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
+        // uint16_t maxcode = code | lowbits;
+        // while (code <= maxcode) {
+        //     xassert(newtree[code] == EmptySentinel, "reused index: %u", code);
+        //     newtree[code++] = value;
+        // }
     }
 }
 
@@ -138,7 +147,7 @@ int main(int argc, char** argv) {
         while (i++ <= 287) codes.push_back(8);
         init_huffman_tree(newlits, lits, codes);
         for (i = 0; i < newlits.size(); ++i) {
-            printf("dsts[%3zu] = 0x%04x\n", i, newlits[i]);
+            printf("lits[%3zu] = 0x%04x\n", i, newlits[i]);
         }
     }
 
