@@ -6,11 +6,9 @@
 #include <cstring>
 #include <vector>
 
-#define MaxCodes 512
-#define MaxBitLength 16
-#define EmptySentinel UINT16_MAX
-#define LIT_CODES 288
-#define DIST_CODES 32
+constexpr size_t MaxCodes = 512;
+constexpr size_t MaxBitLength = 16;
+constexpr uint16_t EmptySentinel = UINT16_MAX;
 
 #define panic0(msg)                        \
     do {                                   \
@@ -30,18 +28,18 @@
 
 using Vec = std::vector<uint16_t>;
 
-void init_huffman_tree(Vec& tree, const uint16_t *code_lengths, size_t n) {
+void init_huffman_tree(Vec& tree, const Vec& code_lengths, const char* name) {
     static size_t bl_count[MaxBitLength];
     static uint16_t next_code[MaxBitLength];
     static uint16_t codes[MaxCodes];
 
-    xassert(n < MaxCodes, "code lengths too long: %zu", n);
+    xassert(code_lengths.size() < MaxCodes, "code lengths too long: %zu", code_lengths.size());
 
     // 1) Count the number of codes for each code length. Let bl_count[N] be the
     // number of codes of length N, N >= 1.
     memset(&bl_count[0], 0, sizeof(bl_count));
     size_t max_bit_length = 0;
-    for (size_t i = 0; i < n; ++i) {
+    for (size_t i = 0; i < code_lengths.size(); ++i) {
         xassert(code_lengths[i] <= MaxBitLength, "Unsupported bit length: %u", code_lengths[i]);
         ++bl_count[code_lengths[i]];
         max_bit_length = code_lengths[i] > max_bit_length ? code_lengths[i] : max_bit_length;
@@ -61,7 +59,7 @@ void init_huffman_tree(Vec& tree, const uint16_t *code_lengths, size_t n) {
     // that are never used (which have a bit length of zero) must not be
     // assigned a value.
     memset(&codes[0], 0, sizeof(codes));
-    for (size_t i = 0; i < n; ++i) {
+    for (size_t i = 0; i < code_lengths.size(); ++i) {
         if (code_lengths[i] != 0) {
             codes[i] = next_code[code_lengths[i]]++;
             xassert((16 - __builtin_clz(codes[i])) <= code_lengths[i], "overflowed code length: %u", codes[i]);
@@ -72,53 +70,56 @@ void init_huffman_tree(Vec& tree, const uint16_t *code_lengths, size_t n) {
     size_t table_size = 1u << (max_bit_length + 1);
     tree.assign(table_size, EmptySentinel);
     assert(tree.size() == table_size);
-    for (size_t value = 0; value < n; ++value) {
+    for (size_t value = 0; value < code_lengths.size(); ++value) {
         int len = static_cast<int>(code_lengths[value]);
         if (len == 0) {
             continue;
         }
         code = codes[value];
         size_t index = 1;
+        printf("%s[%3zu] = ", name, value);
         for (int i = len - 1; i >= 0; --i) {
             size_t isset = ((code & (1u << i)) != 0) ? 1 : 0;
             index = 2 * index + isset;
+            printf("%zu", isset);
         }
+        printf("\n");
         xassert(tree[index] == EmptySentinel, "Assigned multiple values to same index: %zu", index);
         tree[index] = static_cast<uint16_t>(value);
     }
 }
 
-void init_fixed_huffman(Vec& lit_tree, Vec& dist_tree) {
-    static uint16_t codes[288];
-    {
-        size_t i = 0;
-        while (i <= 143)
-            codes[i++] = 8;
-        while (i <= 255)
-            codes[i++] = 9;
-        while (i <= 279)
-            codes[i++] = 7;
-        while (i <= 287)
-            codes[i++] = 8;
-    }
-    init_huffman_tree(lit_tree, &codes[0], LIT_CODES);
-
-    for (size_t i = 0; i < 32; ++i) {
-        codes[i] = 5;
-    }
-    init_huffman_tree(dist_tree, &codes[0], DIST_CODES);
-}
-
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
-    Vec lits, dsts;
-    init_fixed_huffman(lits, dsts);
-    for (size_t i = 0; i < lits.size(); ++i) {
-        printf("lits[%zu] = %u\n", i, lits[i]);
+    size_t i;
+    Vec codes;
+
+    if (0) {
+        Vec lits;
+        i = 0;
+        while (i++ <= 143)
+            codes.push_back(8);
+        while (i++ <= 255)
+            codes.push_back(9);
+        while (i++ <= 279)
+            codes.push_back(7);
+        while (i++ <= 287)
+            codes.push_back(8);
+        init_huffman_tree(lits, codes, "lits");
+        for (i = 0; i < lits.size(); ++i) {
+            printf("lits[%zu] = %u\n", i, lits[i]);
+        }
     }
-    for (size_t i = 0; i < dsts.size(); ++i) {
-        printf("dsts[%zu] = %u\n", i, dsts[i]);
+
+    if (1) {
+        Vec dsts;
+        codes.assign(32, 5);
+        init_huffman_tree(dsts, codes, "dsts");
+        for (i = 0; i < dsts.size(); ++i) {
+            printf("dsts[%zu] = %u\n", i, dsts[i]);
+        }
     }
+
     return 0;
 }
