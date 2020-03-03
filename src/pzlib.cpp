@@ -440,6 +440,9 @@ int PZ_inflate(z_streamp strm, int flush) {
         mtime |= static_cast<uint32_t>(((buff >> 24) & 0xFFu) << 0);
         DROPBITS(32);
         DEBUG("\tMTIME = %u", mtime);
+        if (state->head) {
+            state->head->time = mtime;
+        }
         mode = XFL;
         goto xfl;
         break;
