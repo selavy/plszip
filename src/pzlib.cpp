@@ -49,6 +49,15 @@ static constexpr size_t DISTANCE_BASES[32] = {
 
 static constexpr size_t WINDOW_SIZE = 1u << 16;
 
+static constexpr size_t NUM_CODE_LENGTHS = 19;
+static size_t order[NUM_CODE_LENGTHS] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
+static uint16_t hlengths[NUM_CODE_LENGTHS];
+static constexpr size_t MAX_HTREE_BIT_LENGTH = 8;
+static constexpr size_t HTREE_TABLE_SIZE = 1u << MAX_HTREE_BIT_LENGTH;
+static constexpr size_t MAX_CODE_LENGTHS = 322;
+// TODO(peter): need to move into internal_state
+static uint16_t dynamic_code_lengths[MAX_CODE_LENGTHS];
+
 /* Internal Types */
 enum inflate_mode {
     HEADER, /* ID1 | ID2 | CM */
@@ -105,6 +114,9 @@ struct internal_state {
     size_t ncodes;
     vec dynlits;
     vec dyndists;
+
+    // TODO(peter): need to move this into internal_state
+    uint16_t htree[HTREE_TABLE_SIZE];
 
     /* circular buffer window */
     uint32_t mask;
@@ -290,16 +302,6 @@ static char msgbuf[1024];
         bits -= bits & 7;  \
     } while (0)
 
-static constexpr size_t NUM_CODE_LENGTHS = 19;
-static size_t order[NUM_CODE_LENGTHS] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
-static uint16_t hlengths[NUM_CODE_LENGTHS];
-static constexpr size_t MAX_HTREE_BIT_LENGTH = 8;
-// TODO(peter): need to move this into internal_state
-static uint16_t htree_data[1u << MAX_HTREE_BIT_LENGTH];
-static vec htree{ARRSIZE(htree_data), &htree_data[0]};
-static constexpr size_t MAX_CODE_LENGTHS = 322;
-// TODO(peter): need to move into internal_state
-static uint16_t dynamic_code_lengths[MAX_CODE_LENGTHS];
 
 template <bool DynAllocate>
 static bool init_huffman_tree(z_streamp s, vec *tree, const uint16_t *code_lengths, size_t n) {
@@ -406,6 +408,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     uint32_t mtime;
     uInt crc16;
     uint16_t value;
+    vec htreevec;
 
     if (in == Z_NULL || out == Z_NULL) {
         return Z_STREAM_ERROR;
@@ -674,11 +677,10 @@ int PZ_inflate(z_streamp strm, int flush) {
             hlengths[order[state->index++]] = PEEKBITS(3);
             DROPBITS(3);
         }
-        htree.d = htree_data;
-        htree.len = ARRSIZE(htree_data);
-        if (!init_huffman_tree<false>(strm, &htree, hlengths, NUM_CODE_LENGTHS)) {
+        htreevec.len = HTREE_TABLE_SIZE;
+        htreevec.d = state->htree;
+        if (!init_huffman_tree<false>(strm, &htreevec, hlengths, NUM_CODE_LENGTHS))
             panic(Z_MEM_ERROR, "%s", "unable to initialize huffman header tree");
-        }
         memset(dynamic_code_lengths, 0, sizeof(dynamic_code_lengths));
         state->index = 0;
         state->code = 1;
@@ -688,13 +690,13 @@ int PZ_inflate(z_streamp strm, int flush) {
     case DYNAMIC_CODE_LENGTHS:
         while (state->index < state->ncodes) {
             // REVISIT(peter): this is the very slow path
-            while (htree_data[state->code] == EMPTY_SENTINEL) {
+            while (state->htree[state->code] == EMPTY_SENTINEL) {
                 NEEDBITS(1);
                 state->code = (state->code << 1) | PEEKBITS(1);
                 DROPBITS(1);
-                assert(state->code < sizeof(htree_data));
+                assert(state->code < HTREE_TABLE_SIZE);
             }
-            value = htree_data[state->code];
+            value = state->htree[state->code];
             uInt nbits, offset;
             uint16_t rvalue;
             if (value <= 15) {
