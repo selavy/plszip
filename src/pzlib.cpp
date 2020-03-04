@@ -82,6 +82,8 @@ enum inflate_mode {
     NO_COMPRESSION_READ,
     HUFFMAN_READ,
     WRITE_HUFFMAN_VALUE,
+    HUFFMAN_LENGTH_CODE,
+    READ_HUFFMAN_DISTANCE_CODE,
     HUFFMAN_DISTANCE_CODE,
     WRITE_HUFFMAN_LEN_DIST,
     HEADER_TREE,
@@ -408,6 +410,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     uint8_t id1, id2, cm;
     uint32_t mtime;
     uint16_t value;
+    uInt extra;
 
     if (in == Z_NULL || out == Z_NULL) {
         return Z_STREAM_ERROR;
@@ -668,7 +671,6 @@ int PZ_inflate(z_streamp strm, int flush) {
                 panic(Z_STREAM_ERROR, "invalid bit sequence: 0x%x len=7", static_cast<Bytef>(PEEKBITS(7)));
             }
             DROPBITS(state->hlengths[value]);
-
             uInt nbits, offset;
             uint16_t rvalue;
             if (value <= 15) {
@@ -678,8 +680,9 @@ int PZ_inflate(z_streamp strm, int flush) {
                 case 16:
                     nbits = 2;
                     offset = 3;
-                    if (state->index == 0)
+                    if (state->index == 0) {
                         panic(Z_STREAM_ERROR, "invalid repeat code %u with no previous code lengths", value);
+                    }
                     rvalue = state->dynlens[state->index - 1];
                     break;
                 case 17:
@@ -740,11 +743,12 @@ int PZ_inflate(z_streamp strm, int flush) {
             panic(Z_STREAM_ERROR, "invalid bit sequence: 0x%04lx length=%zu", PEEKBITS(state->litmaxlen),
                   state->litmaxlen);
         }
-        DROPBITS(state->litlens[value]);
         if (value < 256) {
             if (avail_out == 0) {
                 goto exit;
             }
+            DROPBITS(state->litlens[value]);
+            assert(avail_out > 0);
             Bytef c = static_cast<Bytef>(value);
             windowAdd(state, &c, sizeof(c));
             *out++ = c;
@@ -754,6 +758,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             mode = HUFFMAN_READ;  // TEMP TEMP: unneeded
             goto huffman_read;
         } else if (value == 256) {
+            DROPBITS(state->litlens[value]);
             DEBUG0("inflate: end of fixed huffman block found");
             if (state->lits != &fixed_huffman_literals_codes[0]) {
                 assert(state->lits == state->dynlits);
@@ -766,22 +771,29 @@ int PZ_inflate(z_streamp strm, int flush) {
             mode = END_BLOCK;
             goto end_block;
         } else if (value <= 285) {
+            DROPBITS(state->litlens[value]);
             assert(257 <= value && value <= 285);
-            value = static_cast<uint16_t>(value - 257);
-            assert(value < ARRSIZE(LENGTH_BASES));
-            uInt extra = LENGTH_EXTRA_BITS[value];
-            NEEDBITS(extra);
-            state->len = static_cast<uInt>(LENGTH_BASES[value] + PEEKBITS(extra));
-            DROPBITS(extra);
-            mode = HUFFMAN_DISTANCE_CODE;
-            goto huffman_distance_code;
+            state->len = static_cast<uInt>(value) - 257;
+            assert(state->len < ARRSIZE(LENGTH_BASES));
+            assert(state->len < ARRSIZE(LENGTH_EXTRA_BITS));
+            mode = HUFFMAN_LENGTH_CODE;
+            goto huffman_length_code;
         } else {
             panic(Z_STREAM_ERROR, "invalid huffman value: %u", value);
         }
         UNREACHABLE();
         break;
-    huffman_distance_code:
-    case HUFFMAN_DISTANCE_CODE: {
+    huffman_length_code:
+    case HUFFMAN_LENGTH_CODE:
+        extra = LENGTH_EXTRA_BITS[state->len];
+        NEEDBITS(extra);
+        state->len = static_cast<uInt>(LENGTH_BASES[state->len] + PEEKBITS(extra));
+        DROPBITS(extra);
+        mode = READ_HUFFMAN_DISTANCE_CODE;
+        goto read_huffman_distance_code;
+        break;
+    read_huffman_distance_code:
+    case READ_HUFFMAN_DISTANCE_CODE:
         NEEDBITS(state->dstmaxlen);
         value = state->dsts[PEEKBITS(state->dstmaxlen)];
         if (value == 0xffffu) {
@@ -789,11 +801,18 @@ int PZ_inflate(z_streamp strm, int flush) {
                   state->dstmaxlen);
         }
         DROPBITS(state->dstlens[value]);
-
-        assert(value < 32);  // invalid distance code
-        uInt extra = DISTANCE_EXTRA_BITS[value];
+        if (value >= 32) {
+            panic(Z_STREAM_ERROR, "invalid distance code: %u", value);
+        }
+        state->index = value;
+        mode = HUFFMAN_DISTANCE_CODE;
+        goto huffman_distance_code;
+        break;
+    huffman_distance_code:
+    case HUFFMAN_DISTANCE_CODE: {
+        extra = DISTANCE_EXTRA_BITS[state->index];
         NEEDBITS(extra);
-        size_t distance = DISTANCE_BASES[value] + PEEKBITS(extra);
+        size_t distance = DISTANCE_BASES[state->index] + PEEKBITS(extra);
         DROPBITS(extra);
         if (!checkDistance(state, distance)) {
             panic(Z_STREAM_ERROR, "invalid distance %zu", distance);
@@ -826,9 +845,6 @@ int PZ_inflate(z_streamp strm, int flush) {
         if (state->blkfinal) {
             mode = CHECK_CRC32;
             goto check_crc32;
-            // assert(avail_in == 0);
-            // ret = Z_STREAM_END;
-            // goto exit;
         } else {
             mode = BEGIN_BLOCK;
             goto begin_block;
