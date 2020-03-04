@@ -5,13 +5,11 @@
 
 #ifndef USE_ZLIB
 
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <string>  // TEMP TEMP
 
 #include "crc32.h"
 #include "fixed_huffman_trees.h"
@@ -142,6 +140,23 @@ void zcfree(voidpf opaque, voidpf ptr) {
 
 const char *zlibVersion() { return "pzlib 0.0.1"; }
 
+// avoiding bringing in <algorithm> just for std::max<>
+uint16_t max_u16(uint16_t x, uint16_t y) noexcept {
+    return x > y ? x : y;
+}
+
+uint32_t min_u32(uint32_t x, uint32_t y) noexcept {
+    return x < y ? x : y;
+}
+
+uint16_t max_length(const uint16_t* first, const uint16_t* last) noexcept {
+    uint16_t result = 0;
+    while (first != last) {
+        result = max_u16(*first++, result);
+    }
+    return result;
+}
+
 int inflateInit2_(z_streamp strm, int windowBits, const char *version, int stream_size) {
     printf("pzlib::inflateInit2_\n");
     if (strcmp(version, ZLIB_VERSION) != 0) {
@@ -177,8 +192,8 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
         strm->msg = "failed to allocate memory for internal state";
         return Z_MEM_ERROR;
     }
-    // TEMP TEMP: only have to do this because have std::string
-    strm->state = new (mem) internal_state{};
+    strm->state = reinterpret_cast<internal_state*>(mem);
+    // strm->state = new (mem) internal_state{};
     strm->state->mode = HEADER;
     strm->state->buff = 0UL;
     strm->state->bits = 0;
@@ -205,8 +220,8 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
 }
 
 static void windowAdd(internal_state *s, const Bytef *buf, uint32_t n) {
-    s->wnd_size = std::min(s->wnd_size + n, s->wnd_mask + 1);
-    size_t n1 = std::min(s->wnd_mask + 1 - s->wnd_head, n);
+    s->wnd_size = min_u32(s->wnd_size + n, s->wnd_mask + 1);
+    size_t n1 = min_u32(s->wnd_mask + 1 - s->wnd_head, n);
     size_t n2 = n - n1;
     Bytef *p = &s->wnd[s->wnd_head];
     while (n1-- > 0) {
@@ -589,7 +604,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             // Step 1. Flush remaining bytes in bit buffer to output
             assert(bits % 8 == 0);
             uInt bytes = bits / 8;
-            uInt amount = std::min(state->len, std::min(bytes, avail_out));
+            uInt amount = min_u32(state->len, min_u32(bytes, avail_out));
             state->len -= amount;
             avail_out -= amount;
             read -= amount;
@@ -602,7 +617,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             assert(buff == 0);
 
             // Step 2. Stream directly from input to output
-            amount = std::min(state->len, std::min(avail_in, avail_out));
+            amount = min_u32(state->len, min_u32(avail_in, avail_out));
             state->len -= amount;
             avail_in -= amount;
             avail_out -= amount;
@@ -710,7 +725,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             }
         }
         if (state->index != state->hlit + state->hdist) {
-            panic(Z_STREAM_ERROR, "read too many code lengths: hlit=%zu hdist=%zu read=%zu", state->hlit, state->hdist,
+            panic(Z_STREAM_ERROR, "too many code lengths: hlit=%zu hdist=%zu read=%zu", state->hlit, state->hdist,
                   state->index);
         }
 
@@ -718,8 +733,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             // TODO(peter): do this during reading?
             state->litlens = &state->dynlens[0];
             state->dstlens = &state->dynlens[state->hlit];
-            state->litmaxlen = *std::max_element(&state->litlens[0], &state->litlens[state->hlit]);
-            state->dstmaxlen = *std::max_element(&state->dstlens[0], &state->dstlens[state->hdist]);
+            state->litmaxlen = max_length(&state->litlens[0], &state->litlens[state->hlit]);
+            state->dstmaxlen = max_length(&state->dstlens[0], &state->dstlens[state->hdist]);
             if (state->dynlits) {
                 assert(state->dynlits && state->dyndsts);
                 strm->zfree(strm->opaque, state->dynlits);
