@@ -13,6 +13,7 @@
 #include <cstring>
 #include <string>  // TEMP TEMP
 
+#include "crc32.h"
 #include "fixed_huffman_trees.h"
 
 #define UNREACHABLE()            \
@@ -82,12 +83,14 @@ enum inflate_mode {
     HEADER_TREE,
     DYNAMIC_CODE_LENGTHS,
     END_BLOCK,
+    CHECK_CRC32,
+    CHECK_ISIZE,
 };
 typedef enum inflate_mode inflate_mode;
 
 struct internal_state {
     inflate_mode mode;
-    gz_header* head;
+    gz_header *head;
     uInt bits;   // # of bits in bit accumulator
     uLong buff;  // bit accumator
     Byte flags;
@@ -95,21 +98,20 @@ struct internal_state {
     Byte blktype;
     uInt len;
     int block_number;  // TEMP TEMP
-    const uint16_t* lits;
+    const uint16_t *lits;
     // either points to `fixed_huffman_literals_codelens` or into `dynlens`
-    const uint16_t* litlens;
+    const uint16_t *litlens;
     size_t litmaxlen;
-    const uint16_t* dsts;
+    const uint16_t *dsts;
     // either points to `fixed_huffman_distance_codelens` or into `dynlens`
-    const uint16_t* dstlens;
+    const uint16_t *dstlens;
     size_t dstmaxlen;
     size_t index;
     size_t hlit;
     size_t hdist;
     size_t hclen;
-    size_t ncodes;
-    uint16_t* dynlits;
-    uint16_t* dyndsts;
+    uint16_t *dynlits;
+    uint16_t *dyndsts;
 
     uint16_t htree[HTREE_TABLE_SIZE];
     uint16_t dynlens[MAX_CODE_LENGTHS];
@@ -159,6 +161,8 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
         return Z_STREAM_ERROR;
     }
 
+    strm->adler = 0;
+
     size_t window_size = (1u << windowBits);
     size_t window_bytes = sizeof(Bytef) * window_size;
     size_t alloc_size = sizeof(internal_state) + window_bytes;
@@ -186,7 +190,6 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->hlit = 0;
     strm->state->hdist = 0;
     strm->state->hclen = 0;
-    strm->state->ncodes = 0;
     strm->state->dynlits = nullptr;
     strm->state->dyndsts = nullptr;
     strm->state->wnd_mask = static_cast<uint32_t>(window_size - 1);
@@ -258,9 +261,10 @@ static char msgbuf[1024];
         bits += 8;                                 \
     } while (0)
 
-#define NEEDBITS(n)                    \
-    do {                               \
-        while (bits < (n)) NEXTBYTE(); \
+#define NEEDBITS(n)                     \
+    do {                                \
+        assert((n) < 8 * sizeof(buff)); \
+        while (bits < (n)) NEXTBYTE();  \
     } while (0)
 
 #define PEEKBITS(n) (buff & ((1u << (n)) - 1))
@@ -499,8 +503,7 @@ int PZ_inflate(z_streamp strm, int flush) {
                     break;
                 }
             }
-            if (state->head)
-                DEBUG("Original Filename: '%s'", state->head->name);
+            if (state->head) DEBUG("Original Filename: '%s'", state->head->name);
         }
         mode = FCOMMENT;
         goto fcomment;
@@ -632,7 +635,6 @@ int PZ_inflate(z_streamp strm, int flush) {
         DROPBITS(5);
         state->hclen = PEEKBITS(4) + 4;
         DROPBITS(4);
-        state->ncodes = state->hlit + state->hdist;
         state->index = 0;
         assert(state->hlit <= 286);
         assert(state->hdist <= 30);
@@ -655,7 +657,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         goto dynamic_code_lengths;
     dynamic_code_lengths:
     case DYNAMIC_CODE_LENGTHS:
-        while (state->index < state->ncodes) {
+        while (state->index < state->hlit + state->hdist) {
             NEEDBITS(7);  // TODO: track actual max(hlengths)?
             value = state->htree[PEEKBITS(7)];
             if (value == 0xffffu) {
@@ -736,7 +738,9 @@ int PZ_inflate(z_streamp strm, int flush) {
         }
         DROPBITS(state->litlens[value]);
         if (value < 256) {
-            if (avail_out == 0) goto exit;
+            if (avail_out == 0) {
+                goto exit;
+            }
             Bytef c = static_cast<Bytef>(value);
             windowAdd(state, &c, sizeof(c));
             *out++ = c;
@@ -798,7 +802,9 @@ int PZ_inflate(z_streamp strm, int flush) {
     write_huffman_len_dist:
     case WRITE_HUFFMAN_LEN_DIST:
         while (state->len > 0) {
-            if (avail_out == 0) goto exit;
+            if (avail_out == 0) {
+                goto exit;
+            }
             Bytef c = state->wnd[state->index & state->wnd_mask];
             *out++ = c;
             avail_out--;
@@ -814,12 +820,46 @@ int PZ_inflate(z_streamp strm, int flush) {
     end_block:
     case END_BLOCK:
         if (state->blkfinal) {
-            ret = Z_STREAM_END;
-            goto exit;
+            mode = CHECK_CRC32;
+            goto check_crc32;
+            // assert(avail_in == 0);
+            // ret = Z_STREAM_END;
+            // goto exit;
         } else {
             mode = BEGIN_BLOCK;
             goto begin_block;
         }
+    check_crc32:
+    case CHECK_CRC32: {
+        DROPREMBYTE();
+        NEEDBITS(32);
+        strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, wrote);
+        strm->total_out += wrote;
+        wrote = 0;
+        strm->avail_out = avail_out;
+        uint32_t crc = buff & 0xFFFFu;
+        DROPBITS(32);
+        if (crc != static_cast<uint32_t>(strm->adler & 0xFFFFu)) {
+            panic(Z_STREAM_ERROR, "invalid crc: found=0x%04x expected=0x%04x", crc,
+                  static_cast<uint32_t>(strm->adler & 0xFFFFu));
+        }
+        DEBUG("CRC32: 0x%04x MINE: 0x%04lx", crc, strm->adler);
+        mode = CHECK_ISIZE;
+        goto check_isize;
+        break;
+    }
+    check_isize:
+    case CHECK_ISIZE: {
+        NEEDBITS(32);
+        uint32_t isize = buff & 0xFFFFu;
+        DEBUG("Original input size: %u", isize);
+        DROPBITS(32);
+        assert(avail_in == 0);
+        assert(isize == strm->total_out + wrote);
+        ret = Z_STREAM_END;
+        goto exit;
+        break;
+    }
     default:
         panic(Z_STREAM_ERROR, "state not implemented yet: %d", mode);
     }
@@ -831,6 +871,7 @@ exit:
     assert(avail_out <= strm->avail_out);
     assert(avail_in + read == strm->avail_in);
     assert(avail_out + wrote == strm->avail_out);
+    strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, wrote);
     strm->next_in = in;
     strm->avail_in = avail_in;
     strm->total_in += read;
@@ -840,7 +881,6 @@ exit:
     state->bits = bits;
     state->buff = buff;
     state->mode = mode;
-
     return ret;
 }
 

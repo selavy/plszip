@@ -11,15 +11,12 @@ target_link_libraries(plzip
 
 add_executable(compress compress.cpp)
 target_compile_features(compress PUBLIC cxx_std_17)
-# target_link_libraries(compress PUBLIC ZLIB::ZLIB)
-
-# add_executable(inflate inflate.c)
-# target_compile_features(inflate PUBLIC c_std_99)
 
 add_executable(inflate
     pzlib.cpp
-    inflate.cpp)
-# target_compile_features(inflate PUBLIC cxx_std_17)
+    inflate.cpp
+    crc32.cpp
+    )
 target_link_libraries(inflate
     PUBLIC
         ZLIB::ZLIB
