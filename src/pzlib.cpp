@@ -141,15 +141,11 @@ void zcfree(voidpf opaque, voidpf ptr) {
 const char *zlibVersion() { return "pzlib 0.0.1"; }
 
 // avoiding bringing in <algorithm> just for std::max<>
-uint16_t max_u16(uint16_t x, uint16_t y) noexcept {
-    return x > y ? x : y;
-}
+uint16_t max_u16(uint16_t x, uint16_t y) noexcept { return x > y ? x : y; }
 
-uint32_t min_u32(uint32_t x, uint32_t y) noexcept {
-    return x < y ? x : y;
-}
+uint32_t min_u32(uint32_t x, uint32_t y) noexcept { return x < y ? x : y; }
 
-uint16_t max_length(const uint16_t* first, const uint16_t* last) noexcept {
+uint16_t max_length(const uint16_t *first, const uint16_t *last) noexcept {
     uint16_t result = 0;
     while (first != last) {
         result = max_u16(*first++, result);
@@ -192,7 +188,7 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
         strm->msg = "failed to allocate memory for internal state";
         return Z_MEM_ERROR;
     }
-    strm->state = reinterpret_cast<internal_state*>(mem);
+    strm->state = reinterpret_cast<internal_state *>(mem);
     // strm->state = new (mem) internal_state{};
     strm->state->mode = HEADER;
     strm->state->buff = 0UL;
@@ -239,7 +235,7 @@ static bool checkDistance(const internal_state *s, size_t distance) {
 }
 
 int inflateEnd(z_streamp strm) {
-    printf("pzlib::inflateEnd\n");
+    DEBUG0("pzlib::inflateEnd");
     if (strm->state) {
         if (strm->state->dynlits) {
             strm->zfree(strm->opaque, strm->state->dynlits);
@@ -255,22 +251,20 @@ int inflateEnd(z_streamp strm) {
     return Z_OK;
 }
 
-static char msgbuf[1024];
-
+// TODO: remove "dynamic" panic
 #define panic(rc, fmt, ...)                                   \
     do {                                                      \
-        snprintf(msgbuf, sizeof(msgbuf), fmt, ##__VA_ARGS__); \
-        strm->msg = msgbuf;                                   \
+        snprintf(msgbuf_, sizeof(msgbuf_), fmt, ##__VA_ARGS__); \
+        strm->msg = msgbuf_;                                   \
         ret = rc;                                             \
         goto exit;                                            \
     } while (0)
 
-#define panic0(rc, msg_)                        \
-    do {                                        \
-        snprintf(msgbuf, sizeof(msgbuf), msg_); \
-        strm->msg = msgbuf;                     \
-        ret = rc;                               \
-        goto exit;                              \
+#define panic0(rc, msg_)  \
+    do {                  \
+        strm->msg = msg_; \
+        ret = rc;         \
+        goto exit;        \
     } while (0)
 
 #define NEXTBYTE()                                 \
@@ -408,6 +402,9 @@ static void init_huffman_tree(uint16_t *tree, const size_t maxlen, const uint16_
 
 int PZ_inflate(z_streamp strm, int flush) {
     (void)flush;
+
+    // TEMP TEMP -- remove "dynamic" panic
+    char msgbuf_[256];
 
     int ret = Z_OK;
     struct internal_state *state = strm->state;
