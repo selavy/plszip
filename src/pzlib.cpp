@@ -841,12 +841,12 @@ int PZ_inflate(z_streamp strm, int flush) {
         strm->total_out += wrote;
         wrote = 0;
         strm->avail_out = avail_out;
-        uint32_t crc = buff & 0xFFFFFFFFu;
+        uint32_t crc = AS_U32(buff);
         DROPBITS(32);
         if (crc != AS_U32(strm->adler)) {
             panic(Z_STREAM_ERROR, "invalid crc: found=0x%04x expected=0x%04x", crc, AS_U32(strm->adler));
         }
-        DEBUG("CRC32: 0x%04x MINE: 0x%04lx", crc, strm->adler);
+        DEBUG("CRC32: 0x%08x MINE: 0x%08x", crc, AS_U32(strm->adler));
         mode = CHECK_ISIZE;
         goto check_isize;
         break;
@@ -854,7 +854,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     check_isize:
     case CHECK_ISIZE: {
         NEEDBITS(32);
-        uint32_t isize = buff & 0xFFFFFFFFu;
+        uint32_t isize = AS_U32(buff);
         DROPBITS(32);
         DEBUG("Original input size: %u found=%u", isize, AS_U32(strm->total_out));
         assert(avail_in == 0);
