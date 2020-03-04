@@ -32,6 +32,10 @@
 
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
+#define AS_U32(x) static_cast<uint32_t>((x)&0xFFFFFFFFu)
+#define AS_U16(x) static_cast<uint16_t>((x)&0xFFFFu)
+#define AS_U8(x) static_cast<uint16_t>((x)&0xFFu)
+
 /* Global Static Data */
 static constexpr uint16_t LENGTH_BASE_CODE = 257;
 static constexpr uInt LENGTH_EXTRA_BITS[29] = {
@@ -837,11 +841,10 @@ int PZ_inflate(z_streamp strm, int flush) {
         strm->total_out += wrote;
         wrote = 0;
         strm->avail_out = avail_out;
-        uint32_t crc = buff & 0xFFFFu;
+        uint32_t crc = buff & 0xFFFFFFFFu;
         DROPBITS(32);
-        if (crc != static_cast<uint32_t>(strm->adler & 0xFFFFu)) {
-            panic(Z_STREAM_ERROR, "invalid crc: found=0x%04x expected=0x%04x", crc,
-                  static_cast<uint32_t>(strm->adler & 0xFFFFu));
+        if (crc != AS_U32(strm->adler)) {
+            panic(Z_STREAM_ERROR, "invalid crc: found=0x%04x expected=0x%04x", crc, AS_U32(strm->adler));
         }
         DEBUG("CRC32: 0x%04x MINE: 0x%04lx", crc, strm->adler);
         mode = CHECK_ISIZE;
@@ -851,13 +854,13 @@ int PZ_inflate(z_streamp strm, int flush) {
     check_isize:
     case CHECK_ISIZE: {
         NEEDBITS(32);
-        uint32_t isize = buff & 0xFFFFu;
+        uint32_t isize = buff & 0xFFFFFFFFu;
         DROPBITS(32);
-        DEBUG("Original input size: %u found=%lu", isize, strm->total_out);
+        DEBUG("Original input size: %u found=%u", isize, AS_U32(strm->total_out));
         assert(avail_in == 0);
-        if (isize != strm->total_out) {
-            panic(Z_STREAM_ERROR, "original size does not match inflated size: orig=%u new=%lu",
-                    isize, strm->total_out);
+        if (isize != AS_U32(strm->total_out)) {
+            panic(Z_STREAM_ERROR, "original size does not match inflated size: orig=%u new=%u", isize,
+                  AS_U32(strm->total_out));
         }
         ret = Z_STREAM_END;
         goto exit;
