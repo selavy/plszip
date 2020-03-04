@@ -709,6 +709,10 @@ int PZ_inflate(z_streamp strm, int flush) {
                 panic(Z_STREAM_ERROR, "invalid dynamic code length: %u", value);
             }
         }
+        if (state->index != state->hlit + state->hdist) {
+            panic(Z_STREAM_ERROR, "read too many code lengths: hlit=%zu hdist=%zu read=%zu", state->hlit, state->hdist,
+                  state->index);
+        }
 
         {
             // TODO(peter): do this during reading?
@@ -725,7 +729,9 @@ int PZ_inflate(z_streamp strm, int flush) {
             uInt ndsts = 1u << state->dstmaxlen;
             state->dynlits = reinterpret_cast<uint16_t *>(strm->zalloc(strm->opaque, sizeof(uint16_t), nlits));
             state->dyndsts = reinterpret_cast<uint16_t *>(strm->zalloc(strm->opaque, sizeof(uint16_t), ndsts));
-            if (!state->dynlits || !state->dyndsts) panic0(Z_MEM_ERROR, "unable to allocate space for huffman tables");
+            if (!state->dynlits || !state->dyndsts) {
+                panic0(Z_MEM_ERROR, "unable to allocate space for huffman tables");
+            }
             init_huffman_tree(state->dynlits, state->litmaxlen, state->litlens, state->hlit);
             init_huffman_tree(state->dyndsts, state->dstmaxlen, state->dstlens, state->hdist);
             // TODO(peter): can save 2 pointers (at the cost of const safety) by just using `lits` and `dsts` directly
