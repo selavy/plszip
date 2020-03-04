@@ -852,10 +852,13 @@ int PZ_inflate(z_streamp strm, int flush) {
     case CHECK_ISIZE: {
         NEEDBITS(32);
         uint32_t isize = buff & 0xFFFFu;
-        DEBUG("Original input size: %u", isize);
         DROPBITS(32);
+        DEBUG("Original input size: %u found=%lu", isize, strm->total_out);
         assert(avail_in == 0);
-        assert(isize == strm->total_out + wrote);
+        if (isize != strm->total_out) {
+            panic(Z_STREAM_ERROR, "original size does not match inflated size: orig=%u new=%lu",
+                    isize, strm->total_out);
+        }
         ret = Z_STREAM_END;
         goto exit;
         break;
