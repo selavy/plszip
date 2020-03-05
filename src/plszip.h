@@ -6,5 +6,5 @@
 #include "zlib.h"
 
 #ifndef USE_ZLIB
-int PZ_inflate(z_streamp strm, int flush);
+int PLS_inflate(z_streamp strm, int flush);
 #endif

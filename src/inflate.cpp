@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include "pzlib.h"
+#include "plszip.h"
 
 /* -------------------------------------------------------------------------- */
 
@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
 #ifdef USE_ZLIB
             ret = inflate(&strm, Z_NO_FLUSH);
 #else
-            ret = PZ_inflate(&strm, Z_NO_FLUSH);
+            ret = PLS_inflate(&strm, Z_NO_FLUSH);
 #endif
             // NOTE(peter): Z_BUF_ERROR is NOT fatal. It will be called if:
             // "no progress was possible or if there was not enough room in the output

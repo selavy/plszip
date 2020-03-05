@@ -1,4 +1,4 @@
-#include "pzlib.h"
+#include "plszip.h"
 
 // TODO: faster huffman code reading using linked-listed LUT implementation
 // TODO: can I remove the allocation for the dynamic trees?
@@ -403,7 +403,11 @@ static void init_huffman_tree(uint16_t *tree, const size_t maxlen, const uint8_t
         assert(avail_out + wrote == strm->avail_out); \
     } while (0)
 
-int PZ_inflate(z_streamp strm, int flush) {
+int inflate(z_streamp strm, int flush) {
+    return PLS_inflate(strm, flush);
+}
+
+int PLS_inflate(z_streamp strm, int flush) {
     (void)flush;
 
     // TEMP TEMP -- remove "dynamic" panic
