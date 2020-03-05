@@ -495,22 +495,23 @@ int PLS_inflate(z_streamp strm, int flush) {
             state->head->os = static_cast<int>(PEEKBITS(8));
         }
         DROPBITS(8);
+        mode = FEXTRA;
+        goto fextra;
+        break;
+    fextra:
+    case FEXTRA:
+        state->index = 0;
         if ((state->flags & (1u << 2)) != 0) {
-            mode = FEXTRA;
-            goto fextra;
+            NEEDBITS(16);
+            state->index = static_cast<uint16_t>((((buff >> 0) & 0xFFu) << 8) | (((buff >> 8) & 0xFFu) << 0));
+            DROPBITS(16);
+            mode = FEXTRA_DATA;
+            goto fextra_data;
         } else {
             state->index = 0;
             mode = FNAME;
             goto fname;
         }
-        break;
-    fextra:
-    case FEXTRA:
-        NEEDBITS(16);
-        state->index = static_cast<uint16_t>((((buff >> 0) & 0xFFu) << 8) | (((buff >> 8) & 0xFFu) << 0));
-        DROPBITS(16);
-        mode = FEXTRA_DATA;
-        goto fextra_data;
     fextra_data:
     case FEXTRA_DATA:
         while (state->index > 0) {
