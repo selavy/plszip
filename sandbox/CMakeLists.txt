@@ -9,3 +9,11 @@ target_link_libraries(sbox PUBLIC ZLIB::ZLIB)
 add_executable(zinf zinf.c)
 target_compile_features(zinf PUBLIC c_std_99)
 target_link_libraries(zinf PUBLIC ZLIB::ZLIB)
+
+add_executable(plzip plzip.cpp)
+target_link_libraries(plzip
+    PRIVATE
+    # project_warnings
+        cxx_project_options
+)
+
