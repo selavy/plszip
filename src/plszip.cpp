@@ -28,8 +28,31 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
 #endif
 
-#define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
+#ifdef NDEBUG
+#define panic(rc, msg1, fmt, ...) \
+    do {                          \
+        strm->msg = msg1;         \
+        ret = rc;                 \
+        goto exit;                \
+    } while (0)
+#else
+#define panic(rc, msg1, fmt, ...)                               \
+    do {                                                        \
+        snprintf(msgbuf_, sizeof(msgbuf_), fmt, ##__VA_ARGS__); \
+        strm->msg = msgbuf_;                                    \
+        ret = rc;                                               \
+        goto exit;                                              \
+    } while (0)
+#endif
 
+#define panic0(rc, msg_)  \
+    do {                  \
+        strm->msg = msg_; \
+        ret = rc;         \
+        goto exit;        \
+    } while (0)
+
+#define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 #define AS_U32(x) static_cast<uint32_t>((x)&0xFFFFFFFFu)
 #define AS_U16(x) static_cast<uint16_t>((x)&0xFFFFu)
 #define AS_U8(x) static_cast<uint16_t>((x)&0xFFu)
@@ -64,7 +87,6 @@ enum inflate_mode {
     HEADER, /* ID1 | ID2 | CM */
     MTIME,  /* MTIME */
     XFL,    /* XFL */
-    OS,     /* OS */
     FEXTRA, /* FEXTRA fields */
     FEXTRA_DATA,
     FNAME,
@@ -76,7 +98,6 @@ enum inflate_mode {
     DYNAMIC_HUFFMAN,
     NO_COMPRESSION_READ,
     HUFFMAN_READ,
-    WRITE_HUFFMAN_VALUE,
     HUFFMAN_LENGTH_CODE,
     READ_HUFFMAN_DISTANCE_CODE,
     HUFFMAN_DISTANCE_CODE,
@@ -94,17 +115,10 @@ struct internal_state {
     gz_header *head;
     uInt bits;   // # of bits in bit accumulator
     uLong buff;  // bit accumator
-    Byte flags;
-    Byte blkfinal;
-    int block_number;  // TEMP TEMP
-
     const uint8_t *litlens;
     const uint16_t *litcodes;
-    uint8_t litmaxbits;
     const uint8_t *dstlens;
     const uint16_t *dstcodes;
-    uint8_t dstmaxbits;
-
     union {
         uint16_t length;
         uint16_t lencode;
@@ -118,6 +132,14 @@ struct internal_state {
     uint16_t hclen;
     uint16_t *dynlits;
     uint16_t *dyndsts;
+    uint8_t litmaxbits;
+    uint8_t dstmaxbits;
+    Byte flags;
+    Byte blkfinal;
+
+#ifndef NDEBUG
+    int block_number;
+#endif
 
     uint16_t htree[HeaderTreeMaxSize];
     uint8_t dynlens[MaxDynamicCodeLengths];
@@ -199,7 +221,9 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->bits = 0;
     strm->state->flags = 0;
     strm->state->blkfinal = 0;
+#ifndef NDEBUG
     strm->state->block_number = 0;
+#endif
     strm->state->litlens = nullptr;
     strm->state->litcodes = nullptr;
     strm->state->litmaxbits = 0;
@@ -253,22 +277,6 @@ int inflateEnd(z_streamp strm) {
     strm->state = Z_NULL;
     return Z_OK;
 }
-
-// TODO: remove "dynamic" panic
-#define panic(rc, fmt, ...)                                     \
-    do {                                                        \
-        snprintf(msgbuf_, sizeof(msgbuf_), fmt, ##__VA_ARGS__); \
-        strm->msg = msgbuf_;                                    \
-        ret = rc;                                               \
-        goto exit;                                              \
-    } while (0)
-
-#define panic0(rc, msg_)  \
-    do {                  \
-        strm->msg = msg_; \
-        ret = rc;         \
-        goto exit;        \
-    } while (0)
 
 #define NEXTBYTE()                                 \
     do {                                           \
@@ -403,15 +411,15 @@ static void init_huffman_tree(uint16_t *tree, const size_t maxlen, const uint8_t
         assert(avail_out + wrote == strm->avail_out); \
     } while (0)
 
-int inflate(z_streamp strm, int flush) {
-    return PLS_inflate(strm, flush);
-}
+int inflate(z_streamp strm, int flush) { return PLS_inflate(strm, flush); }
 
 int PLS_inflate(z_streamp strm, int flush) {
     (void)flush;
 
     // TEMP TEMP -- remove "dynamic" panic
+#ifndef NDEBUG
     char msgbuf_[256];
+#endif
 
     int ret = Z_OK;
     struct internal_state *state = strm->state;
@@ -445,10 +453,10 @@ int PLS_inflate(z_streamp strm, int flush) {
         state->flags = static_cast<uint8_t>((buff >> 24) & 0xFFu);
         DROPBITS(32);
         if (id1 != 0x1Fu || id2 != 0x8Bu) {
-            panic(Z_STREAM_ERROR, "invalid gzip header bytes: 0x%02x 0x%02x", id1, id2);
+            panic(Z_STREAM_ERROR, "invalid gzip header", "invalid gzip header bytes: 0x%02x 0x%02x", id1, id2);
         }
         if (cm != 8) {
-            panic(Z_STREAM_ERROR, "invalid compression method: %u", cm);
+            panic(Z_STREAM_ERROR, "invalid compression method", "invalid compression method: %u", cm);
         }
         DEBUG0("GZIP HEADER");
         DEBUG("\tID1   = %3u (0x%02x)", id1, id1);
@@ -487,23 +495,22 @@ int PLS_inflate(z_streamp strm, int flush) {
             state->head->os = static_cast<int>(PEEKBITS(8));
         }
         DROPBITS(8);
-        mode = FEXTRA;
-        goto fextra;
-        break;
-    fextra:
-    case FEXTRA:
-        state->index = 0;
         if ((state->flags & (1u << 2)) != 0) {
-            NEEDBITS(16);
-            state->index = static_cast<uint16_t>((((buff >> 0) & 0xFFu) << 8) | (((buff >> 8) & 0xFFu) << 0));
-            DROPBITS(16);
-            mode = FEXTRA_DATA;
-            goto fextra_data;
+            mode = FEXTRA;
+            goto fextra;
         } else {
             state->index = 0;
             mode = FNAME;
             goto fname;
         }
+        break;
+    fextra:
+    case FEXTRA:
+        NEEDBITS(16);
+        state->index = static_cast<uint16_t>((((buff >> 0) & 0xFFu) << 8) | (((buff >> 8) & 0xFFu) << 0));
+        DROPBITS(16);
+        mode = FEXTRA_DATA;
+        goto fextra_data;
     fextra_data:
     case FEXTRA_DATA:
         while (state->index > 0) {
@@ -567,22 +574,28 @@ int PLS_inflate(z_streamp strm, int flush) {
         blktype = PEEKBITS(2);
         DROPBITS(2);
         if (blktype == 0x0u) {
+#ifndef NDEBUG
             DEBUG("Block #%d Encoding: No Compression%s", state->block_number, state->blkfinal ? " -- final" : "");
             state->block_number++;
+#endif
             mode = NO_COMPRESSION;
             goto no_compression_block;
         } else if (blktype == 0x1u) {
+#ifndef NDEBUG
             DEBUG("Block #%d Encoding: Fixed Huffman%s", state->block_number, state->blkfinal ? " -- final" : "");
             state->block_number++;
+#endif
             mode = FIXED_HUFFMAN;
             goto fixed_huffman_block;
         } else if (blktype == 0x2u) {
+#ifndef NDEBUG
             DEBUG("Block #%d Encoding: Dynamic Huffman%s", state->block_number, state->blkfinal ? " -- final" : "");
             state->block_number++;
+#endif
             mode = DYNAMIC_HUFFMAN;
             goto dynamic_huffman_block;
         } else {
-            panic(Z_STREAM_ERROR, "invalid block type: %u", blktype);
+            panic(Z_STREAM_ERROR, "invalid block type", "invalid block type: %u", blktype);
         }
         UNREACHABLE();
         break;
@@ -663,9 +676,15 @@ int PLS_inflate(z_streamp strm, int flush) {
         state->hclen = static_cast<uint16_t>(PEEKBITS(4) + 4);
         DROPBITS(4);
         state->index = 0;
-        assert(state->hlit <= 286);
-        assert(state->hdist <= 30);
-        assert(state->hclen <= NumHeaderCodeLengths);
+        if (!(state->hlit <= 286)) {
+            panic0(Z_STREAM_ERROR, "invalid HLIT");
+        }
+        if (!(state->hdist <= 30)) {
+            panic0(Z_STREAM_ERROR, "invalid HDIST");
+        }
+        if (!(state->hclen <= NumHeaderCodeLengths)) {
+            panic0(Z_STREAM_ERROR, "invalid HCLEN");
+        }
         memset(&state->hlengths, 0, sizeof(state->hlengths));
         mode = HEADER_TREE;
         goto header_tree;
@@ -685,10 +704,11 @@ int PLS_inflate(z_streamp strm, int flush) {
     dynamic_code_lengths:
     case DYNAMIC_CODE_LENGTHS:
         while (static_cast<int>(state->index) < state->hlit + state->hdist) {
-            NEEDBITS(7);  // TODO: track actual max(hlengths)?
+            NEEDBITS(7);
             value = state->htree[PEEKBITS(7)];
             if (value == 0xffffu) {
-                panic(Z_STREAM_ERROR, "invalid bit sequence: 0x%x len=7", static_cast<Bytef>(PEEKBITS(7)));
+                panic(Z_STREAM_ERROR, "invalid bit sequence in header tree", "invalid bit sequence: 0x%x len=7",
+                      static_cast<Bytef>(PEEKBITS(7)));
             }
             DROPBITS(state->hlengths[value]);
             uInt nbits, offset;
@@ -696,12 +716,14 @@ int PLS_inflate(z_streamp strm, int flush) {
             if (value <= 15) {
                 state->dynlens[state->index++] = static_cast<uint8_t>(value);
             } else if (value <= 18) {
+                // TODO: fix me -- not re-enterant
                 switch (value) {
                 case 16:
                     nbits = 2;
                     offset = 3;
                     if (state->index == 0) {
-                        panic(Z_STREAM_ERROR, "invalid repeat code %u with no previous code lengths", value);
+                        panic(Z_STREAM_ERROR, "invalid repeat code",
+                              "invalid repeat code %u with no previous code lengths", value);
                     }
                     rvalue = state->dynlens[state->index - 1];
                     break;
@@ -726,12 +748,12 @@ int PLS_inflate(z_streamp strm, int flush) {
                     state->dynlens[state->index++] = rvalue;
                 }
             } else {
-                panic(Z_STREAM_ERROR, "invalid dynamic code length: %u", value);
+                panic(Z_STREAM_ERROR, "invalid dynamic code length", "invalid dynamic code length: %u", value);
             }
         }
         if (static_cast<int>(state->index) != state->hlit + state->hdist) {
-            panic(Z_STREAM_ERROR, "too many code lengths: hlit=%u hdist=%u read=%u", state->hlit, state->hdist,
-                  state->index);
+            panic(Z_STREAM_ERROR, "too many code lengths", "too many code lengths: hlit=%u hdist=%u read=%u",
+                  state->hlit, state->hdist, state->index);
         }
 
         {
@@ -766,8 +788,8 @@ int PLS_inflate(z_streamp strm, int flush) {
         NEEDBITS(state->litmaxbits);
         value = state->litcodes[PEEKBITS(state->litmaxbits)];
         if (value == 0xffffu) {
-            panic(Z_STREAM_ERROR, "invalid bit sequence: 0x%04lx length=%u", PEEKBITS(state->litmaxbits),
-                  state->litmaxbits);
+            panic(Z_STREAM_ERROR, "invalid huffman code", "invalid bit sequence: 0x%04lx length=%u",
+                  PEEKBITS(state->litmaxbits), state->litmaxbits);
         }
         if (value < 256) {
             if (avail_out == 0) {
@@ -805,7 +827,7 @@ int PLS_inflate(z_streamp strm, int flush) {
             mode = HUFFMAN_LENGTH_CODE;
             goto huffman_length_code;
         } else {
-            panic(Z_STREAM_ERROR, "invalid huffman value: %u", value);
+            panic(Z_STREAM_ERROR, "invalid huffman code", "invalid huffman value: %u", value);
         }
         UNREACHABLE();
         break;
@@ -823,12 +845,12 @@ int PLS_inflate(z_streamp strm, int flush) {
         NEEDBITS(state->dstmaxbits);
         value = state->dstcodes[PEEKBITS(state->dstmaxbits)];
         if (value == 0xffffu) {
-            panic(Z_STREAM_ERROR, "invalid bit sequence: 0x%04lx length=%u", PEEKBITS(state->dstmaxbits),
-                  state->dstmaxbits);
+            panic(Z_STREAM_ERROR, "invalid huffman code", "invalid bit sequence: 0x%04lx length=%u",
+                  PEEKBITS(state->dstmaxbits), state->dstmaxbits);
         }
         DROPBITS(state->dstlens[value]);
         if (value >= 32) {
-            panic(Z_STREAM_ERROR, "invalid distance code: %u", value);
+            panic(Z_STREAM_ERROR, "invalid distance code", "invalid distance code: %u", value);
         }
         state->dstcode = value;
         mode = HUFFMAN_DISTANCE_CODE;
@@ -841,7 +863,7 @@ int PLS_inflate(z_streamp strm, int flush) {
         size_t distance = DISTANCE_BASES[state->dstcode] + PEEKBITS(extra);
         DROPBITS(extra);
         if (!checkDistance(state, distance)) {
-            panic(Z_STREAM_ERROR, "invalid distance %zu", distance);
+            panic(Z_STREAM_ERROR, "invalid distance", "invalid distance %zu", distance);
         }
         size_t wnd_buff_size = static_cast<size_t>(state->wnd_mask + 1);
         assert(distance < UINT16_MAX);
@@ -889,7 +911,8 @@ int PLS_inflate(z_streamp strm, int flush) {
         uint32_t crc = AS_U32(buff);
         DROPBITS(32);
         if (crc != AS_U32(strm->adler)) {
-            panic(Z_STREAM_ERROR, "invalid crc: found=0x%04x expected=0x%04x", crc, AS_U32(strm->adler));
+            panic(Z_STREAM_ERROR, "crc check failed", "invalid crc: found=0x%04x expected=0x%04x", crc,
+                  AS_U32(strm->adler));
         }
         DEBUG("CRC32: 0x%08x MINE: 0x%08x", crc, AS_U32(strm->adler));
         mode = CHECK_ISIZE;
@@ -904,15 +927,13 @@ int PLS_inflate(z_streamp strm, int flush) {
         DEBUG("Original input size: %u found=%u", isize, AS_U32(strm->total_out));
         assert(avail_in == 0);
         if (isize != AS_U32(strm->total_out)) {
-            panic(Z_STREAM_ERROR, "original size does not match inflated size: orig=%u new=%u", isize,
-                  AS_U32(strm->total_out));
+            panic(Z_STREAM_ERROR, "original size does not match inflated size",
+                  "original size does not match inflated size: orig=%u new=%u", isize, AS_U32(strm->total_out));
         }
         ret = Z_STREAM_END;
         goto exit;
         break;
     }
-    default:
-        panic(Z_STREAM_ERROR, "state not implemented yet: %d", mode);
     }
 
 exit:
