@@ -99,7 +99,6 @@ struct internal_state {
     uLong buff;  // bit accumator
     Byte flags;
     Byte blkfinal;
-    Byte blktype;
     uInt len;
     int block_number;  // TEMP TEMP
     const uint16_t *lits;
@@ -195,7 +194,6 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     strm->state->bits = 0;
     strm->state->flags = 0;
     strm->state->blkfinal = 0;
-    strm->state->blktype = 0;
     strm->state->block_number = 0;
     strm->state->lits = nullptr;
     strm->state->litlens = nullptr;
@@ -423,6 +421,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     uint32_t mtime;
     uint16_t value;
     uInt extra;
+    uint8_t blktype;
 
     if (in == Z_NULL || out == Z_NULL) {
         return Z_STREAM_ERROR;
@@ -431,20 +430,17 @@ int PZ_inflate(z_streamp strm, int flush) {
     switch (mode) {
     case HEADER:
         NEEDBITS(8 + 8 + 8 + 8);
-        id1 = PEEKBITS(8);
-        DROPBITS(8);
-        id2 = PEEKBITS(8);
-        DROPBITS(8);
-        cm = PEEKBITS(8);
-        DROPBITS(8);
+        id1 = static_cast<uint8_t>((buff >> 0) & 0xFFu);
+        id2 = static_cast<uint8_t>((buff >> 8) & 0xFFu);
+        cm = static_cast<uint8_t>((buff >> 16) & 0xFFu);
+        state->flags = static_cast<uint8_t>((buff >> 24) & 0xFFu);
+        DROPBITS(32);
         if (id1 != 0x1Fu || id2 != 0x8Bu) {
             panic(Z_STREAM_ERROR, "invalid gzip header bytes: 0x%02x 0x%02x", id1, id2);
         }
         if (cm != 8) {
             panic(Z_STREAM_ERROR, "invalid compression method: %u", cm);
         }
-        state->flags = PEEKBITS(8);
-        DROPBITS(8);
         DEBUG0("GZIP HEADER");
         DEBUG("\tID1   = %3u (0x%02x)", id1, id1);
         DEBUG("\tID2   = %3u (0x%02x)", id2, id2);
@@ -558,25 +554,25 @@ int PZ_inflate(z_streamp strm, int flush) {
         NEEDBITS(3);
         state->blkfinal = PEEKBITS(1);
         DROPBITS(1);
-        state->blktype = PEEKBITS(2);
+        blktype = PEEKBITS(2);
         DROPBITS(2);
-        if (state->blktype == 0x0u) {
+        if (blktype == 0x0u) {
             DEBUG("Block #%d Encoding: No Compression%s", state->block_number, state->blkfinal ? " -- final" : "");
             state->block_number++;
             mode = NO_COMPRESSION;
             goto no_compression_block;
-        } else if (state->blktype == 0x1u) {
+        } else if (blktype == 0x1u) {
             DEBUG("Block #%d Encoding: Fixed Huffman%s", state->block_number, state->blkfinal ? " -- final" : "");
             state->block_number++;
             mode = FIXED_HUFFMAN;
             goto fixed_huffman_block;
-        } else if (state->blktype == 0x2u) {
+        } else if (blktype == 0x2u) {
             DEBUG("Block #%d Encoding: Dynamic Huffman%s", state->block_number, state->blkfinal ? " -- final" : "");
             state->block_number++;
             mode = DYNAMIC_HUFFMAN;
             goto dynamic_huffman_block;
         } else {
-            panic(Z_STREAM_ERROR, "invalid block type: %u", state->blktype);
+            panic(Z_STREAM_ERROR, "invalid block type: %u", blktype);
         }
         UNREACHABLE();
         break;
