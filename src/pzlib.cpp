@@ -35,17 +35,16 @@
 #define AS_U8(x) static_cast<uint16_t>((x)&0xFFu)
 
 /* Global Static Data */
-static constexpr uint16_t LENGTH_BASE_CODE = 257;
-static constexpr uInt LENGTH_EXTRA_BITS[29] = {
+static constexpr uInt LengthExtraBits[29] = {
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
 };
 
-static constexpr size_t LENGTH_BASES[29] = {
+static constexpr size_t LengthBases[29] = {
     3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
 };
-static_assert(ARRSIZE(LENGTH_EXTRA_BITS) == ARRSIZE(LENGTH_BASES));
+static_assert(ARRSIZE(LengthExtraBits) == ARRSIZE(LengthBases));
 
-static constexpr uInt DISTANCE_EXTRA_BITS[32] = {
+static constexpr uInt DistanceExtraBits[32] = {
     0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 0, 0,
 };
 
@@ -54,13 +53,11 @@ static constexpr size_t DISTANCE_BASES[32] = {
     257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577, 0,   0,
 };
 
-static constexpr size_t WINDOW_SIZE = 1u << 16;
-
-static constexpr size_t NUM_CODE_LENGTHS = 19;
-static size_t order[NUM_CODE_LENGTHS] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
-static constexpr size_t MAX_HTREE_BIT_LENGTH = 7;
-static constexpr size_t HTREE_TABLE_SIZE = 1u << MAX_HTREE_BIT_LENGTH;
-static constexpr size_t MAX_CODE_LENGTHS = 322;
+static constexpr size_t NumHeaderCodeLengths = 19;
+static constexpr size_t order[NumHeaderCodeLengths] = {16, 17, 18, 0, 8,  7, 9,  6, 10, 5,
+                                                       11, 4,  12, 3, 13, 2, 14, 1, 15};
+static constexpr size_t HeaderTreeMaxSize = 1u << 7;
+static constexpr size_t MaxDynamicCodeLengths = 322;
 
 /* Internal Types */
 enum inflate_mode {
@@ -122,9 +119,9 @@ struct internal_state {
     uint16_t *dynlits;
     uint16_t *dyndsts;
 
-    uint16_t htree[HTREE_TABLE_SIZE];
-    uint8_t dynlens[MAX_CODE_LENGTHS];
-    uint8_t hlengths[NUM_CODE_LENGTHS];
+    uint16_t htree[HeaderTreeMaxSize];
+    uint8_t dynlens[MaxDynamicCodeLengths];
+    uint8_t hlengths[NumHeaderCodeLengths];
 
     /* circular buffer window */
     uint16_t wnd_mask;
@@ -666,7 +663,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         state->index = 0;
         assert(state->hlit <= 286);
         assert(state->hdist <= 30);
-        assert(state->hclen <= NUM_CODE_LENGTHS);
+        assert(state->hclen <= NumHeaderCodeLengths);
         memset(&state->hlengths, 0, sizeof(state->hlengths));
         mode = HEADER_TREE;
         goto header_tree;
@@ -678,7 +675,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             state->hlengths[order[state->index++]] = static_cast<uint8_t>(PEEKBITS(3));
             DROPBITS(3);
         }
-        init_huffman_tree(state->htree, 7, state->hlengths, NUM_CODE_LENGTHS);
+        init_huffman_tree(state->htree, 7, state->hlengths, NumHeaderCodeLengths);
         memset(state->dynlens, 0, sizeof(state->dynlens));
         state->index = 0;
         mode = DYNAMIC_CODE_LENGTHS;
@@ -801,8 +798,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             DROPBITS(state->litlens[value]);
             assert(257 <= value && value <= 285);
             state->lencode = static_cast<uint16_t>(value - 257);
-            assert(state->lencode < ARRSIZE(LENGTH_BASES));
-            assert(state->lencode < ARRSIZE(LENGTH_EXTRA_BITS));
+            assert(state->lencode < ARRSIZE(LengthBases));
+            assert(state->lencode < ARRSIZE(LengthExtraBits));
             mode = HUFFMAN_LENGTH_CODE;
             goto huffman_length_code;
         } else {
@@ -812,9 +809,9 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     huffman_length_code:
     case HUFFMAN_LENGTH_CODE:
-        extra = LENGTH_EXTRA_BITS[state->lencode];
+        extra = LengthExtraBits[state->lencode];
         NEEDBITS(extra);
-        state->length = static_cast<uint16_t>(LENGTH_BASES[state->lencode] + PEEKBITS(extra));
+        state->length = static_cast<uint16_t>(LengthBases[state->lencode] + PEEKBITS(extra));
         DROPBITS(extra);
         mode = READ_HUFFMAN_DISTANCE_CODE;
         goto read_huffman_distance_code;
@@ -837,7 +834,7 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     huffman_distance_code:
     case HUFFMAN_DISTANCE_CODE: {
-        extra = DISTANCE_EXTRA_BITS[state->dstcode];
+        extra = DistanceExtraBits[state->dstcode];
         NEEDBITS(extra);
         size_t distance = DISTANCE_BASES[state->dstcode] + PEEKBITS(extra);
         DROPBITS(extra);
