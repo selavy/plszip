@@ -191,9 +191,9 @@ int main(int argc, char **argv) {
     WRITE("");
     WRITE("#include <cstdint>");
     WRITE("");
-    WRITE("static constexpr uint16_t fixed_huffman_literals_maxlen = 9;");
+    WRITE("static constexpr uint8_t fixed_huffman_literals_maxbits = %zu;", lits.maxlen);
     WRITE("");
-    WRITE("static constexpr uint16_t fixed_huffman_literals_codelens[%zu] = {", ARRSIZE(litlens));
+    WRITE("static constexpr uint8_t fixed_huffman_literals_lens[%zu] = {", ARRSIZE(litlens));
     print_tree(litlens, ARRSIZE(litlens));
     WRITE("};");
     WRITE("");
@@ -201,9 +201,9 @@ int main(int argc, char **argv) {
     print_tree(lits.d, lits.len);
     WRITE("};");
     WRITE("");
-    WRITE("static constexpr uint16_t fixed_huffman_distance_maxlen = 5;");
+    WRITE("static constexpr uint8_t fixed_huffman_distance_maxbits = %zu;", dsts.maxlen);
     WRITE("");
-    WRITE("static constexpr uint16_t fixed_huffman_distance_codelens[%zu] = {", ARRSIZE(dstlens));
+    WRITE("static constexpr uint8_t fixed_huffman_distance_lens[%zu] = {", ARRSIZE(dstlens));
     print_tree(dstlens, ARRSIZE(dstlens));
     WRITE("};");
     WRITE("");

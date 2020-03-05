@@ -3,9 +3,9 @@
 
 #include <cstdint>
 
-static constexpr uint8_t fixed_huffman_literals_maxbits = 9;
+static constexpr uint16_t fixed_huffman_literals_maxlen = 9;
 
-static constexpr uint8_t fixed_huffman_literals_lens[288] = {
+static constexpr uint16_t fixed_huffman_literals_codelens[288] = {
         8,     8,     8,     8,     8,     8,     8,     8,    // (   0)
         8,     8,     8,     8,     8,     8,     8,     8,    // (   8)
         8,     8,     8,     8,     8,     8,     8,     8,    // (  16)
@@ -111,9 +111,9 @@ static constexpr uint16_t fixed_huffman_literals_codes[512] = {
       271,   111,    47,   191,    15,   143,    79,   255,    // ( 504)
     };
 
-static constexpr uint8_t fixed_huffman_distance_maxbits = 5;
+static constexpr uint16_t fixed_huffman_distance_maxlen = 5;
 
-static constexpr uint8_t fixed_huffman_distance_lens[32] = {
+static constexpr uint16_t fixed_huffman_distance_codelens[32] = {
         5,     5,     5,     5,     5,     5,     5,     5,    // (   0)
         5,     5,     5,     5,     5,     5,     5,     5,    // (   8)
         5,     5,     5,     5,     5,     5,     5,     5,    // (  16)
