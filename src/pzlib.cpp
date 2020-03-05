@@ -157,7 +157,6 @@ uint8_t max_length(const uint8_t *first, const uint8_t *last) noexcept {
 }
 
 int inflateInit2_(z_streamp strm, int windowBits, const char *version, int stream_size) {
-    printf("pzlib::inflateInit2_\n");
     if (strcmp(version, ZLIB_VERSION) != 0) {
         return Z_VERSION_ERROR;
     }
@@ -240,7 +239,6 @@ static bool checkDistance(const internal_state *s, size_t distance) {
 }
 
 int inflateEnd(z_streamp strm) {
-    DEBUG0("pzlib::inflateEnd");
     if (strm->state) {
         if (strm->state->dynlits) {
             strm->zfree(strm->opaque, strm->state->dynlits);
