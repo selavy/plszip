@@ -99,7 +99,7 @@ struct internal_state {
     uLong buff;  // bit accumator
     Byte flags;
     Byte blkfinal;
-    uInt len;
+    uint16_t length;
     int block_number;  // TEMP TEMP
     const uint16_t *lits;
     // either points to `fixed_huffman_literals_codelens` or into `dynlens`
@@ -250,12 +250,12 @@ int inflateEnd(z_streamp strm) {
 }
 
 // TODO: remove "dynamic" panic
-#define panic(rc, fmt, ...)                                   \
-    do {                                                      \
+#define panic(rc, fmt, ...)                                     \
+    do {                                                        \
         snprintf(msgbuf_, sizeof(msgbuf_), fmt, ##__VA_ARGS__); \
-        strm->msg = msgbuf_;                                   \
-        ret = rc;                                             \
-        goto exit;                                            \
+        strm->msg = msgbuf_;                                    \
+        ret = rc;                                               \
+        goto exit;                                              \
     } while (0)
 
 #define panic0(rc, msg_)  \
@@ -500,7 +500,6 @@ int PZ_inflate(z_streamp strm, int flush) {
             DROPBITS(8);
             state->index--;
         }
-        state->len = 0;
         mode = FNAME;
         goto fname;
         break;
@@ -510,8 +509,8 @@ int PZ_inflate(z_streamp strm, int flush) {
             for (;;) {
                 NEEDBITS(8);
                 auto c = static_cast<Bytef>(PEEKBITS(8));
-                if (state->head && state->len < state->head->name_max) {
-                    state->head->name[state->len++] = c;
+                if (state->head && state->index < state->head->name_max) {
+                    state->head->name[state->index++] = c;
                 }
                 DROPBITS(8);
                 if (c == '\0') {
@@ -583,55 +582,55 @@ int PZ_inflate(z_streamp strm, int flush) {
         if ((buff & 0xFFFFu) != ((buff >> 16) ^ 0xFFFFu)) {
             panic0(Z_STREAM_ERROR, "invalid stored block lengths");
         }
-        state->len = buff & 0xFFFFu;
+        state->length = AS_U16(buff);
         DROPBITS(32);
         mode = NO_COMPRESSION_READ;
         goto no_compression_read;
         break;
     no_compression_read:
-    case NO_COMPRESSION_READ:
+    case NO_COMPRESSION_READ: {
         // precondition: on a byte boundary
         // NOTE: switching to byte-oriented reading/writing
-        {
-            // should be on a byte boundary at this point after flush to
-            // byte boundary then 2 x 2B reads
+        // should be on a byte boundary at this point after flush to
+        // byte boundary then 2 x 2B reads
 
-            // Step 1. Flush remaining bytes in bit buffer to output
-            assert(bits % 8 == 0);
-            uInt bytes = bits / 8;
-            uInt amount = min_u32(state->len, min_u32(bytes, avail_out));
-            state->len -= amount;
-            avail_out -= amount;
-            read -= amount;
-            wrote += amount;
-            while (amount-- > 0) {
-                *out++ = static_cast<Bytef>(PEEKBITS(8));
-                DROPBITS(8);
-            }
-            assert(bits == 0);
-            assert(buff == 0);
-
-            // Step 2. Stream directly from input to output
-            amount = min_u32(state->len, min_u32(avail_in, avail_out));
-            state->len -= amount;
-            avail_in -= amount;
-            avail_out -= amount;
-            read += amount;
-            wrote += amount;
-            while (amount-- > 0) {
-                windowAdd(state, in, sizeof(*in));
-                *out++ = *in++;
-            }
-            CHECK_IO();
-            assert(state->len == 0 || (avail_in == 0 || avail_out == 0));
-            if (state->len != 0) {
-                goto exit;
-            }
+        // Step 1. Flush remaining bytes in bit buffer to output
+        assert(bits % 8 == 0);
+        uInt length = state->length;
+        uInt bytes = bits / 8;
+        uInt amount = min_u32(length, min_u32(bytes, avail_out));
+        length -= amount;
+        avail_out -= amount;
+        read -= amount;
+        wrote += amount;
+        while (amount-- > 0) {
+            *out++ = static_cast<Bytef>(PEEKBITS(8));
+            DROPBITS(8);
         }
-        assert(state->len == 0);
+        assert(bits == 0);
+        assert(buff == 0);
+
+        // Step 2. Stream directly from input to output
+        amount = min_u32(length, min_u32(avail_in, avail_out));
+        length -= amount;
+        avail_in -= amount;
+        avail_out -= amount;
+        read += amount;
+        wrote += amount;
+        while (amount-- > 0) {
+            windowAdd(state, in, sizeof(*in));
+            *out++ = *in++;
+        }
+        CHECK_IO();
+        assert(length == 0 || (avail_in == 0 || avail_out == 0));
+        if (length != 0) {
+            state->length = static_cast<uint16_t>(length);
+            goto exit;
+        }
         mode = END_BLOCK;
         goto end_block;
         break;
+    }
     fixed_huffman_block:
     case FIXED_HUFFMAN:
         state->lits = fixed_huffman_literals_codes;
@@ -789,9 +788,9 @@ int PZ_inflate(z_streamp strm, int flush) {
         } else if (value <= 285) {
             DROPBITS(state->litlens[value]);
             assert(257 <= value && value <= 285);
-            state->len = static_cast<uInt>(value) - 257;
-            assert(state->len < ARRSIZE(LENGTH_BASES));
-            assert(state->len < ARRSIZE(LENGTH_EXTRA_BITS));
+            state->length = static_cast<uint16_t>(value - 257);
+            assert(state->length < ARRSIZE(LENGTH_BASES));
+            assert(state->length < ARRSIZE(LENGTH_EXTRA_BITS));
             mode = HUFFMAN_LENGTH_CODE;
             goto huffman_length_code;
         } else {
@@ -801,9 +800,9 @@ int PZ_inflate(z_streamp strm, int flush) {
         break;
     huffman_length_code:
     case HUFFMAN_LENGTH_CODE:
-        extra = LENGTH_EXTRA_BITS[state->len];
+        extra = LENGTH_EXTRA_BITS[state->length];
         NEEDBITS(extra);
-        state->len = static_cast<uInt>(LENGTH_BASES[state->len] + PEEKBITS(extra));
+        state->length = static_cast<uint16_t>(LENGTH_BASES[state->length] + PEEKBITS(extra));
         DROPBITS(extra);
         mode = READ_HUFFMAN_DISTANCE_CODE;
         goto read_huffman_distance_code;
@@ -840,7 +839,7 @@ int PZ_inflate(z_streamp strm, int flush) {
     }
     write_huffman_len_dist:
     case WRITE_HUFFMAN_LEN_DIST:
-        while (state->len > 0) {
+        while (state->length > 0) {
             if (avail_out == 0) {
                 goto exit;
             }
@@ -851,7 +850,7 @@ int PZ_inflate(z_streamp strm, int flush) {
             windowAdd(state, &c, sizeof(c));
             CHECK_IO();
             state->index++;
-            state->len--;
+            state->length--;
         }
         mode = HUFFMAN_READ;
         goto huffman_read;
