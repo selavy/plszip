@@ -522,7 +522,9 @@ int PZ_inflate(z_streamp strm, int flush) {
                     break;
                 }
             }
-            if (state->head) DEBUG("Original Filename: '%s'", state->head->name);
+            if (state->head) {
+                DEBUG("Original Filename: '%s'", state->head->name);
+            }
         }
         mode = FCOMMENT;
         goto fcomment;
