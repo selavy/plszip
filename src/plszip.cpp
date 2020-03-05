@@ -81,6 +81,7 @@ static constexpr size_t order[NumHeaderCodeLengths] = {16, 17, 18, 0, 8,  7, 9, 
                                                        11, 4,  12, 3, 13, 2, 14, 1, 15};
 static constexpr size_t HeaderTreeMaxSize = 1u << 7;
 static constexpr size_t MaxDynamicCodeLengths = 322;
+static constexpr size_t MaxCodeBits = 16;
 
 /* Internal Types */
 enum inflate_mode {
@@ -110,11 +111,13 @@ enum inflate_mode {
 };
 typedef enum inflate_mode inflate_mode;
 
+static_assert(sizeof(uLong) >= 4, "Only support architectures with unsigned long >= 4 bytes");
+
 struct internal_state {
     inflate_mode mode;
-    gz_header *head;
     uInt bits;   // # of bits in bit accumulator
     uLong buff;  // bit accumator
+    gz_header *head;
     const uint8_t *litlens;
     const uint16_t *litcodes;
     const uint8_t *dstlens;
@@ -132,6 +135,9 @@ struct internal_state {
     uint16_t hclen;
     uint16_t *dynlits;
     uint16_t *dyndsts;
+    uint16_t wnd_mask;
+    uint16_t wnd_head;
+    uint16_t wnd_size;
     uint8_t litmaxbits;
     uint8_t dstmaxbits;
     Byte flags;
@@ -146,9 +152,6 @@ struct internal_state {
     uint8_t hlengths[NumHeaderCodeLengths];
 
     /* circular buffer window */
-    uint16_t wnd_mask;
-    uint16_t wnd_head;
-    uint16_t wnd_size;
     Bytef wnd[1];
 };
 
@@ -664,6 +667,8 @@ int PLS_inflate(z_streamp strm, int flush) {
         state->dstlens = fixed_huffman_distance_lens;
         state->dstcodes = fixed_huffman_distance_codes;
         state->dstmaxbits = fixed_huffman_distance_maxbits;
+        assert(state->litmaxbits <= MaxCodeBits);
+        assert(state->dstmaxbits <= MaxCodeBits);
         mode = HUFFMAN_READ;
         goto huffman_read;
         break;
@@ -705,7 +710,7 @@ int PLS_inflate(z_streamp strm, int flush) {
     dynamic_code_lengths:
     case DYNAMIC_CODE_LENGTHS:
         while (static_cast<int>(state->index) < state->hlit + state->hdist) {
-            NEEDBITS(7);
+            NEEDBITS(7 + MaxCodeBits);
             value = state->htree[PEEKBITS(7)];
             if (value == 0xffffu) {
                 panic(Z_STREAM_ERROR, "invalid bit sequence in header tree", "invalid bit sequence: 0x%x len=7",
@@ -717,7 +722,6 @@ int PLS_inflate(z_streamp strm, int flush) {
             if (value <= 15) {
                 state->dynlens[state->index++] = static_cast<uint8_t>(value);
             } else if (value <= 18) {
-                // TODO: fix me -- not re-enterant
                 switch (value) {
                 case 16:
                     nbits = 2;
@@ -741,7 +745,8 @@ int PLS_inflate(z_streamp strm, int flush) {
                 default:
                     UNREACHABLE();
                 }
-                NEEDBITS(nbits);
+                assert(bits >= nbits);
+                // NEEDBITS(nbits);
                 uLong repeat = PEEKBITS(nbits);
                 DROPBITS(nbits);
                 repeat += offset;
@@ -763,6 +768,8 @@ int PLS_inflate(z_streamp strm, int flush) {
             state->dstlens = &state->dynlens[state->hlit];
             state->litmaxbits = max_length(&state->litlens[0], &state->litlens[state->hlit]);
             state->dstmaxbits = max_length(&state->dstlens[0], &state->dstlens[state->hdist]);
+            assert(state->litmaxbits <= MaxCodeBits);
+            assert(state->dstmaxbits <= MaxCodeBits);
             if (state->dynlits) {
                 assert(state->dynlits && state->dyndsts);
                 strm->zfree(strm->opaque, state->dynlits);
