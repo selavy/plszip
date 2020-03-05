@@ -38,7 +38,7 @@
 #else
 #define panic(rc, msg1, fmt, ...)                               \
     do {                                                        \
-        snprintf(msgbuf_, sizeof(msgbuf_), fmt, ##__VA_ARGS__); \
+        snprintf(msgbuf_, sizeof(msgbuf_), "[%d] " fmt, __LINE__, ##__VA_ARGS__); \
         strm->msg = msgbuf_;                                    \
         ret = rc;                                               \
         goto exit;                                              \
@@ -171,7 +171,6 @@ const char *zlibVersion() { return "pzlib 0.0.1"; }
 uint8_t max_u8(uint8_t x, uint8_t y) noexcept { return x > y ? x : y; }
 uint32_t min_u32(uint32_t x, uint32_t y) noexcept { return x < y ? x : y; }
 int32_t min_s32(int32_t x, int32_t y) noexcept { return x < y ? x : y; }
-uint16_t min_u16(uint16_t x, uint16_t y) noexcept { return x < y ? x : y; }
 
 uint8_t max_length(const uint8_t *first, const uint8_t *last) noexcept {
     uint8_t result = 0;
@@ -246,19 +245,35 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
     return Z_OK;
 }
 
-static void windowAdd(internal_state *s, const Bytef *buf, uint16_t n) {
-    s->wnd_size = static_cast<uint16_t>(min_s32(s->wnd_size + n, s->wnd_mask + 1));
-    int n1 = min_s32(s->wnd_mask + 1 - s->wnd_head, n);
+static void windowAddByte(internal_state *s, Bytef x) {
+    if (s->wnd_size <= s->wnd_mask) {
+        s->wnd_size++;
+    }
+    s->wnd[s->wnd_head] = x;
+    s->wnd_head = static_cast<uint16_t>((s->wnd_head + 1) & s->wnd_mask);
+}
+
+static void windowAdd(internal_state *s, const Bytef *buf, int n) {
+    int wnd_mask = s->wnd_mask;
+    int wnd_capacity = wnd_mask + 1;
+    int wnd_head = s->wnd_head;
+    int wnd_size = s->wnd_size;
+    int n1 = min_s32(wnd_capacity - wnd_head, n);
     int n2 = n - n1;
-    Bytef *p = &s->wnd[s->wnd_head];
+    Bytef *p1 = &s->wnd[wnd_head];
+    Bytef *p2 = &s->wnd[0];
     while (n1-- > 0) {
-        *p++ = *buf++;
+        *p1++ = *buf++;
     }
-    p = &s->wnd[0];
     while (n2-- > 0) {
-        *p++ = *buf++;
+        *p2++ = *buf++;
     }
-    s->wnd_head = static_cast<uint16_t>((s->wnd_head + n) & s->wnd_mask);
+    wnd_head = (wnd_head + n) & wnd_mask;
+    wnd_size = min_s32(wnd_size + n, wnd_capacity);
+    assert(wnd_head < UINT16_MAX);
+    assert(wnd_size < UINT16_MAX);
+    s->wnd_head = static_cast<uint16_t>(wnd_head);
+    s->wnd_size = static_cast<uint16_t>(wnd_size);
 }
 
 static bool checkDistance(const internal_state *s, size_t distance) {
@@ -419,9 +434,8 @@ int inflate(z_streamp strm, int flush) { return PLS_inflate(strm, flush); }
 int PLS_inflate(z_streamp strm, int flush) {
     (void)flush;
 
-    // TEMP TEMP -- remove "dynamic" panic
 #ifndef NDEBUG
-    char msgbuf_[256];
+    static char msgbuf_[1024];
 #endif
 
     int ret = Z_OK;
@@ -645,10 +659,11 @@ int PLS_inflate(z_streamp strm, int flush) {
         avail_out -= amount;
         read += amount;
         wrote += amount;
-        while (amount-- > 0) {
-            windowAdd(state, in, sizeof(*in));
-            *out++ = *in++;
-        }
+        memcpy(out, in, amount * sizeof(*in));
+        assert(amount < UINT16_MAX);
+        windowAdd(state, in, static_cast<uint16_t>(amount * sizeof(*in)));
+        in += amount;
+        out += amount;
         CHECK_IO();
         assert(length == 0 || (avail_in == 0 || avail_out == 0));
         if (length != 0) {
@@ -806,7 +821,7 @@ int PLS_inflate(z_streamp strm, int flush) {
             DROPBITS(state->litlens[value]);
             assert(avail_out > 0);
             Bytef c = static_cast<Bytef>(value);
-            windowAdd(state, &c, sizeof(c));
+            windowAddByte(state, c);
             *out++ = c;
             avail_out--;
             wrote++;
@@ -891,7 +906,7 @@ int PLS_inflate(z_streamp strm, int flush) {
             *out++ = c;
             avail_out--;
             wrote++;
-            windowAdd(state, &c, sizeof(c));
+            windowAddByte(state, c);
             CHECK_IO();
             state->index++;
             state->length--;
