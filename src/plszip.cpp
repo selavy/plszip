@@ -5,6 +5,8 @@
 
 #ifndef USE_ZLIB
 
+#define CALC_AND_CHECK_CRC
+
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -966,18 +968,26 @@ int PLS_inflate(z_streamp strm, int flush) {
 #ifndef NDEBUG
         assert(wrote == strm->avail_out - avail_out);
 #endif
+
+#ifdef CALC_AND_CHECK_CRC
         strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, strm->avail_out - avail_out);
+#endif
         strm->total_out += strm->avail_out - avail_out;
         strm->avail_out = avail_out;
 #ifndef NDEBUG
         wrote = 0;
 #endif
+
+#ifdef CALC_AND_CHECK_CRC
         uint32_t crc = AS_U32(buff);
+#endif
         DROPBITS(32);
+#ifdef CALC_AND_CHECK_CRC
         if (crc != AS_U32(strm->adler)) {
             panic(Z_STREAM_ERROR, "crc check failed", "invalid crc: found=0x%04x expected=0x%04x", crc,
                   AS_U32(strm->adler));
         }
+#endif
         DEBUG("CRC32: 0x%08x MINE: 0x%08x", crc, AS_U32(strm->adler));
         mode = CHECK_ISIZE;
         goto check_isize;
@@ -1008,7 +1018,9 @@ exit:
     assert(read == strm->avail_in - avail_in);
     assert(wrote == strm->avail_out - avail_out);
 #endif
+#ifdef CALC_AND_CHECK_CRC
     strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, strm->avail_out - avail_out);
+#endif
     strm->total_in += strm->avail_in - avail_in;
     strm->total_out += strm->avail_out - avail_out;
     strm->next_in = in;

@@ -1,5 +1,6 @@
 #include "crc32.h"
 
+// #define BYFOUR
 #ifdef BYFOUR
 static uint32_t crc32_little(uint32_t crc, const uint8_t *buf, size_t len);
 static uint32_t crc32_big(uint32_t crc, const uint8_t *buf, size_t len);
