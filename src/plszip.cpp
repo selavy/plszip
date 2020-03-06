@@ -5,7 +5,7 @@
 
 #ifndef USE_ZLIB
 
-#define CALC_AND_CHECK_CRC
+// #define CALC_AND_CHECK_CRC
 
 #include <cassert>
 #include <cstdint>

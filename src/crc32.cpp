@@ -1,9 +1,9 @@
 #include "crc32.h"
 
-// #define BYFOUR
+#define BYFOUR
 #ifdef BYFOUR
 static uint32_t crc32_little(uint32_t crc, const uint8_t *buf, size_t len);
-static uint32_t crc32_big(uint32_t crc, const uint8_t *buf, size_t len);
+// static uint32_t crc32_big(uint32_t crc, const uint8_t *buf, size_t len);
 #define TBLS 8
 #else
 #define TBLS 1
@@ -513,14 +513,14 @@ uint32_t crc32_little(uint32_t crc, const uint8_t *buf, size_t len)
     uint32_t c;
     const uint32_t *buf4;
 
-    c = (z_crc_t)crc;
+    c = crc;
     c = ~c;
-    while (len && ((ptrdiff_t)buf & 3)) {
+    while (len && (reinterpret_cast<ptrdiff_t>(buf) & 3)) {
         c = crc_table[0][(c ^ *buf++) & 0xff] ^ (c >> 8);
         len--;
     }
 
-    buf4 = (const uint32_t *)(const void *)buf;
+    buf4 = static_cast<const uint32_t *>(reinterpret_cast<const void *>(buf));
     while (len >= 32) {
         DOLIT32;
         len -= 32;
@@ -529,13 +529,13 @@ uint32_t crc32_little(uint32_t crc, const uint8_t *buf, size_t len)
         DOLIT4;
         len -= 4;
     }
-    buf = (const uint32_t *)buf4;
+    buf = reinterpret_cast<const uint8_t *>(buf4);
 
     if (len) do {
         c = crc_table[0][(c ^ *buf++) & 0xff] ^ (c >> 8);
     } while (--len);
     c = ~c;
-    return (unsigned long)c;
+    return c;
 }
 
 /* ========================================================================= */
@@ -544,6 +544,7 @@ uint32_t crc32_little(uint32_t crc, const uint8_t *buf, size_t len)
             crc_table[6][(c >> 16) & 0xff] ^ crc_table[7][c >> 24]
 #define DOBIG32 DOBIG4; DOBIG4; DOBIG4; DOBIG4; DOBIG4; DOBIG4; DOBIG4; DOBIG4
 
+#if 0
 /* ========================================================================= */
 uint32_t crc32_big(uint32_t crc, const uint8_t *buf, size_t len)
 {
@@ -574,5 +575,6 @@ uint32_t crc32_big(uint32_t crc, const uint8_t *buf, size_t len)
     c = ~c;
     return (unsigned long)(ZSWAP32(c));
 }
+#endif
 
 #endif /* BYFOUR */
