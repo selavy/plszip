@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #include "crc32.h"
 #include "fixed_huffman_trees.h"
@@ -36,12 +37,12 @@
         goto exit;                \
     } while (0)
 #else
-#define panic(rc, msg1, fmt, ...)                               \
-    do {                                                        \
+#define panic(rc, msg1, fmt, ...)                                                 \
+    do {                                                                          \
         snprintf(msgbuf_, sizeof(msgbuf_), "[%d] " fmt, __LINE__, ##__VA_ARGS__); \
-        strm->msg = msgbuf_;                                    \
-        ret = rc;                                               \
-        goto exit;                                              \
+        strm->msg = msgbuf_;                                                      \
+        ret = rc;                                                                 \
+        goto exit;                                                                \
     } while (0)
 #endif
 
@@ -216,8 +217,7 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
         strm->msg = "failed to allocate memory for internal state";
         return Z_MEM_ERROR;
     }
-    strm->state = reinterpret_cast<internal_state *>(mem);
-    // strm->state = new (mem) internal_state{};
+    strm->state = new (mem) internal_state{};
     strm->state->mode = HEADER;
     strm->state->buff = 0UL;
     strm->state->bits = 0;
@@ -254,6 +254,7 @@ static void windowAddByte(internal_state *s, Bytef x) {
 }
 
 static void windowAdd(internal_state *s, const Bytef *buf, int n) {
+    assert(n < UINT16_MAX);
     int wnd_mask = s->wnd_mask;
     int wnd_capacity = wnd_mask + 1;
     int wnd_head = s->wnd_head;
@@ -296,6 +297,19 @@ int inflateEnd(z_streamp strm) {
     return Z_OK;
 }
 
+#ifndef NDEBUG
+#define CHECK_IO()                                    \
+    do {                                              \
+        assert(avail_in <= strm->avail_in);           \
+        assert(avail_out <= strm->avail_out);         \
+        assert(avail_in + read == strm->avail_in);    \
+        assert(avail_out + wrote == strm->avail_out); \
+    } while (0)
+#else
+#define CHECK_IO()
+#endif
+
+#ifndef NDEBUG
 #define NEXTBYTE()                                 \
     do {                                           \
         if (avail_in == 0) goto exit;              \
@@ -304,6 +318,15 @@ int inflateEnd(z_streamp strm) {
         read++;                                    \
         bits += 8;                                 \
     } while (0)
+#else
+#define NEXTBYTE()                                 \
+    do {                                           \
+        if (avail_in == 0) goto exit;              \
+        avail_in--;                                \
+        buff += static_cast<uLong>(*in++) << bits; \
+        bits += 8;                                 \
+    } while (0)
+#endif
 
 #define NEEDBITS(n)                     \
     do {                                \
@@ -421,14 +444,6 @@ static void init_huffman_tree(uint16_t *tree, const size_t maxlen, const uint8_t
     }
 }
 
-#define CHECK_IO()                                    \
-    do {                                              \
-        assert(avail_in <= strm->avail_in);           \
-        assert(avail_out <= strm->avail_out);         \
-        assert(avail_in + read == strm->avail_in);    \
-        assert(avail_out + wrote == strm->avail_out); \
-    } while (0)
-
 int inflate(z_streamp strm, int flush) { return PLS_inflate(strm, flush); }
 
 int PLS_inflate(z_streamp strm, int flush) {
@@ -443,19 +458,20 @@ int PLS_inflate(z_streamp strm, int flush) {
     inflate_mode mode = state->mode;
     z_const Bytef *in = strm->next_in;
     uInt avail_in = strm->avail_in;
-    uLong read = 0;
-
     Bytef *out = strm->next_out;
     uInt avail_out = strm->avail_out;
-    uLong wrote = 0;
-
     uInt bits = state->bits;
     uLong buff = state->buff;
-    uint8_t id1, id2, cm;
+
+#ifndef NDEBUG
+    uLong read = 0;
+    uLong wrote = 0;
+#endif
+
+    uint8_t id1, id2, cm, blktype;
     uint32_t mtime;
     uint16_t value;
     uInt extra;
-    uint8_t blktype;
 
     if (in == Z_NULL || out == Z_NULL) {
         return Z_STREAM_ERROR;
@@ -587,10 +603,13 @@ int PLS_inflate(z_streamp strm, int flush) {
     begin_block:
     case BEGIN_BLOCK:
         NEEDBITS(3);
+        // state->blkfinal = buff & 0x1;
+        // blktype = (buff >> 1) & 0x3;
         state->blkfinal = PEEKBITS(1);
         DROPBITS(1);
         blktype = PEEKBITS(2);
         DROPBITS(2);
+        // DROPBITS(3);
         if (blktype == 0x0u) {
 #ifndef NDEBUG
             DEBUG("Block #%d Encoding: No Compression%s", state->block_number, state->blkfinal ? " -- final" : "");
@@ -631,10 +650,12 @@ int PLS_inflate(z_streamp strm, int flush) {
         break;
     no_compression_read:
     case NO_COMPRESSION_READ: {
-        // precondition: on a byte boundary
         // NOTE: switching to byte-oriented reading/writing
         // should be on a byte boundary at this point after flush to
-        // byte boundary then 2 x 2B reads
+        // byte boundary followed by 2 x 2B reads
+
+        // REVISIT(peter): are there ever bytes
+        // remaining in the buffer?
 
         // Step 1. Flush remaining bytes in bit buffer to output
         assert(bits % 8 == 0);
@@ -643,10 +664,15 @@ int PLS_inflate(z_streamp strm, int flush) {
         uInt amount = min_u32(length, min_u32(bytes, avail_out));
         length -= amount;
         avail_out -= amount;
+#ifndef NDEBUG
         read -= amount;
         wrote += amount;
+#endif
         while (amount-- > 0) {
-            *out++ = static_cast<Bytef>(PEEKBITS(8));
+            assert(bits >= 8);
+            Bytef c = static_cast<Bytef>(PEEKBITS(8));
+            *out++ = c;
+            windowAddByte(state, c);
             DROPBITS(8);
         }
         assert(bits == 0);
@@ -654,16 +680,17 @@ int PLS_inflate(z_streamp strm, int flush) {
 
         // Step 2. Stream directly from input to output
         amount = min_u32(length, min_u32(avail_in, avail_out));
+        memcpy(out, in, amount);
+        windowAdd(state, in, static_cast<int>(amount));
+        in += amount;
+        out += amount;
         length -= amount;
         avail_in -= amount;
         avail_out -= amount;
+#ifndef NDEBUG
         read += amount;
         wrote += amount;
-        memcpy(out, in, amount * sizeof(*in));
-        assert(amount < UINT16_MAX);
-        windowAdd(state, in, static_cast<uint16_t>(amount * sizeof(*in)));
-        in += amount;
-        out += amount;
+#endif
         CHECK_IO();
         assert(length == 0 || (avail_in == 0 || avail_out == 0));
         if (length != 0) {
@@ -824,7 +851,9 @@ int PLS_inflate(z_streamp strm, int flush) {
             windowAddByte(state, c);
             *out++ = c;
             avail_out--;
+#ifndef NDEBUG
             wrote++;
+#endif
             CHECK_IO();
             assert(mode == HUFFMAN_READ);
             goto huffman_read;
@@ -905,7 +934,9 @@ int PLS_inflate(z_streamp strm, int flush) {
             Bytef c = state->wnd[state->index & state->wnd_mask];
             *out++ = c;
             avail_out--;
+#ifndef NDEBUG
             wrote++;
+#endif
             windowAddByte(state, c);
             CHECK_IO();
             state->index++;
@@ -916,6 +947,7 @@ int PLS_inflate(z_streamp strm, int flush) {
         break;
     end_block:
     case END_BLOCK:
+        CHECK_IO();
         if (state->blkfinal) {
             mode = CHECK_CRC32;
             goto check_crc32;
@@ -925,12 +957,19 @@ int PLS_inflate(z_streamp strm, int flush) {
         }
     check_crc32:
     case CHECK_CRC32: {
+        CHECK_IO();
         DROPREMBYTE();
         NEEDBITS(32);
-        strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, wrote);
-        strm->total_out += wrote;
-        wrote = 0;
+        size_t wrot = strm->avail_out - avail_out;
+#ifndef NDEBUG
+        assert(wrote == wrot);
+#endif
+        strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, wrot);
+        strm->total_out += wrot;
         strm->avail_out = avail_out;
+#ifndef NDEBUG
+        wrote = 0;
+#endif
         uint32_t crc = AS_U32(buff);
         DROPBITS(32);
         if (crc != AS_U32(strm->adler)) {
@@ -960,19 +999,21 @@ int PLS_inflate(z_streamp strm, int flush) {
     }
 
 exit:
-    // TODO(peter): remove `read` and `wrote` because already have that
-    // information.
     assert(avail_in <= strm->avail_in);
     assert(avail_out <= strm->avail_out);
+#ifndef NDEBUG
     assert(avail_in + read == strm->avail_in);
     assert(avail_out + wrote == strm->avail_out);
-    strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, wrote);
+    assert(read == strm->avail_in - avail_in);
+    assert(wrote == strm->avail_out - avail_out);
+#endif
+    strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, strm->avail_out - avail_out);
+    strm->total_in += strm->avail_in - avail_in;
+    strm->total_out += strm->avail_out - avail_out;
     strm->next_in = in;
-    strm->avail_in = avail_in;
-    strm->total_in += read;
     strm->next_out = out;
+    strm->avail_in = avail_in;
     strm->avail_out = avail_out;
-    strm->total_out += wrote;
     state->bits = bits;
     state->buff = buff;
     state->mode = mode;

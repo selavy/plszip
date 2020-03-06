@@ -13,3 +13,13 @@ target_link_libraries(inflate
         project_warnings
         cxx_project_options
 )
+
+add_executable(inflate_zlib plszip.cpp crc32.cpp inflate.cpp)
+target_link_libraries(inflate_zlib
+    PUBLIC
+        ZLIB::ZLIB
+    PRIVATE
+        project_warnings
+        cxx_project_options
+)
+target_compile_definitions(inflate_zlib PRIVATE USE_ZLIB)

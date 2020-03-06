@@ -63,7 +63,8 @@ struct Reader
     void*    data;
 };
 
-constexpr int REFILL_BUFFER_SIZE = 2048;
+// constexpr int REFILL_BUFFER_SIZE = 2048;
+constexpr int REFILL_BUFFER_SIZE = (1u << 15);
 
 struct RefillFileData
 {
@@ -824,7 +825,9 @@ int main(int argc, char** argv)
     BitReader reader(fp);
     uint8_t bfinal = 0;
     int block_number = 0;
+    size_t block_size = 0;
     do {
+        block_size = 0;
         size_t write_length = 0;
         reader.need(1 + 2);
         bfinal = reader.read_bits(1);
@@ -908,6 +911,7 @@ int main(int argc, char** argv)
 
                     // flush buffer if sufficiently full
                     if (write_length > (1u << 12)) {
+                        block_size += write_length;
                         flush_buffer(output, write_buffer, write_length);
                         write_length = 0;
                     }
@@ -921,9 +925,11 @@ int main(int argc, char** argv)
 
         if (write_length > 0) {
             flush_buffer(output, write_buffer, write_length);
+            block_size += write_length;
         }
 
         ++block_number;
+        DEBUG("Block size = %zu", block_size);
     } while (bfinal == 0);
 
     //------------------------------------------------
