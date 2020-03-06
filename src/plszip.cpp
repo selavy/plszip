@@ -200,6 +200,9 @@ int inflateInit2_(z_streamp strm, int windowBits, const char *version, int strea
         strm->zfree = &zcfree;
     }
 
+    strm->total_in = 0;
+    strm->total_out = 0;
+
     if (windowBits != 15 + 16) {
         strm->msg = "invalid windowBits parameter -- 31 only supported value";
         return Z_STREAM_ERROR;
@@ -960,12 +963,11 @@ int PLS_inflate(z_streamp strm, int flush) {
         CHECK_IO();
         DROPREMBYTE();
         NEEDBITS(32);
-        size_t wrot = strm->avail_out - avail_out;
 #ifndef NDEBUG
-        assert(wrote == wrot);
+        assert(wrote == strm->avail_out - avail_out);
 #endif
-        strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, wrot);
-        strm->total_out += wrot;
+        strm->adler = calc_crc32(static_cast<uint32_t>(strm->adler), strm->next_out, strm->avail_out - avail_out);
+        strm->total_out += strm->avail_out - avail_out;
         strm->avail_out = avail_out;
 #ifndef NDEBUG
         wrote = 0;
@@ -989,6 +991,7 @@ int PLS_inflate(z_streamp strm, int flush) {
         DEBUG("Original input size: %u found=%u", isize, AS_U32(strm->total_out));
         assert(avail_in == 0);
         if (isize != AS_U32(strm->total_out)) {
+            fprintf(stderr, "%u != %u\n", isize, AS_U32(strm->total_out));
             panic(Z_STREAM_ERROR, "original size does not match inflated size",
                   "original size does not match inflated size: orig=%u new=%u", isize, AS_U32(strm->total_out));
         }
@@ -1002,8 +1005,6 @@ exit:
     assert(avail_in <= strm->avail_in);
     assert(avail_out <= strm->avail_out);
 #ifndef NDEBUG
-    assert(avail_in + read == strm->avail_in);
-    assert(avail_out + wrote == strm->avail_out);
     assert(read == strm->avail_in - avail_in);
     assert(wrote == strm->avail_out - avail_out);
 #endif
