@@ -987,8 +987,8 @@ int PLS_inflate(z_streamp strm, int flush) {
             panic(Z_STREAM_ERROR, "crc check failed", "invalid crc: found=0x%04x expected=0x%04x", crc,
                   AS_U32(strm->adler));
         }
-#endif
         DEBUG("CRC32: 0x%08x MINE: 0x%08x", crc, AS_U32(strm->adler));
+#endif
         mode = CHECK_ISIZE;
         goto check_isize;
         break;

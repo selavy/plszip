@@ -14,6 +14,12 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     enable_sanitizers(cxx_project_options)
 endif (CMAKE_BUILD_TYPE STREQUAL "Debug")
 
+
+find_package(ZLIB REQUIRED)
+add_library(ZLIB2 INTERFACE)
+target_compile_definitions(ZLIB2 INTERFACE NO_DUMMY_DECL)
+target_link_libraries(ZLIB2 INTERFACE ZLIB::ZLIB)
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
