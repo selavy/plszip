@@ -341,13 +341,14 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     out.write_bits(bfinal, 1);
     out.write_bits(block_type, 2);
     for (const char *p = buf, *end = buf + size; p != end; ++p) {
-        auto it = lits.find(static_cast<uint16_t>(*p));
+        auto val = static_cast<uint16_t>(*reinterpret_cast<const uint8_t*>(p));
+        auto it = lits.find(val);
         if (it == lits.end()) {
-            panic("no code for literal: %c (%d)", *p, *p);
+            panic("no code for literal: %c (%u)", val, val);
         }
         auto&& [code, n_bits] = it->second;
         out.write_bits(code, n_bits);
-        DEBUG("value(%c) => code(0x%02x) len=%u, flipped=0x%02x", *p, code, n_bits, flip_code(code, n_bits));
+        // DEBUG("value(%c, %u) => code(0x%02x) len=%u, flipped=0x%02x", val, val, code, n_bits, flip_code(code, n_bits));
     }
     {
         auto it = lits.find(static_cast<uint16_t>(256));
