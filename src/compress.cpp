@@ -24,6 +24,9 @@
         }                                                        \
     } while (0)
 
+#define DEBUG0(msg) fprintf(stderr, "DEBUG: " msg "\n");
+#define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
+
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 #define BUFSIZE 2056
@@ -111,9 +114,35 @@ struct Code {
     uint16_t bits;
 };
 
-using Value = uint8_t;
+using Value = uint16_t;
 
 using Tree = std::map<Value, Code>;
+
+static const unsigned char BitReverseTable256[256] = {
+// clang-format off
+#   define R2(n)     n,     n + 2*64,     n + 1*64,     n + 3*64
+#   define R4(n) R2(n), R2(n + 2*16), R2(n + 1*16), R2(n + 3*16)
+#   define R6(n) R4(n), R4(n + 2*4 ), R4(n + 1*4 ), R4(n + 3*4 )
+    R6(0), R6(2), R6(1), R6(3)
+#undef R2
+#undef R4
+#undef R6
+    // clang-format on
+};
+
+uint16_t flip_u16(uint16_t v) noexcept {
+    // clang-format off
+    return static_cast<uint16_t>(
+        (BitReverseTable256[(v >> 0) & 0xff] << 8) |
+        (BitReverseTable256[(v >> 8) & 0xff] << 0)
+    );
+    // clang-format on
+}
+
+uint16_t flip_code(uint16_t code, size_t codelen) {
+    assert(0 < codelen && codelen <= 16);
+    return static_cast<uint16_t>(flip_u16(code) >> (16 - codelen));
+}
 
 Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
     constexpr size_t MaxCodes = 512; // TODO: why 1^9? should this be 1^8?
@@ -164,7 +193,8 @@ Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
             continue;
         }
         uint16_t code = codes[value];
-        tree.emplace(value, Code{code, code_length});
+        tree.emplace(value, Code{flip_code(code, code_length), code_length});
+        // tree.emplace(value, Code{code, code_length});
     }
 
     return tree;
@@ -187,7 +217,7 @@ std::pair<Tree, Tree> init_fixed_huffman_data() noexcept {
     assert(lit_codes.size() == 288);
     auto lit_tree = init_huffman_tree(lit_codes.data(), lit_codes.size());
 
-    std::vector<uint16_t> dst_codes{32, 5};
+    std::vector<uint16_t> dst_codes(32, 5);
     assert(dst_codes.size() == 32);
     auto dst_tree = init_huffman_tree(dst_codes.data(), dst_codes.size());
 
@@ -229,24 +259,32 @@ std::pair<Tree, Tree> init_fixed_huffman_data() noexcept {
 //  3. Everything else is least significant -> most significant
 
 struct BitWriter {
-    BitWriter(FILE* fp) noexcept : out_{fp} {}
+    using Buffer = uint32_t;
+
+    BitWriter(FILE* fp) noexcept : out_{fp}, buff_{0}, bits_{0} {}
 
     void write_bits(uint16_t val, size_t n_bits) noexcept
     {
+        DEBUG("Enter write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
         assert(n_bits <= MaxCodeLength);
         auto room = BufferSizeInBits - bits_;
         if (room >= n_bits) {
-            buff_ <<= n_bits;
-            buff_ |= val;
+            buff_ |= val << bits_;
+            bits_ += n_bits;
         } else {
+            DEBUG("Hitting side case!");
             auto n1 = std::min(room, n_bits);
             auto n2 = n_bits - n1;
-            buff_ <<= n1;
-            buff_ |= val >> (n_bits - n1);
-            flush();
-            buff_ <<= n2;
-            buff_ |= val & _ones_mask(n2);
+            buff_ |= (val & _ones_mask(n1)) << bits_;
+            // buff_ |= (val >> n2) << bits_;
+            bits_ += n1;
+            write_full_buffer();
+            // buff_ |= (val & _ones_mask(n2)) << bits_; // TODO(peter): bits_ == 0 at this point
+            buff_ |= (val >> n1) << bits_;
+            bits_ += n2;
         }
+        assert(bits_ <= BufferSizeInBits);
+        DEBUG("Exit  write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
     }
 
     void write(const void* p, size_t size) noexcept {
@@ -255,26 +293,36 @@ struct BitWriter {
     }
 
     void flush() noexcept {
+        auto n_bytes = (bits_ + 7) / 8;
+        DEBUG("flush: bits_=%zu buff_=0x%08x n_bytes=%zu", bits_, buff_, n_bytes);
         xwrite(&buff_, (bits_ + 7) / 8, 1, out_);
-        bits_ = 0;
         buff_ = 0;
+        bits_ = 0;
     }
 
-    static constexpr uint32_t _ones_mask(size_t n_bits) noexcept {
-        assert(n_bits <= 32);
-        if (n_bits == 32) {
-            return -1;
+    void write_full_buffer() noexcept {
+        assert(bits_ == BufferSizeInBits);
+        DEBUG("write_full_buffer: bits_=%zu buff_=0x%08x", bits_, buff_);
+        xwrite(&buff_, sizeof(buff_), 1, out_);
+        buff_ = 0;
+        bits_ = 0;
+    }
+
+    static constexpr Buffer _ones_mask(size_t n_bits) noexcept {
+        assert(n_bits <= BufferSizeInBits);
+        if (n_bits == BufferSizeInBits) {
+            return static_cast<Buffer>(-1);
         } else {
-            return static_cast<uint32_t>((1u << n_bits) - 1);
+            return static_cast<Buffer>((1u << n_bits) - 1);
         }
     }
 
-    uint32_t buff_ = 0;
-    size_t   bits_ = 0;
-    FILE*    out_ = nullptr;
+    Buffer buff_ = 0;
+    size_t bits_ = 0;
+    FILE*  out_ = nullptr;
 
     constexpr static size_t BufferSizeInBits = 32;
-    static_assert((sizeof(buff_) * CHAR_BIT) >= BufferSizeInBits);
+    static_assert((sizeof(Buffer) * CHAR_BIT) >= BufferSizeInBits);
 };
 
 void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out) {
@@ -289,21 +337,28 @@ void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, Bi
     out.write(&buffer[0], size);
 }
 
-#if 0
-void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, FILE* fp) {
-    // static char outbuf[BLOCKSIZE];
-    std::vector<uint16_t> literal_tree;
-    std::vector<uint16_t> distance_tree;
-    init_fixed_huffman_data(literal_tree, distance_tree);
+void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
+    auto&& [lits, dsts] = init_fixed_huffman_data();
+    uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
+    out.write_bits(bfinal, 1);
+    out.write_bits(block_type, 2);
     for (const char *p = buf, *end = buf + size; p != end; ++p) {
-        auto it =
-            std::find(literal_tree.begin(), literal_tree.end(), (uint16_t)*p);
-        assert(it != literal_tree.end());
-        size_t code = std::distance(literal_tree.begin(), it);
-        printf("CODE(%c) = %u\n", *p, code);
+        auto it = lits.find(static_cast<uint16_t>(*p));
+        if (it == lits.end()) {
+            panic("no code for literal: %c (%d)", *p, *p);
+        }
+        auto&& [code, n_bits] = it->second;
+        out.write_bits(code, n_bits);
+        DEBUG("value(%c) => code(0x%02x) len=%u, flipped=0x%02x", *p, code, n_bits, flip_code(code, n_bits));
+    }
+    {
+        auto it = lits.find(static_cast<uint16_t>(256));
+        assert(it != lits.end());
+        auto&& [code, n_bits] = it->second;
+        out.write_bits(code, n_bits);
+        DEBUG("value(%c) => code(0x%02x) len=%u, flipped=0x%02x", 256, code, n_bits, flip_code(code, n_bits));
     }
 }
-#endif
 
 int main(int argc, char** argv) {
     if (argc != 2 && argc != 3) {
@@ -365,8 +420,8 @@ int main(int argc, char** argv) {
         isize += read;
         size += read;
         if (size > BLOCKSIZE) {
-            blkwrite_no_compression(buf, BLOCKSIZE, 0, writer);
-            // blkwrite_fixed(buf, BLOCKSIZE, 0, writer);
+            // blkwrite_no_compression(buf, BLOCKSIZE, 0, writer);
+            blkwrite_fixed(buf, BLOCKSIZE, 0, writer);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -383,9 +438,14 @@ int main(int argc, char** argv) {
     // rare case that `size` == 0, and isize wraps to exactly 0, will write
     // an unnecessary empty block, but that is OK.
     if (size > 0 || isize == 0) {
-        blkwrite_no_compression(buf, size, 1, writer);
-        // blkwrite_fixed(buf, size, 1, writer);
+        DEBUG("Flushing final block");
+        // blkwrite_no_compression(buf, size, 1, writer);
+        blkwrite_fixed(buf, size, 1, writer);
     }
+    writer.flush();
+
+    DEBUG("CRC32 = 0x%08x", crc);
+    DEBUG("ISIZE = 0x%08x", isize);
 
     //   0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
