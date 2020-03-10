@@ -265,26 +265,24 @@ struct BitWriter {
 
     void write_bits(uint16_t val, size_t n_bits) noexcept
     {
-        DEBUG("Enter write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
+        // DEBUG("Enter write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
         assert(n_bits <= MaxCodeLength);
         auto room = BufferSizeInBits - bits_;
         if (room >= n_bits) {
             buff_ |= val << bits_;
             bits_ += n_bits;
         } else {
-            DEBUG("Hitting side case!");
             auto n1 = std::min(room, n_bits);
             auto n2 = n_bits - n1;
             buff_ |= (val & _ones_mask(n1)) << bits_;
-            // buff_ |= (val >> n2) << bits_;
             bits_ += n1;
             write_full_buffer();
-            // buff_ |= (val & _ones_mask(n2)) << bits_; // TODO(peter): bits_ == 0 at this point
-            buff_ |= (val >> n1) << bits_;
+            assert(bits_ == 0);
+            buff_ |= val >> n1;
             bits_ += n2;
         }
         assert(bits_ <= BufferSizeInBits);
-        DEBUG("Exit  write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
+        // DEBUG("Exit  write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
     }
 
     void write(const void* p, size_t size) noexcept {
@@ -294,7 +292,7 @@ struct BitWriter {
 
     void flush() noexcept {
         auto n_bytes = (bits_ + 7) / 8;
-        DEBUG("flush: bits_=%zu buff_=0x%08x n_bytes=%zu", bits_, buff_, n_bytes);
+        // DEBUG("flush: bits_=%zu buff_=0x%08x n_bytes=%zu", bits_, buff_, n_bytes);
         xwrite(&buff_, (bits_ + 7) / 8, 1, out_);
         buff_ = 0;
         bits_ = 0;
@@ -302,7 +300,7 @@ struct BitWriter {
 
     void write_full_buffer() noexcept {
         assert(bits_ == BufferSizeInBits);
-        DEBUG("write_full_buffer: bits_=%zu buff_=0x%08x", bits_, buff_);
+        // DEBUG("write_full_buffer: bits_=%zu buff_=0x%08x", bits_, buff_);
         xwrite(&buff_, sizeof(buff_), 1, out_);
         buff_ = 0;
         bits_ = 0;
