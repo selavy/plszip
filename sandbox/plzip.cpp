@@ -497,6 +497,18 @@ void init_huffman_tree(HTree& tree)
     tree.maxlen = max_bit_length;
 }
 
+[[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
+    if (x < 256) {
+        if (x >= '!') {
+            return static_cast<char>(x);
+        } else {
+            return x == ' ' ? x : '*';
+        }
+    } else {
+        return '?';
+    }
+};
+
 uint16_t read_huffman_value(BitReader& reader, HTree& tree)
 {
     reader.need(tree.maxlen);
@@ -505,6 +517,7 @@ uint16_t read_huffman_value(BitReader& reader, HTree& tree)
     if (value == EmptySentinel)
         panic("invalid huffman bit pattern: 0x%04x (%zu bits)", bits, tree.maxlen);
     assert(0 <= value && value < tree.codelens.size());
+    // DEBUG("value=%u (%c) code=0x%04x len=%u", value, safelit(value), bits, tree.codelens[value]);
     reader.drop(tree.codelens[value]);
     return value;
 }
@@ -873,6 +886,8 @@ int main(int argc, char** argv)
                 DEBUG("Block #%d Encoding: Dynamic Huffman", block_number);
                 read_dynamic_huffman_trees(reader, literal_tree, distance_tree);
             }
+
+            // DEBUG("CodeLength for 256 ==> %u", literal_tree.codelens[256]);
 
             for (;;) {
                 uint16_t value = read_huffman_value(reader, literal_tree);

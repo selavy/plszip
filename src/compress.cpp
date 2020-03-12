@@ -356,7 +356,7 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         assert(it != lits.end());
         auto&& [code, n_bits] = it->second;
         out.write_bits(code, n_bits);
-        DEBUG("value(%c) => code(0x%02x) len=%u, flipped=0x%02x", 256, code, n_bits, flip_code(code, n_bits));
+        // DEBUG("value(%c) => code(0x%02x) len=%u, flipped=0x%02x", 256, code, n_bits, flip_code(code, n_bits));
     }
 }
 
@@ -378,28 +378,19 @@ CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
     return result;
 }
 
-// CodeLengths make_code_lengths_data(const Tree& header_tree) {
-//     // CodeLengths codelens;
-//     // for (uint16_t value = 0; value <= 286; ++value) {
-//     //     auto it = lits.find(value);
-//     //     codelens.push_back(it == lits.end() ? 0 : it->second.codelen);
-//     // }
-//     // for (uint16_t value = 0; value <= 32; ++value) {
-//     //     auto it = dsts.find(value);
-//     //     codelens.push_back(it == dsts.end() ? 0 : it->second.codelen);
-//     // }
-//     // return codelens;
-// 
-//     // TODO: implement
-// }
-
 Tree make_header_tree([[maybe_unused]] const CodeLengths& codelens) {
     // TODO: implement -- hard coding values for fixed huffman
     std::vector<uint16_t> codes(NumHeaderCodeLengths, 0);
+    codes[5] = 3;
+    codes[8] = 1;
+    codes[7] = 2;
+    codes[9] = 3;
+#if 0
     codes[5] = 3; // 3;
     codes[8] = 3; // 1;
     codes[7] = 3; // 2;
     codes[9] = 3; // 3;
+#endif
     // Should generate:
     // value | codelen | code
     // ======================
@@ -442,15 +433,6 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
     return results;
 }
 
-//----------------------------------------------------------
-// HEY YOU!
-//----------------------------------------------------------
-// I'm attempting to write out the header tree, plzip is reading
-// the lengths correctly, but for some reason the generated codes
-// are not correct (all lengths go to zero for some reason). Need
-// to figure out what the deal is.
-//----------------------------------------------------------
-
 CodeLengths make_code_lengths() {
     CodeLengths result;
     for (int i = 0; i < 144; ++i) {
@@ -472,7 +454,20 @@ CodeLengths make_code_lengths() {
     return result;
 }
 
+[[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
+    if (x < 256) {
+        if (x >= '!') {
+            return static_cast<char>(x);
+        } else {
+            return x == ' ' ? x : '*';
+        }
+    } else {
+        return '?';
+    }
+};
+
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
+    DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
     auto&& [lits, dsts] = init_fixed_huffman_data();
     auto codelens = make_code_lengths();
     auto htree = make_header_tree(codelens);
@@ -490,10 +485,12 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     DEBUG("hclen = %zu", hclen);
     DEBUG("codelens = %zu", codelens.size());
 
+#if 0
     // TEMP TEMP
     for (auto&& [value, code] : htree) {
         DEBUG("value=%u code=0x%02x codelen=%u", value, code.code, code.bits);
     }
+#endif
 
     uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
     out.write_bits(bfinal, 1);
@@ -521,39 +518,20 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         auto it = lits.find(val);
         assert(it != lits.end());
         auto&& [code, n_bits] = it->second;
+        // DEBUG("Writing val=%u (%c) code=0x%02x bits=%u", val, safelit(val), code, n_bits);
         out.write_bits(code, n_bits);
     }
 
     // end block marker
     {
-        auto it = lits.find(static_cast<uint16_t>(256));
+        uint16_t val = 256;
+        auto it = lits.find(static_cast<uint16_t>(val));
         assert(it != lits.end());
         auto&& [code, n_bits] = it->second;
+        // DEBUG("value=%u code=0x%02x len=%u", val, code, n_bits);
+        // DEBUG("Writing val=%u (%c) code=0x%02x bits=%u", val, safelit(val), code, n_bits);
         out.write_bits(code, n_bits);
     }
-
-    out.flush();
-    exit(0);
-
-#if 0
-    auto&& [lits, dsts] = init_fixed_huffman_data();
-    auto codelens = make_code_lengths_data(lits, dsts);
-    auto htree = make_header_tree();
-    auto header_codelens_data = make_header_code_lengths(codelens);
-    auto hlit = lits.size();
-    auto hdist = dsts.size();
-    auto hclen = hclen.size();
-    xassert(hlit <= 286, "invalid hlit: %zu", hlit);
-    xassert(hdist <= 30, "invalid hdist: %zu", hdist);
-
-    uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
-    out.write_bits(bfinal, 1);
-    out.write_bits(block_type, 2);
-    out.write(hlit, 5);
-    out.write(hdist, 5);
-    out.write(hclen, 4);
-    for (auto )
-#endif
 }
 
 int main(int argc, char** argv) {
@@ -616,6 +594,7 @@ int main(int argc, char** argv) {
         isize += read;
         size += read;
         if (size > BLOCKSIZE) {
+            DEBUG("Calling compress on block of size: %zu", size);
             // blkwrite_no_compression(buf, BLOCKSIZE, 0, writer);
             // blkwrite_fixed(buf, BLOCKSIZE, 0, writer);
             blkwrite_dynamic(buf, BLOCKSIZE, 0, writer);
@@ -635,10 +614,10 @@ int main(int argc, char** argv) {
     // rare case that `size` == 0, and isize wraps to exactly 0, will write
     // an unnecessary empty block, but that is OK.
     if (size > 0 || isize == 0) {
-        DEBUG("Flushing final block");
+        DEBUG("Flushing final block size: %zu", size);
         // blkwrite_no_compression(buf, size, 1, writer);
         // blkwrite_fixed(buf, size, 1, writer);
-        blkwrite_dynamic(buf, BLOCKSIZE, 0, writer);
+        blkwrite_dynamic(buf, size, 1, writer);
     }
     writer.flush();
 
