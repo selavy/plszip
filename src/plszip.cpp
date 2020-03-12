@@ -132,6 +132,7 @@ struct internal_state {
     union {
         uint16_t index;
         uint16_t dstcode;
+        uint16_t n_codes;
     };
     uint16_t hlit;
     uint16_t hdist;
@@ -728,7 +729,7 @@ int PLS_inflate(z_streamp strm, int flush) {
         DROPBITS(5);
         state->hclen = static_cast<uint16_t>(PEEKBITS(4) + 4);
         DROPBITS(4);
-        state->index = 0;
+        state->n_codes = 0;
         if (!(state->hlit <= 286)) {
             panic0(Z_STREAM_ERROR, "invalid HLIT");
         }
@@ -744,19 +745,19 @@ int PLS_inflate(z_streamp strm, int flush) {
         break;
     header_tree:
     case HEADER_TREE:
-        while (state->index < state->hclen) {
+        while (state->n_codes < state->hclen) {
             NEEDBITS(3);
-            state->hlengths[order[state->index++]] = static_cast<uint8_t>(PEEKBITS(3));
+            state->hlengths[order[state->n_codes++]] = static_cast<uint8_t>(PEEKBITS(3));
             DROPBITS(3);
         }
         init_huffman_tree(state->htree, 7, state->hlengths, NumHeaderCodeLengths);
         memset(state->dynlens, 0, sizeof(state->dynlens));
-        state->index = 0;
+        state->n_codes = 0;
         mode = DYNAMIC_CODE_LENGTHS;
         goto dynamic_code_lengths;
     dynamic_code_lengths:
     case DYNAMIC_CODE_LENGTHS:
-        while (static_cast<int>(state->index) < state->hlit + state->hdist) {
+        while (static_cast<int>(state->n_codes) < state->hlit + state->hdist) {
             NEEDBITS(7 + MaxCodeBits);
             value = state->htree[PEEKBITS(7)];
             if (value == 0xffffu) {
@@ -767,17 +768,17 @@ int PLS_inflate(z_streamp strm, int flush) {
             uInt nbits, offset;
             uint8_t rvalue;
             if (value <= 15) {
-                state->dynlens[state->index++] = static_cast<uint8_t>(value);
+                state->dynlens[state->n_codes++] = static_cast<uint8_t>(value);
             } else if (value <= 18) {
                 switch (value) {
                 case 16:
                     nbits = 2;
                     offset = 3;
-                    if (state->index == 0) {
+                    if (state->n_codes == 0) {
                         panic(Z_STREAM_ERROR, "invalid repeat code",
                               "invalid repeat code %u with no previous code lengths", value);
                     }
-                    rvalue = state->dynlens[state->index - 1];
+                    rvalue = state->dynlens[state->n_codes - 1];
                     break;
                 case 17:
                     nbits = 3;
@@ -798,15 +799,15 @@ int PLS_inflate(z_streamp strm, int flush) {
                 DROPBITS(nbits);
                 repeat += offset;
                 while (repeat-- > 0) {
-                    state->dynlens[state->index++] = rvalue;
+                    state->dynlens[state->n_codes++] = rvalue;
                 }
             } else {
                 panic(Z_STREAM_ERROR, "invalid dynamic code length", "invalid dynamic code length: %u", value);
             }
         }
-        if (static_cast<int>(state->index) != state->hlit + state->hdist) {
+        if (static_cast<int>(state->n_codes) != state->hlit + state->hdist) {
             panic(Z_STREAM_ERROR, "too many code lengths", "too many code lengths: hlit=%u hdist=%u read=%u",
-                  state->hlit, state->hdist, state->index);
+                  state->hlit, state->hdist, state->n_codes);
         }
 
         {
