@@ -522,6 +522,18 @@ void read_dynamic_header_tree(BitReader& reader, size_t hclen, HTree& header_tre
         header_tree.codelens[order[i]] = reader.read_bits(3);
     }
     init_huffman_tree(header_tree);
+
+    // TEMP TEMP
+    DEBUG("--- Header Code Lengths ---");
+    for (size_t index = 0; index < NumCodeLengths; ++index) {
+        DEBUG("header_tree value=%u len=%u", index, header_tree.codelens[index]);
+    }
+    // TEMP TEMP
+    DEBUG("--- Header Tree ---");
+    for (size_t i = 0; i < header_tree.codes.size(); ++i) {
+        DEBUG("code=0x%02x len=%u", header_tree.codes[i], header_tree.codelens[i]);
+    }
+
     assert(header_tree.maxlen != 0);
 }
 

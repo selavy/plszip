@@ -35,6 +35,7 @@
 
 constexpr uint16_t EmptySentinel = UINT16_MAX;
 constexpr size_t MaxCodeLength = 16;
+constexpr size_t NumHeaderCodeLengths = 19;
 
 uint32_t crc_table[256];
 
@@ -359,6 +360,138 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     }
 }
 
+using CodeLengths = std::vector<uint8_t>;
+
+CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
+    constexpr std::array<int, NumHeaderCodeLengths> order = {
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
+    };
+    std::array<int, NumHeaderCodeLengths> counts;
+    std::fill(counts.begin(), counts.end(), 0);
+    for (auto&& codelen : codelens) {
+        counts[codelen]++;
+    }
+    CodeLengths result;
+    for (auto codelen : order) {
+        result.push_back(counts[codelen]);
+    }
+    return result;
+}
+
+CodeLengths make_code_lengths_data(const Tree& header_tree) {
+    // CodeLengths codelens;
+    // for (uint16_t value = 0; value <= 286; ++value) {
+    //     auto it = lits.find(value);
+    //     codelens.push_back(it == lits.end() ? 0 : it->second.codelen);
+    // }
+    // for (uint16_t value = 0; value <= 32; ++value) {
+    //     auto it = dsts.find(value);
+    //     codelens.push_back(it == dsts.end() ? 0 : it->second.codelen);
+    // }
+    // return codelens;
+
+    // TODO: implement
+}
+
+Tree make_header_tree() {
+    // TODO: implement -- hard coding values for fixed huffman
+    std::vector<uint16_t> codes(NumHeaderCodeLengths, 0);
+    codes[8] = 1;
+    codes[7] = 2;
+    codes[9] = 2;
+    // Should generate:
+    // value | codelen | code
+    // ======================
+    //   7   | 2       | 10
+    //   8   | 1       | 0
+    //   9   | 2       | 11
+    return init_huffman_tree(codes.data(), codes.size());
+}
+
+constexpr size_t HeaderLengthBits = 3;
+constexpr size_t MaxHeaderCodeLength = 1u << HeaderLengthBits;
+
+CodeLengths make_header_tree_length_data(const Tree& tree) {
+    constexpr std::array<int, NumHeaderCodeLengths> order = {
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
+    };
+    CodeLengths results(order.size(), 0);
+    for (size_t index = 0; index < order.size(); ++index) {
+        auto value = order[index];
+        auto it = tree.find(value);
+        if (it != tree.end()) {
+            auto bits = it->second.bits;
+            assert(0 <= bits && bits < MaxHeaderCodeLength);
+            results[index] = bits;
+        }
+    }
+    while (results.size() > 4 && results.back() == 0) {
+        results.pop_back();
+    }
+    assert(4 <= results.size() && results.size() <= 19);
+
+    // TEMP TEMP
+    DEBUG("Header Tree Code Lengths");
+    for (size_t i = 0; i < results.size(); ++i) {
+        DEBUG("value=%u length=%u", order[i], results[i]);
+    }
+    DEBUG("");
+
+    return results;
+}
+
+void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
+    auto htree = make_header_tree();
+    auto htree_length_data = make_header_tree_length_data(htree);
+    auto hlit = 286;
+    auto hdist = 30;
+    auto hclen = htree_length_data.size();
+    assert(257 <= hlit && hlit <= 286);
+    assert(1 <= hdist && hdist <= 32);
+    assert(4 <= hclen && hclen <= 19);
+
+    DEBUG("hlit = %d", hlit);
+    DEBUG("hdist = %d", hdist);
+    DEBUG("hclen = %zu", hclen);
+
+    // TEMP TEMP
+    for (auto&& [value, code] : htree) {
+        DEBUG("value=%u code=0x%02x codelen=%u", value, code.code, code.bits);
+    }
+
+    uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
+    out.write_bits(bfinal, 1);
+    out.write_bits(block_type, 2);
+    out.write_bits(hlit - 257, 5);
+    out.write_bits(hdist - 1, 5);
+    out.write_bits(hclen - 4, 4);
+    for (auto codelen : htree_length_data) {
+        out.write_bits(codelen, 3);
+    }
+    out.flush();
+
+    exit(0);
+#if 0
+    auto&& [lits, dsts] = init_fixed_huffman_data();
+    auto codelens = make_code_lengths_data(lits, dsts);
+    auto htree = make_header_tree();
+    auto header_codelens_data = make_header_code_lengths(codelens);
+    auto hlit = lits.size();
+    auto hdist = dsts.size();
+    auto hclen = hclen.size();
+    xassert(hlit <= 286, "invalid hlit: %zu", hlit);
+    xassert(hdist <= 30, "invalid hdist: %zu", hdist);
+
+    uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
+    out.write_bits(bfinal, 1);
+    out.write_bits(block_type, 2);
+    out.write(hlit, 5);
+    out.write(hdist, 5);
+    out.write(hclen, 4);
+    for (auto )
+#endif
+}
+
 int main(int argc, char** argv) {
     if (argc != 2 && argc != 3) {
         fprintf(stderr, "Usage: %s [FILE]\n", argv[0]);
@@ -420,7 +553,8 @@ int main(int argc, char** argv) {
         size += read;
         if (size > BLOCKSIZE) {
             // blkwrite_no_compression(buf, BLOCKSIZE, 0, writer);
-            blkwrite_fixed(buf, BLOCKSIZE, 0, writer);
+            // blkwrite_fixed(buf, BLOCKSIZE, 0, writer);
+            blkwrite_dynamic(buf, BLOCKSIZE, 0, writer);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -439,7 +573,8 @@ int main(int argc, char** argv) {
     if (size > 0 || isize == 0) {
         DEBUG("Flushing final block");
         // blkwrite_no_compression(buf, size, 1, writer);
-        blkwrite_fixed(buf, size, 1, writer);
+        // blkwrite_fixed(buf, size, 1, writer);
+        blkwrite_dynamic(buf, BLOCKSIZE, 0, writer);
     }
     writer.flush();
 
