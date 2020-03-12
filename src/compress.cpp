@@ -378,33 +378,35 @@ CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
     return result;
 }
 
-CodeLengths make_code_lengths_data(const Tree& header_tree) {
-    // CodeLengths codelens;
-    // for (uint16_t value = 0; value <= 286; ++value) {
-    //     auto it = lits.find(value);
-    //     codelens.push_back(it == lits.end() ? 0 : it->second.codelen);
-    // }
-    // for (uint16_t value = 0; value <= 32; ++value) {
-    //     auto it = dsts.find(value);
-    //     codelens.push_back(it == dsts.end() ? 0 : it->second.codelen);
-    // }
-    // return codelens;
+// CodeLengths make_code_lengths_data(const Tree& header_tree) {
+//     // CodeLengths codelens;
+//     // for (uint16_t value = 0; value <= 286; ++value) {
+//     //     auto it = lits.find(value);
+//     //     codelens.push_back(it == lits.end() ? 0 : it->second.codelen);
+//     // }
+//     // for (uint16_t value = 0; value <= 32; ++value) {
+//     //     auto it = dsts.find(value);
+//     //     codelens.push_back(it == dsts.end() ? 0 : it->second.codelen);
+//     // }
+//     // return codelens;
+// 
+//     // TODO: implement
+// }
 
-    // TODO: implement
-}
-
-Tree make_header_tree() {
+Tree make_header_tree([[maybe_unused]] const CodeLengths& codelens) {
     // TODO: implement -- hard coding values for fixed huffman
     std::vector<uint16_t> codes(NumHeaderCodeLengths, 0);
-    codes[8] = 1;
-    codes[7] = 2;
-    codes[9] = 2;
+    codes[5] = 3; // 3;
+    codes[8] = 3; // 1;
+    codes[7] = 3; // 2;
+    codes[9] = 3; // 3;
     // Should generate:
     // value | codelen | code
     // ======================
+    //   5   | 3       | 110
     //   7   | 2       | 10
     //   8   | 1       | 0
-    //   9   | 2       | 11
+    //   9   | 3       | 111
     return init_huffman_tree(codes.data(), codes.size());
 }
 
@@ -440,19 +442,53 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
     return results;
 }
 
+//----------------------------------------------------------
+// HEY YOU!
+//----------------------------------------------------------
+// I'm attempting to write out the header tree, plzip is reading
+// the lengths correctly, but for some reason the generated codes
+// are not correct (all lengths go to zero for some reason). Need
+// to figure out what the deal is.
+//----------------------------------------------------------
+
+CodeLengths make_code_lengths() {
+    CodeLengths result;
+    for (int i = 0; i < 144; ++i) {
+        result.push_back(8);
+    }
+    for (int i = 144; i < 256; ++i) {
+        result.push_back(9);
+    }
+    for (int i = 256; i < 280; ++i) {
+        result.push_back(7);
+    }
+    for (int i = 280; i < 286; ++i) {
+        result.push_back(8);
+    }
+    xassert(result.size() == 286, "result size = %zu", result.size());
+    for (int i = 0; i < 30; ++i) {
+        result.push_back(5);
+    }
+    return result;
+}
+
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
-    auto htree = make_header_tree();
+    auto&& [lits, dsts] = init_fixed_huffman_data();
+    auto codelens = make_code_lengths();
+    auto htree = make_header_tree(codelens);
     auto htree_length_data = make_header_tree_length_data(htree);
     auto hlit = 286;
     auto hdist = 30;
     auto hclen = htree_length_data.size();
-    assert(257 <= hlit && hlit <= 286);
-    assert(1 <= hdist && hdist <= 32);
-    assert(4 <= hclen && hclen <= 19);
+    xassert(257 <= hlit && hlit <= 286, "hlit = %d", hlit);
+    xassert(1 <= hdist && hdist <= 32, "hdist = %d", hdist);
+    xassert(4 <= hclen && hclen <= 19, "hclen = %zu", hclen);
+    xassert(hlit + hdist == codelens.size(), "%d + %d != %zu", hlit, hdist, codelens.size());
 
     DEBUG("hlit = %d", hlit);
     DEBUG("hdist = %d", hdist);
     DEBUG("hclen = %zu", hclen);
+    DEBUG("codelens = %zu", codelens.size());
 
     // TEMP TEMP
     for (auto&& [value, code] : htree) {
@@ -465,12 +501,40 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     out.write_bits(hlit - 257, 5);
     out.write_bits(hdist - 1, 5);
     out.write_bits(hclen - 4, 4);
+
+    // header tree code lengths
     for (auto codelen : htree_length_data) {
         out.write_bits(codelen, 3);
     }
-    out.flush();
 
+    // literal and distance code lengths
+    for (auto codelen : codelens) {
+        auto it = htree.find(codelen);
+        assert(it != htree.end());
+        auto&& [code, bits] = it->second;
+        out.write_bits(code, bits);
+    }
+
+    // huffman data
+    for (const char *p = buf, *end = buf + size; p != end; ++p) {
+        auto val = static_cast<uint16_t>(*reinterpret_cast<const uint8_t*>(p));
+        auto it = lits.find(val);
+        assert(it != lits.end());
+        auto&& [code, n_bits] = it->second;
+        out.write_bits(code, n_bits);
+    }
+
+    // end block marker
+    {
+        auto it = lits.find(static_cast<uint16_t>(256));
+        assert(it != lits.end());
+        auto&& [code, n_bits] = it->second;
+        out.write_bits(code, n_bits);
+    }
+
+    out.flush();
     exit(0);
+
 #if 0
     auto&& [lits, dsts] = init_fixed_huffman_data();
     auto codelens = make_code_lengths_data(lits, dsts);
