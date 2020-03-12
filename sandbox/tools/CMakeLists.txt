@@ -1,7 +1,7 @@
 find_package(ZLIB REQUIRED)
 
 add_executable(gen_fixed_huffman gen_fixed_huffman.c)
-target_compile_features(gen_fixed_huffman PUBLIC c_std_99)
+target_link_libraries(gen_fixed_huffman PUBLIC c_project_options)
 
 add_executable(display_huffman_codes display_huffman_codes.cpp)
 target_link_libraries(display_huffman_codes

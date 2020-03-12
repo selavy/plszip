@@ -225,23 +225,6 @@ std::pair<Tree, Tree> init_fixed_huffman_data() noexcept {
     return std::make_pair(lit_tree, dst_tree);
 }
 
-//-------------------------------------------------------
-//
-// Working on implementing fixed huffman codes to replace
-// where I'm always choosing non-compressed at the moment.
-// However, 2 things:
-//
-// 1) I mistakenly was using the interface of fwrite() directly
-//    from blkwrite_XXX(), but that isn't correct because a
-//    block does NOT have to be byte aligned. So I need
-//    a BitWriter interface.
-//
-// 2) Huffman codes are bit oriented so also need #1. However,
-//    need to be extra careful that the bits are in the correct
-//    order.
-//
-//-------------------------------------------------------
-
 // All multi-byte numbers in the format described here are stored with
 // the least-significant byte first (at the lower memory address).
 //
@@ -294,7 +277,7 @@ struct BitWriter {
     void flush() noexcept {
         auto n_bytes = (bits_ + 7) / 8;
         // DEBUG("flush: bits_=%zu buff_=0x%08x n_bytes=%zu", bits_, buff_, n_bytes);
-        xwrite(&buff_, (bits_ + 7) / 8, 1, out_);
+        xwrite(&buff_, 1, n_bytes, out_);
         buff_ = 0;
         bits_ = 0;
     }
@@ -325,12 +308,14 @@ struct BitWriter {
 };
 
 void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out) {
+    uint8_t block_type = static_cast<uint8_t>(BType::NO_COMPRESSION);
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
-    uint8_t blkhdr = bfinal | (btype << 1);
-    // TODO: technically need to force little endian
     uint16_t len = size;
     uint16_t nlen = len ^ 0xffffu;
-    out.write(&blkhdr, sizeof(blkhdr));
+    out.write_bits(bfinal, 1);
+    out.write_bits(block_type, 2);
+    out.flush();
+    // TODO: technically need to force little endian
     out.write(&len, sizeof(len));
     out.write(&nlen, sizeof(nlen));
     out.write(&buffer[0], size);
@@ -586,6 +571,17 @@ int main(int argc, char** argv) {
     // data modulo 2^32.
     uint32_t isize = 0;
 
+#if 0
+#elif 0
+    auto* compress_fn = &blkwrite_no_compression;
+#elif 0
+    auto* compress_fn = &blkwrite_fixed;
+#elif 1
+    auto* compress_fn = &blkwrite_dynamic;
+#else
+    #error "Must select an implementation"
+#endif
+
     char buf[BUFSIZE];
     size_t size = 0;
     size_t read;
@@ -595,9 +591,7 @@ int main(int argc, char** argv) {
         size += read;
         if (size > BLOCKSIZE) {
             DEBUG("Calling compress on block of size: %zu", size);
-            // blkwrite_no_compression(buf, BLOCKSIZE, 0, writer);
-            // blkwrite_fixed(buf, BLOCKSIZE, 0, writer);
-            blkwrite_dynamic(buf, BLOCKSIZE, 0, writer);
+            compress_fn(buf, BLOCKSIZE, 0, writer);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -615,9 +609,7 @@ int main(int argc, char** argv) {
     // an unnecessary empty block, but that is OK.
     if (size > 0 || isize == 0) {
         DEBUG("Flushing final block size: %zu", size);
-        // blkwrite_no_compression(buf, size, 1, writer);
-        // blkwrite_fixed(buf, size, 1, writer);
-        blkwrite_dynamic(buf, size, 1, writer);
+        compress_fn(buf, size, 1, writer);
     }
     writer.flush();
 

@@ -213,5 +213,8 @@ int main(int argc, char **argv) {
     WRITE("");
     WRITE("#endif // FIXED_HUFFMAN_TREES__H_");
 
+    free(lits.d);
+    free(dsts.d);
+
     return 0;
 }

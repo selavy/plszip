@@ -425,6 +425,9 @@ static void init_huffman_tree(uint16_t *tree, const size_t maxlen, const uint8_t
         // assigned a value.
         memset(&codes[0], 0, sizeof(codes));
         for (size_t i = 0; i < ncodes; ++i) {
+            if (i == 256) {
+                DEBUG("here");
+            }
             if (codelens[i] != 0) {
                 codes[i] = next_code[codelens[i]]++;
                 assert(calc_min_code_len(codes[i]) <= codelens[i]);

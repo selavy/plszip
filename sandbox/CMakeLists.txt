@@ -13,3 +13,5 @@ target_link_libraries(sml-hello-world PUBLIC BoostSML cxx_project_options)
 
 add_executable(sml-first sml_first.cpp)
 target_link_libraries(sml-first PUBLIC BoostSML cxx_project_options ZLIB2)
+
+add_subdirectory(tools)
