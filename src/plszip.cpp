@@ -381,6 +381,12 @@ uint16_t flip_code(uint16_t code, size_t codelen) {
     return static_cast<uint16_t>(flip_u16(code) >> (16 - codelen));
 }
 
+#ifndef NDEBUG
+constexpr int calc_min_code_len(uint16_t code) noexcept {
+    return code != 0 ? 16 - __builtin_clz(code) : 0;
+}
+#endif
+
 static void init_huffman_tree(uint16_t *tree, const size_t maxlen, const uint8_t *codelens, size_t ncodes) {
     constexpr size_t MAX_HCODE_BIT_LENGTH = 16;
     constexpr size_t MAX_HUFFMAN_CODES = 512;
@@ -421,7 +427,7 @@ static void init_huffman_tree(uint16_t *tree, const size_t maxlen, const uint8_t
         for (size_t i = 0; i < ncodes; ++i) {
             if (codelens[i] != 0) {
                 codes[i] = next_code[codelens[i]]++;
-                assert((16 - __builtin_clz(codes[i])) <= codelens[i]);
+                assert(calc_min_code_len(codes[i]) <= codelens[i]);
             }
         }
     }
