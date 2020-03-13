@@ -8,6 +8,8 @@
 #include <cassert>
 #include <memory>
 
+// TODO(peter): NOTE TO SELF -- maxbits == 15 not 16 like I thought? basing this off of puff
+
 // TEMP TEMP
 #include "fixed_huffman_trees.old.h"
 
@@ -548,6 +550,28 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
 
     HTree header_tree;
     read_dynamic_header_tree(reader, hclen, header_tree);
+    // TEMP TEMP
+    {
+        printf("--- DYNAMIC HEADER LENGTHS ---\n");
+        const auto& cl = header_tree.codelens;
+        printf("constexpr uint16_t _header_table[%zu] = {\n", cl.size());
+        size_t i;
+        for (i = 0; i + 8 < cl.size(); i += 8) {
+            printf(
+                    "\t%u, %u, %u, %u, %u, %u, %u, %u,\n",
+                    cl[i+0], cl[i+1], cl[i+2], cl[i+3],
+                    cl[i+4], cl[i+5], cl[i+6], cl[i+7]
+                  );
+        }
+        if (i < cl.size())
+            printf("\t");
+        for (; i < cl.size(); ++i) {
+            printf("%u, ", cl[i]);
+        }
+        printf("\n};\n");
+        printf("--- END DYNAMIC HEADER LENGTHS ---\n");
+    }
+    // TEMP TEMP
 
     std::vector<uint16_t> dynamic_code_lengths;
     dynamic_code_lengths.reserve(ncodes);
@@ -589,14 +613,63 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     literal_tree.codes.clear();
     literal_tree.codelens.assign(&dynamic_code_lengths[0], &dynamic_code_lengths[hlit]);
     literal_tree.maxlen = 0;
+
+    // TEMP TEMP
+    {
+        printf("--- DYNAMIC HUFFMAN LENGTHS ---\n");
+        const auto& cl = literal_tree.codelens;
+        printf("constexpr uint16_t litlens_table[%zu] = {\n", cl.size());
+        size_t i;
+        for (i = 0; i + 8 < cl.size(); i += 8) {
+            printf(
+                    "\t%u, %u, %u, %u, %u, %u, %u, %u,\n",
+                    cl[i+0], cl[i+1], cl[i+2], cl[i+3],
+                    cl[i+4], cl[i+5], cl[i+6], cl[i+7]
+                  );
+        }
+        if (i < cl.size())
+            printf("\t");
+        for (; i < cl.size(); ++i) {
+            printf("%u, ", cl[i]);
+        }
+        printf("\n};\n");
+        printf("--- END DYNAMIC HUFFMAN LENGTHS ---\n");
+    }
+    // TEMP TEMP
+
     init_huffman_tree(literal_tree);
     assert(literal_tree.maxlen != 0);
     xassert((dynamic_code_lengths.size() - hlit) == hdist,
             "invalid number distance codes: received %zu, expected %zu",
             dynamic_code_lengths.size() - hlit, hdist);
+
     distance_tree.codes.clear();
     distance_tree.codelens.assign(&dynamic_code_lengths[hlit], &dynamic_code_lengths[ncodes]);
     distance_tree.maxlen = 0;
+
+    // TEMP TEMP
+    {
+        printf("--- DYNAMIC HUFFMAN LENGTHS ---\n");
+        const auto& cl = distance_tree.codelens;
+        printf("constexpr uint16_t dstlens_table[%zu] = {\n", cl.size());
+        size_t i;
+        for (i = 0; i + 8 < cl.size(); i += 8) {
+            printf(
+                    "\t%u, %u, %u, %u, %u, %u, %u, %u,\n",
+                    cl[i+0], cl[i+1], cl[i+2], cl[i+3],
+                    cl[i+4], cl[i+5], cl[i+6], cl[i+7]
+                  );
+        }
+        if (i < cl.size())
+            printf("\t");
+        for (; i < cl.size(); ++i) {
+            printf("%u, ", cl[i]);
+        }
+        printf("\n};\n");
+        printf("--- END DYNAMIC HUFFMAN LENGTHS ---\n");
+    }
+    // TEMP TEMP
+
     init_huffman_tree(distance_tree);
     assert(distance_tree.maxlen != 0);
 }

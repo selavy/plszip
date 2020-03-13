@@ -9,6 +9,53 @@
 #include <string>
 #include <vector>
 
+constexpr uint16_t _header_table[19] = {
+	3, 0, 0, 5, 3, 4, 3, 3,
+	4, 2, 0, 0, 0, 0, 0, 0,
+	6, 4, 6, 
+};
+constexpr uint16_t litlens_table[271] = {
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 7, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	4, 0, 8, 0, 0, 0, 0, 0,
+	8, 7, 0, 0, 6, 9, 7, 0,
+	0, 0, 8, 8, 0, 7, 9, 8,
+	9, 0, 9, 9, 9, 0, 9, 0,
+	0, 9, 0, 0, 0, 9, 0, 0,
+	9, 0, 0, 9, 9, 0, 0, 0,
+	0, 0, 0, 0, 9, 0, 0, 0,
+	0, 0, 9, 0, 0, 0, 0, 0,
+	0, 4, 6, 5, 6, 4, 7, 8,
+	6, 5, 9, 8, 6, 6, 5, 5,
+	6, 9, 5, 5, 5, 5, 7, 7,
+	9, 7, 9, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	9, 4, 4, 4, 5, 6, 6, 6,
+	7, 6, 8, 6, 7, 7, 9, 
+};
+constexpr uint16_t dstlens_table[21] = {
+	0, 0, 0, 8, 8, 0, 6, 7,
+	5, 5, 5, 4, 3, 4, 4, 4,
+	3, 3, 3, 4, 4, 
+};
+
 #define panic(fmt, ...)                                   \
     do {                                                  \
         fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); \
@@ -116,8 +163,41 @@ struct Code {
 };
 
 using Value = uint16_t;
-
 using Tree = std::map<Value, Code>;
+using CodeLengths = std::vector<uint16_t>;
+
+CodeLengths make_lit_code_lengths() {
+    CodeLengths result;
+#if 0
+    for (int i = 0; i < 144; ++i) {
+        result.push_back(8);
+    }
+    for (int i = 144; i < 256; ++i) {
+        result.push_back(9);
+    }
+    for (int i = 256; i < 280; ++i) {
+        result.push_back(7);
+    }
+    for (int i = 280; i < 286; ++i) {
+        result.push_back(8);
+    }
+    xassert(result.size() == 286, "result size = %zu", result.size());
+    for (int i = 0; i < 30; ++i) {
+        result.push_back(5);
+    }
+#endif
+    result.assign(&litlens_table[0], &litlens_table[ARRSIZE(litlens_table)]);
+    return result;
+}
+
+CodeLengths make_dst_code_lengths() {
+    CodeLengths result;
+    // for (int i = 0; i < 30; ++i) {
+    //     result.push_back(5);
+    // }
+    result.assign(&dstlens_table[0], &dstlens_table[ARRSIZE(dstlens_table)]);
+    return result;
+}
 
 static const unsigned char BitReverseTable256[256] = {
 // clang-format off
@@ -199,6 +279,12 @@ Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
     }
 
     return tree;
+}
+
+std::pair<Tree, Tree> init_huffman_data(const CodeLengths& lit_codelens, const CodeLengths& dst_codelens) noexcept {
+    auto lit_tree = init_huffman_tree(lit_codelens.data(), lit_codelens.size());
+    auto dst_tree = init_huffman_tree(dst_codelens.data(), dst_codelens.size());
+    return std::make_pair(lit_tree, dst_tree);
 }
 
 std::pair<Tree, Tree> init_fixed_huffman_data() noexcept {
@@ -345,8 +431,6 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     }
 }
 
-using CodeLengths = std::vector<uint8_t>;
-
 CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
     constexpr std::array<int, NumHeaderCodeLengths> order = {
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
@@ -363,13 +447,13 @@ CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
     return result;
 }
 
-Tree make_header_tree([[maybe_unused]] const CodeLengths& codelens) {
-    // TODO: implement -- hard coding values for fixed huffman
-    std::vector<uint16_t> codes(NumHeaderCodeLengths, 0);
-    codes[5] = 3;
-    codes[8] = 1;
-    codes[7] = 2;
-    codes[9] = 3;
+Tree make_header_tree(const CodeLengths& litlens, const CodeLengths& dstlens) {
+    // // TODO: implement -- hard coding values for fixed huffman
+    // std::vector<uint16_t> codes(NumHeaderCodeLengths, 0);
+    // codes[5] = 3;
+    // codes[8] = 1;
+    // codes[7] = 2;
+    // codes[9] = 3;
 #if 0
     codes[5] = 3; // 3;
     codes[8] = 3; // 1;
@@ -383,7 +467,8 @@ Tree make_header_tree([[maybe_unused]] const CodeLengths& codelens) {
     //   7   | 2       | 10
     //   8   | 1       | 0
     //   9   | 3       | 111
-    return init_huffman_tree(codes.data(), codes.size());
+    CodeLengths codelens{&_header_table[0], &_header_table[ARRSIZE(_header_table)]};
+    return init_huffman_tree(codelens.data(), codelens.size());
 }
 
 constexpr size_t HeaderLengthBits = 3;
@@ -418,26 +503,6 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
     return results;
 }
 
-CodeLengths make_code_lengths() {
-    CodeLengths result;
-    for (int i = 0; i < 144; ++i) {
-        result.push_back(8);
-    }
-    for (int i = 144; i < 256; ++i) {
-        result.push_back(9);
-    }
-    for (int i = 256; i < 280; ++i) {
-        result.push_back(7);
-    }
-    for (int i = 280; i < 286; ++i) {
-        result.push_back(8);
-    }
-    xassert(result.size() == 286, "result size = %zu", result.size());
-    for (int i = 0; i < 30; ++i) {
-        result.push_back(5);
-    }
-    return result;
-}
 
 [[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
     if (x < 256) {
@@ -453,29 +518,26 @@ CodeLengths make_code_lengths() {
 
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
     DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
-    auto&& [lits, dsts] = init_fixed_huffman_data();
-    auto codelens = make_code_lengths();
-    auto htree = make_header_tree(codelens);
+    auto lit_codelens = make_lit_code_lengths();
+    auto dst_codelens = make_dst_code_lengths();
+    auto&& [lits, dsts] = init_huffman_data(lit_codelens, dst_codelens);
+    auto htree = make_header_tree(lit_codelens, dst_codelens);
     auto htree_length_data = make_header_tree_length_data(htree);
-    auto hlit = 286;
-    auto hdist = 30;
+    auto hlit = lit_codelens.size();
+    auto hdist = dst_codelens.size();
     auto hclen = htree_length_data.size();
-    xassert(257 <= hlit && hlit <= 286, "hlit = %d", hlit);
-    xassert(1 <= hdist && hdist <= 32, "hdist = %d", hdist);
+    xassert(257 <= hlit && hlit <= 286, "hlit = %zu", hlit);
+    xassert(1 <= hdist && hdist <= 32, "hdist = %zu", hdist);
     xassert(4 <= hclen && hclen <= 19, "hclen = %zu", hclen);
-    xassert(hlit + hdist == codelens.size(), "%d + %d != %zu", hlit, hdist, codelens.size());
 
-    DEBUG("hlit = %d", hlit);
-    DEBUG("hdist = %d", hdist);
+    DEBUG("hlit = %zu", hlit);
+    DEBUG("hdist = %zu", hdist);
     DEBUG("hclen = %zu", hclen);
-    DEBUG("codelens = %zu", codelens.size());
 
-#if 0
     // TEMP TEMP
     for (auto&& [value, code] : htree) {
         DEBUG("value=%u code=0x%02x codelen=%u", value, code.code, code.bits);
     }
-#endif
 
     uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
     out.write_bits(bfinal, 1);
@@ -490,7 +552,13 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     }
 
     // literal and distance code lengths
-    for (auto codelen : codelens) {
+    for (auto codelen : lit_codelens) {
+        auto it = htree.find(codelen);
+        assert(it != htree.end());
+        auto&& [code, bits] = it->second;
+        out.write_bits(code, bits);
+    }
+    for (auto codelen : dst_codelens) {
         auto it = htree.find(codelen);
         assert(it != htree.end());
         auto&& [code, bits] = it->second;
@@ -501,7 +569,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     for (const char *p = buf, *end = buf + size; p != end; ++p) {
         auto val = static_cast<uint16_t>(*reinterpret_cast<const uint8_t*>(p));
         auto it = lits.find(val);
-        assert(it != lits.end());
+        xassert(it != lits.end(), "no code for %u (%c)", val, *p);
         auto&& [code, n_bits] = it->second;
         // DEBUG("Writing val=%u (%c) code=0x%02x bits=%u", val, safelit(val), code, n_bits);
         out.write_bits(code, n_bits);
