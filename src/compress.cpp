@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <list>
 
 constexpr uint16_t _header_table[19] = {
 	3, 0, 0, 5, 3, 4, 3, 3,
@@ -640,6 +641,90 @@ constexpr uint8_t dstlens[HDIST] = {
 uint8_t codelens[MaxNumCodes] = {0};
 size_t  n_codelens = 0;
 
+struct TreeNode {
+    TreeNode(int v, int b) noexcept : value{v}, bits{b} {}
+    int value;
+    int bits;
+};
+struct Node {
+    Node(int v, int w) : value{v}, weight{w} {}
+    const int value;
+    const int weight;
+    const Node* left = nullptr;
+    const Node* right = nullptr;
+    mutable int depth = -1;
+};
+struct NodeCmp {
+    bool operator()(const Node* a, const Node* b) {
+        // STL heap api is for a max heap and expects less than comparison
+        return a->weight > b->weight;
+    }
+};
+
+void assign_depth(const Node* n, int depth) {
+    if (!n)
+        return;
+    assign_depth(n->left, depth+1);
+    n->depth = depth;
+    // printf("n: value=%d weight=%d depth=%d\n", n->value, n->weight, depth);
+    assign_depth(n->right, depth+1);
+}
+
+std::vector<TreeNode> construct_huffman_tree(const int* codelens, size_t n_codelens) {
+    std::map<int, int> counts;
+    for (size_t i = 0; i < n_codelens; ++i) {
+        counts[codelens[i]]++;
+    }
+
+    // TODO: max number of nodes is 2*N + 1?
+    printf("--- COUNTS ---\n");
+    std::list<Node> pool;
+    std::vector<Node*> nodes;
+    for (auto&& [codelen, count] : counts) {
+        auto& n = pool.emplace_back(codelen, count);
+        n.left = n.right = nullptr;
+        nodes.push_back(&n);
+        printf("%d: %d\n", codelen, count);
+    }
+    printf("--- END COUNTS ---\n");
+
+    auto&& pop_heap = [](std::vector<Node*>& nodes) {
+        std::pop_heap(nodes.begin(), nodes.end(), NodeCmp{});
+        nodes.pop_back();
+    };
+
+    std::make_heap(nodes.begin(), nodes.end(), NodeCmp{});
+    while (nodes.size() >= 2) {
+        Node* a = nodes[0];
+        pop_heap(nodes);
+        Node* b = nodes[0];
+        pop_heap(nodes);
+        auto& n = pool.emplace_back(-1, a->weight + b->weight);
+        n.left  = a->weight < b->weight ? a : b;
+        n.right = a->weight < b->weight ? b : a;
+        nodes.push_back(&n);
+        std::push_heap(nodes.begin(), nodes.end(), NodeCmp{});
+    }
+
+    assert(nodes.size() == 1);
+    assign_depth(nodes[0], 0);
+
+    printf("--- PRINT NODES ---\n");
+    for (auto&& node : pool) {
+        printf("(%d, %d) ", node.value, node.depth);
+    }
+    printf("\n");
+    printf("--- END PRINT NODES ---\n");
+
+    std::vector<TreeNode> result;
+    for (auto&& node : pool) {
+        if (node.value != -1) {
+            result.emplace_back(node.value, node.depth);
+        }
+    }
+    return result;
+}
+
 void mytest() {
     constexpr size_t n_lits = ARRSIZE(litlens);
     constexpr size_t n_dsts = ARRSIZE(dstlens);
@@ -736,6 +821,14 @@ void mytest() {
         printf("%zu: (%d, %d)\n", i, codes[i], extra[i]);
     }
     printf("--- END CODES ---\n");
+
+    auto tree = construct_huffman_tree(codes.data(), codes.size());
+    printf("--- ENCODING ---\n");
+    for (auto&& [value, bits] : tree) {
+        // printf("%d: %d\n", node.value, node.bits);
+        printf("%d: %d\n", value, bits);
+    }
+    printf("--- END ENCODING ---\n");
 }
 
 int main(int argc, char** argv) {
