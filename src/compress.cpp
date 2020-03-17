@@ -587,7 +587,161 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     }
 }
 
+constexpr size_t LiteralCodes = 256; // doesn't include END_BLOCK code
+constexpr size_t LengthCodes = 29;
+constexpr size_t LitCodes = LiteralCodes + LengthCodes + 1;
+constexpr size_t DistCodes = 30;
+constexpr size_t MaxNumCodes = LitCodes + DistCodes;
+constexpr size_t MaxBits = 15;
+constexpr size_t HLIT = 258;
+constexpr size_t HDIST = 10;
+
+constexpr uint8_t litlens[HLIT] = {
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 6, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    6, 5, 6, 6, 5, 5, 6, 5,
+    6, 5, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 5, 5, 6, 5, 5, 5, 5,
+    5, 6, 5, 5, 5, 5, 5, 6,
+    5, 6, 6, 5, 5, 6, 5, 5,
+    5, 5, 5, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    6, 6,
+};
+
+constexpr uint8_t dstlens[HDIST] = {
+    1, 0, 0, 0, 0, 0, 0, 0,
+    0, 1,
+};
+
+uint8_t codelens[MaxNumCodes] = {0};
+size_t  n_codelens = 0;
+
+void mytest() {
+    constexpr size_t n_lits = ARRSIZE(litlens);
+    constexpr size_t n_dsts = ARRSIZE(dstlens);
+    static_assert(n_lits + n_dsts < ARRSIZE(codelens));
+    memcpy(&codelens[0],      &litlens[0], sizeof(litlens));
+    memcpy(&codelens[n_lits], &dstlens[0], sizeof(dstlens));
+
+    std::vector<int> codes;
+    std::vector<int> extra;
+    int buf = -1;
+    int cnt = 0;
+    for (size_t ii = 0; ii < n_lits + n_dsts; ++ii) {
+        auto codelen = codelens[ii];
+        if (cnt == 0) {
+            buf = codelen;
+            cnt = 1;
+        } else if (buf == codelen) {
+            cnt++;
+        } else if (cnt < 3) {
+            codes.insert(codes.end(), cnt, buf);
+            extra.insert(extra.end(), cnt, 0);
+            buf = codelen;
+            cnt = 1;
+        } else if (buf == 0) {
+            assert(cnt >= 3);
+            assert(codelen != buf);
+            if (cnt <= 10) {
+                codes.push_back(17);
+                extra.push_back(static_cast<int>(cnt));
+            } else {
+                assert(cnt <= 138);
+                codes.push_back(18);
+                extra.push_back(static_cast<int>(cnt));
+            }
+            buf = codelen;
+            cnt = 1;
+        } else {
+            assert(cnt >= 3);
+            assert(buf != 0);
+            if (codes.empty() || codes.back() != buf) {
+                codes.push_back(buf);
+                extra.push_back(0);
+                cnt--;
+            }
+            while (cnt >= 3) {
+                int repeat_amount = std::min(6, cnt);
+                codes.push_back(16);
+                extra.push_back(repeat_amount);
+                cnt -= repeat_amount;
+            }
+            codes.insert(codes.end(), cnt, buf);
+            extra.insert(extra.end(), cnt, 0);
+            buf = codelen;
+            cnt = 1;
+        }
+
+        assert(codes.size() == extra.size());
+        assert(buf == codelen);
+        assert(cnt > 0);
+    }
+
+    // flush
+    if (cnt < 3) {
+        codes.insert(codes.end(), cnt, buf);
+        extra.insert(extra.end(), cnt, 0);
+    } else if (buf == 0) {
+        if (cnt <= 10) {
+            codes.push_back(17);
+            extra.push_back(cnt);
+        } else {
+            codes.push_back(18);
+            extra.push_back(cnt);
+        }
+    } else {
+        assert(cnt >= 3);
+        assert(buf != 0);
+        if (codes.empty() || codes.back() != buf) {
+            codes.push_back(buf);
+            extra.push_back(0);
+            cnt--;
+        }
+        while (cnt >= 3) {
+            int repeat_amount = std::min(6, cnt);
+            codes.push_back(16);
+            extra.push_back(repeat_amount);
+            cnt -= repeat_amount;
+        }
+        codes.insert(codes.end(), cnt, buf);
+        extra.insert(extra.end(), cnt, 0);
+    }
+
+    printf("--- CODES ---\n");
+    for (size_t i = 0; i < codes.size(); ++i) {
+        printf("%zu: (%d, %d)\n", i, codes[i], extra[i]);
+    }
+    printf("--- END CODES ---\n");
+}
+
 int main(int argc, char** argv) {
+    mytest();
+    exit(0);
+
     if (argc != 2 && argc != 3) {
         fprintf(stderr, "Usage: %s [FILE]\n", argv[0]);
         exit(0);

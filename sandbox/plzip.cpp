@@ -8,7 +8,9 @@
 #include <cassert>
 #include <memory>
 
-// TODO(peter): NOTE TO SELF -- maxbits == 15 not 16 like I thought? basing this off of puff
+// TODO(peter): NOTE TO SELF -- maxbits == 15 because that is the largest code
+// length that the header tree can communicate. I think that I had been
+// thinking it was 16
 
 // TEMP TEMP
 #include "fixed_huffman_trees.old.h"
@@ -577,6 +579,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     dynamic_code_lengths.reserve(ncodes);
     while (dynamic_code_lengths.size() < ncodes) {
         uint16_t value = read_huffman_value(reader, header_tree);
+        printf("--- CODE: %u\n", value);
         if (value <= 15) {
             dynamic_code_lengths.push_back(value);
         } else if (value <= 18) {
@@ -602,6 +605,8 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
                 xassert(0, "branch should never be hit");
             }
             size_t repeat_times = reader.read_bits(nbits) + offset;
+            printf("--- repeat_times = %zu offset = %zu repeat_value = %u\n",
+                    repeat_times, offset, repeat_value);
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
         } else {
             panic("invalid value: %u", value);
