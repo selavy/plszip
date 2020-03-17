@@ -45,7 +45,7 @@ constexpr size_t MaxHeaderCodeLength = 1u << HeaderLengthBits;
 
 // TODO: switch to MaxNumCodes
 // TODO: can definitely reduce this -- but do need it to work with fixed huffman? unless i'm just going to use the generated versions
-constexpr size_t MaxCodes = 512; 
+constexpr size_t MaxCodes = 512;
 constexpr size_t MaxBits = 15;
 constexpr size_t HLIT = 258;
 constexpr size_t HDIST = 10;
@@ -694,11 +694,28 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     }
 
     // literal and distance code lengths
-    for (auto codelen : codelens) {
+    for (size_t i = 0; i < hcodes.size(); ++i) {
+        auto codelen = hcodes[i];
         auto it = htree.find(codelen);
         xassert(it != htree.end(), "no code for header lit value: %u", codelen);
         auto&& [code, bits] = it->second;
         out.write_bits(code, bits);
+        switch (codelen) {
+            case 16:
+                xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
+                out.write_bits(hextra[i] - 3, 2);
+                break;
+            case 17:
+                xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
+                out.write_bits(hextra[i] - 3, 3);
+                break;
+            case 18:
+                xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
+                out.write_bits(hextra[i] - 11, 7);
+                break;
+            default:
+                break;
+        }
     }
 
     // huffman data
