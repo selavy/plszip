@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <list>
+#include <memory>
 
 #define panic(fmt, ...)                                   \
     do {                                                  \
@@ -304,7 +305,14 @@ uint16_t flip_code(uint16_t code, size_t codelen) {
     return static_cast<uint16_t>(flip_u16(code) >> (16 - codelen));
 }
 
+
 Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
+#ifndef NDEBUG
+    constexpr auto calc_min_code_len = [](uint16_t code) -> int {
+        return code != 0 ? 16 - __builtin_clz(code) : 0;
+    };
+#endif
+
     size_t bl_count[MaxBits];
     uint16_t next_code[MaxBits];
     uint16_t codes[MaxCodes];
@@ -340,7 +348,7 @@ Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
     for (size_t i = 0; i < n; ++i) {
         if (code_lengths[i] != 0) {
             codes[i] = next_code[code_lengths[i]]++;
-            xassert((16 - __builtin_clz(codes[i])) <= code_lengths[i], "overflowed code length");
+            assert(calc_min_code_len(codes[i]) <= code_lengths[i]);
         }
     }
 
@@ -409,6 +417,9 @@ struct BitWriter {
     {
         // DEBUG("Enter write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
         assert(n_bits <= MaxBits);
+        if (bits_ == BufferSizeInBits) {
+            write_full_buffer();
+        }
         auto room = BufferSizeInBits - bits_;
         if (room >= n_bits) {
             buff_ |= val << bits_;
@@ -507,8 +518,9 @@ CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
     constexpr std::array<int, NumHeaderCodeLengths> order = {
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
     };
-    std::array<int, NumHeaderCodeLengths> counts;
-    std::fill(counts.begin(), counts.end(), 0);
+    // std::array<int, NumHeaderCodeLengths> counts;
+    // std::fill(counts.begin(), counts.end(), 0);
+    std::vector<int> counts(order.size(), 0);
     for (auto&& codelen : codelens) {
         counts[codelen]++;
     }
@@ -581,7 +593,6 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
             buf = codelen;
             cnt = 1;
         }
-
         assert(codes.size() == extra.size());
         assert(buf == codelen);
         assert(cnt > 0);
@@ -891,16 +902,19 @@ int main(int argc, char** argv) {
     #error "Must select an implementation"
 #endif
 
-    char buf[BUFSIZE];
+    static char buf[BUFSIZE];
+    // std::vector<char> buf(BUFSIZE, 0);
+    // std::unique_ptr<char[]> buf = std::make_unique<char[]>(BUFSIZE);
+    // memset(&buf[0], 0, BUFSIZE*sizeof(buf[0]));
     size_t size = 0;
     size_t read;
     while ((read = fread(&buf[size], 1, READSIZE, fp)) > 0) {
         crc = calc_crc32(crc, &buf[size], read);
         isize += read;
         size += read;
-        if (size > BLOCKSIZE) {
+        if (size >= BLOCKSIZE) {
             DEBUG("Calling compress on block of size: %zu", size);
-            compress_fn(buf, BLOCKSIZE, 0, writer);
+            compress_fn(&buf[0], BLOCKSIZE, 0, writer);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -918,7 +932,7 @@ int main(int argc, char** argv) {
     // an unnecessary empty block, but that is OK.
     if (size > 0 || isize == 0) {
         DEBUG("Flushing final block size: %zu", size);
-        compress_fn(buf, size, 1, writer);
+        compress_fn(&buf[0], size, 1, writer);
     }
     writer.flush();
 

@@ -2,6 +2,7 @@
 
 add_executable(compress compress.cpp)
 target_compile_features(compress PUBLIC cxx_std_17)
+target_link_libraries(compress PRIVATE cxx_project_options)
 
 add_executable(inflate plszip.cpp crc32.cpp inflate.cpp)
 target_link_libraries(inflate
