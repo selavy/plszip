@@ -183,11 +183,11 @@ struct TreeNode {
 
 struct Node {
     Node(int v, int w) : value{v}, weight{w} {}
-    const int value;
-    const int weight;
-    const Node* left = nullptr;
-    const Node* right = nullptr;
-    mutable int depth = -1;
+    int value;
+    int weight;
+    Node* left = nullptr;
+    Node* right = nullptr;
+    int depth = -1;
 };
 
 struct NodeCmp {
@@ -197,7 +197,7 @@ struct NodeCmp {
     }
 };
 
-void assign_depth(const Node* n, int depth) {
+void assign_depth(Node* n, int depth) {
     if (!n)
         return;
     assign_depth(n->left, depth+1);
@@ -220,6 +220,7 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
     std::list<Node> pool;
     std::vector<Node*> nodes;
     for (auto&& [value, count] : counts) {
+        assert(0 <= value);
         auto& n = pool.emplace_back(value, count);
         n.left = n.right = nullptr;
         nodes.push_back(&n);
@@ -704,13 +705,21 @@ BlockResults analyze_block(const char* buf, size_t size) {
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
     for (const char* p = buf, *end = p + size; p != end; ++p) {
-        lit_counts[static_cast<int>(*p)]++;
+        lit_counts[static_cast<int>(*reinterpret_cast<const uint8_t*>(p))]++;
     }
-    lit_counts[256]++; // must have code for END_BLOCK
+    // TODO: remove this, shouldn't do dynamic encoding if the input is empty
+    // edge case for when input is empty
+    if (lit_counts.empty()) {
+        assert(size == 0u);
+        lit_counts[0] = 1;
+    }
+    lit_counts[256] = 1; // must have code for END_BLOCK
     auto lit_tree = construct_huffman_tree(lit_counts);
     printf("--- LIT BLOCK ENCODING ---\n");
-    for (auto&& [value, bits] : lit_tree) {
-        printf("%d: %d\n", value, bits);
+    for (auto&& [value, codelen] : lit_tree) {
+        xassert(0 <= value && value < 286, "invalid lit value: %d", value);
+        xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
+        printf("%d: %d\n", value, codelen);
     }
     printf("--- END LIT BLOCK ENCODING ---\n");
 
@@ -724,8 +733,10 @@ BlockResults analyze_block(const char* buf, size_t size) {
     }
     auto dst_tree = construct_huffman_tree(dst_counts);
     printf("--- DST BLOCK ENCODING ---\n");
-    for (auto&& [value, bits] : lit_tree) {
-        printf("%d: %d\n", value, bits);
+    for (auto&& [value, codelen] : dst_tree) {
+        xassert(0 <= value && value < 32, "invalid dst value: %d", value);
+        xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
+        printf("%d: %d\n", value, codelen);
     }
     printf("--- END DST BLOCK ENCODING ---\n");
 
@@ -740,7 +751,7 @@ BlockResults analyze_block(const char* buf, size_t size) {
     // HLIT:  257 - 286
     // HDIST: 1 - 32
 
-    size_t hlit = std::max(max_lit_value, 257);
+    size_t hlit = std::max(max_lit_value + 1, 257);
     size_t hdist = dst_counts.size();
     assert(257 <= hlit && hlit <= 286);
     assert(1 <= hdist && hdist <= 32);
@@ -748,8 +759,14 @@ BlockResults analyze_block(const char* buf, size_t size) {
     CodeLengths codelens(hlit + hdist, 0);
     assert(codelens.size() == hlit + hdist);
     for (auto&& [value, codelen] : lit_tree) {
-        assert(0 <= value && value < codelens.size());
-        assert(1 <= codelen && codelen <= MaxBits);
+        xassert(0 <= value && value < codelens.size(), "invalid value: %d", value);
+        xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
+        codelens[value] = codelen;
+    }
+    for (auto&& [value, codelen] : dst_tree) {
+        value += hlit;
+        xassert(hlit <= value && value < codelens.size(), "invalid value: %d", value);
+        xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
         codelens[value] = codelen;
     }
     assert(codelens[256] != 0);

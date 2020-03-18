@@ -477,6 +477,9 @@ void init_huffman_tree(HTree& tree)
         }
     }
 
+    // TEMP TEMP
+    DEBUG("--- Huffman Codes ---");
+
     // 4) Generate dense table. This means that can read `max_bit_length` bits at a
     // time, and do a lookup immediately; should then use `code_lengths` to
     // determine how many of the peek'd bits should be removed.
@@ -491,6 +494,8 @@ void init_huffman_tree(HTree& tree)
         code = static_cast<uint16_t>(code << empty_bits);
         uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
         uint16_t maxcode = code | lowbits;
+        // TEMP TEMP
+        DEBUG("value=%2u code=0x%02x codelen=%u", value, flip_code(code, max_bit_length), codelen);
         while (code <= maxcode) {
             uint16_t flipped = flip_code(code, max_bit_length);
             xassert(tree.codes[flipped] == EmptySentinel, "reused index: %u", flipped);
@@ -499,6 +504,8 @@ void init_huffman_tree(HTree& tree)
         }
     }
     tree.maxlen = max_bit_length;
+    // TEMP TEMP
+    DEBUG("--- End Huffman Codes ---");
 }
 
 [[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
@@ -969,6 +976,7 @@ int main(int argc, char** argv)
 
             for (;;) {
                 uint16_t value = read_huffman_value(reader, literal_tree);
+                DEBUG("huffman value: %u", value);
                 if (value < 256) {
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
@@ -976,6 +984,7 @@ int main(int argc, char** argv)
                     DEBUG("inflate: end of block found");
                     break;
                 } else if (value <= 285) {
+                    assert(0);
                     value -= LENGTH_BASE_CODE;
                     assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
                     size_t base_length = LENGTH_BASES[value];
