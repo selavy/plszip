@@ -528,13 +528,11 @@ struct DynamicHeader {
 DynamicHeader make_header_tree(const CodeLengths& codelens) {
     std::vector<int> codes;
     std::vector<int> extra;
-    int buf = -1;
+    assert(!codelens.empty());
+    int buf = codelens[0];
     int cnt = 0;
     for (auto codelen : codelens) {
-        if (cnt == 0) {
-            buf = codelen;
-            cnt = 1;
-        } else if (buf == codelen) {
+        if (buf == codelen) {
             cnt++;
         } else if (cnt < 3) {
             codes.insert(codes.end(), cnt, buf);
@@ -544,13 +542,23 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
         } else if (buf == 0) {
             assert(cnt >= 3);
             assert(codelen != buf);
-            if (cnt <= 10) {
-                codes.push_back(17);
-                extra.push_back(static_cast<int>(cnt));
-            } else {
-                assert(cnt <= 138);
+            while (cnt >= 11) {
+                int amt = std::min(cnt, 138);
+                assert(11 <= amt && amt <= 138);
                 codes.push_back(18);
-                extra.push_back(static_cast<int>(cnt));
+                extra.push_back(amt);
+                cnt -= amt;
+            }
+            while (cnt >= 3) {
+                int amt = std::min(cnt, 10);
+                assert(3 <= amt && amt <= 10);
+                codes.push_back(17);
+                extra.push_back(amt);
+                cnt -= amt;
+            }
+            if (cnt > 0) {
+                codes.insert(codes.end(), cnt, 0);
+                extra.insert(extra.end(), cnt, 0);
             }
             buf = codelen;
             cnt = 1;
@@ -563,10 +571,10 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
                 cnt--;
             }
             while (cnt >= 3) {
-                int repeat_amount = std::min(6, cnt);
+                int amt = std::min(cnt, 6);
                 codes.push_back(16);
-                extra.push_back(repeat_amount);
-                cnt -= repeat_amount;
+                extra.push_back(amt);
+                cnt -= amt;
             }
             codes.insert(codes.end(), cnt, buf);
             extra.insert(extra.end(), cnt, 0);
@@ -584,12 +592,24 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
         codes.insert(codes.end(), cnt, buf);
         extra.insert(extra.end(), cnt, 0);
     } else if (buf == 0) {
-        if (cnt <= 10) {
-            codes.push_back(17);
-            extra.push_back(cnt);
-        } else {
+        assert(cnt >= 3);
+        while (cnt >= 11) {
+            int amt = std::min(cnt, 138);
+            assert(11 <= amt && amt <= 138);
             codes.push_back(18);
-            extra.push_back(cnt);
+            extra.push_back(amt);
+            cnt -= amt;
+        }
+        while (cnt >= 3) {
+            int amt = std::min(cnt, 10);
+            assert(3 <= amt && amt <= 10);
+            codes.push_back(17);
+            extra.push_back(amt);
+            cnt -= amt;
+        }
+        if (cnt > 0) {
+            codes.insert(codes.end(), cnt, 0);
+            extra.insert(extra.end(), cnt, 0);
         }
     } else {
         assert(cnt >= 3);
