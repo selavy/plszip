@@ -205,21 +205,24 @@ void assign_depth(const Node* n, int depth) {
     assign_depth(n->right, depth+1);
 }
 
-std::vector<TreeNode> construct_huffman_tree(const int* codelens, size_t n_codelens) {
+std::map<int, int> count_values(const int* values, size_t n_values) {
     std::map<int, int> counts;
-    for (size_t i = 0; i < n_codelens; ++i) {
-        counts[codelens[i]]++;
+    for (size_t i = 0; i < n_values; ++i) {
+        counts[values[i]]++;
     }
+    return counts;
+}
 
+std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
     // TODO: max number of nodes is 2*N + 1?
     printf("--- COUNTS ---\n");
     std::list<Node> pool;
     std::vector<Node*> nodes;
-    for (auto&& [codelen, count] : counts) {
-        auto& n = pool.emplace_back(codelen, count);
+    for (auto&& [value, count] : counts) {
+        auto& n = pool.emplace_back(value, count);
         n.left = n.right = nullptr;
         nodes.push_back(&n);
-        printf("%d: %d\n", codelen, count);
+        printf("%d: %d\n", value, count);
     }
     printf("--- END COUNTS ---\n");
 
@@ -606,7 +609,7 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
         extra.insert(extra.end(), cnt, 0);
     }
 
-    auto header_tree = construct_huffman_tree(codes.data(), codes.size());
+    auto header_tree = construct_huffman_tree(count_values(codes.data(), codes.size()));
 
     // TEMP TEMP
     printf("--- HEADER ENCODING ---\n");
@@ -660,9 +663,72 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
     }
 };
 
+struct BlockResults {
+    CodeLengths codelens;
+    size_t hlit;
+    size_t hdist;
+};
+
+BlockResults analyze_block(const char* buf, size_t size) {
+    std::map<int, int> lit_counts;
+    std::map<int, int> dst_counts;
+    for (const char* p = buf, *end = p + size; p != end; ++p) {
+        lit_counts[static_cast<int>(*p)]++;
+    }
+    lit_counts[256]++; // must have code for END_BLOCK
+    auto lit_tree = construct_huffman_tree(lit_counts);
+    printf("--- LIT BLOCK ENCODING ---\n");
+    for (auto&& [value, bits] : lit_tree) {
+        printf("%d: %d\n", value, bits);
+    }
+    printf("--- END LIT BLOCK ENCODING ---\n");
+
+    // TODO: try out dst_counts.empty() case so I can test my inflate implementation
+    //
+    // NOTE: rather than handling case of no length+distance codes, just add 2 codes
+    //       because that is what gzip appears to do
+    if (dst_counts.empty()) {
+        dst_counts[0] = 1;
+        dst_counts[1] = 1;
+    }
+    auto dst_tree = construct_huffman_tree(dst_counts);
+    printf("--- DST BLOCK ENCODING ---\n");
+    for (auto&& [value, bits] : lit_tree) {
+        printf("%d: %d\n", value, bits);
+    }
+    printf("--- END DST BLOCK ENCODING ---\n");
+
+    assert(!lit_tree.empty());
+    int max_lit_value = std::max_element(lit_tree.begin(), lit_tree.end(),
+            [](TreeNode a, TreeNode b) {
+                return a.value < b.value;
+            })->value;
+    DEBUG("max_lit_value: %d", max_lit_value);
+
+    // Ranges:
+    // HLIT:  257 - 286
+    // HDIST: 1 - 32
+
+    size_t hlit = std::max(max_lit_value, 257);
+    size_t hdist = dst_counts.size();
+    assert(257 <= hlit && hlit <= 286);
+    assert(1 <= hdist && hdist <= 32);
+
+    CodeLengths codelens(hlit + hdist, 0);
+    assert(codelens.size() == hlit + hdist);
+    for (auto&& [value, codelen] : lit_tree) {
+        assert(0 <= value && value < codelens.size());
+        assert(1 <= codelen && codelen <= MaxBits);
+        codelens[value] = codelen;
+    }
+    assert(codelens[256] != 0);
+    return { codelens, hlit, hdist };
+}
+
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
     DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
-    auto&& [codelens, hlit, hdist] = make_code_lengths();
+    auto&& [codelens, hlit, hdist] = analyze_block(buf, size);
+    // auto&& [codelens, hlit, hdist] = make_code_lengths();
     auto lits = init_huffman_tree(&codelens[0], hlit);
     auto dsts = init_huffman_tree(&codelens[hlit], hdist);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
