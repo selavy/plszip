@@ -724,23 +724,18 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     std::map<uint32_t, std::vector<int>> htable;
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
-    // uint32_t h = 0;
-    // if (size >= 2) {
-    //     h = update_hash(h, buf[0]);
-    //     h = update_hash(h, buf[1]);
-    //     // h = update_hash(h, buf[2]);
-    // }
+    uint32_t h = 0;
+    if (size >= 2) {
+        h = update_hash(h, buf[0]);
+        h = update_hash(h, buf[1]);
+    }
 
     size_t i = 0;
     while (i < (size - 3)) {
         assert(i + 2 < size);
         int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
         lit_counts[value]++;
-        uint32_t h = 0;
-        h = update_hash(h, buf[i+0]);
-        h = update_hash(h, buf[i+1]);
         h = update_hash(h, buf[i+2]);
-        // h = update_hash(h, buf[i+2]);
         auto& locs = htable[h];
         int length = 2;
         int distance = 0;
