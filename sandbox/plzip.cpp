@@ -976,7 +976,7 @@ int main(int argc, char** argv)
 
             for (;;) {
                 uint16_t value = read_huffman_value(reader, literal_tree);
-                DEBUG("huffman value: %u", value);
+                DEBUG("huffman value: %u (%c)", value, value < 256 ? static_cast<char>(value) : '?');
                 if (value < 256) {
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
@@ -984,7 +984,6 @@ int main(int argc, char** argv)
                     DEBUG("inflate: end of block found");
                     break;
                 } else if (value <= 285) {
-                    assert(0);
                     value -= LENGTH_BASE_CODE;
                     assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
                     size_t base_length = LENGTH_BASES[value];
@@ -997,6 +996,7 @@ int main(int argc, char** argv)
                     size_t extra_distance = reader.read_bits(
                             DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
+                    DEBUG("\tlength=%zu distance=%zu", length, distance);
                     if (distance >= write_buffer.size()) {
                         panic("invalid distance: %zu >= %zu",
                                 distance, write_buffer.size());

@@ -17,12 +17,12 @@
         exit(1);                                          \
     } while (0)
 
-#define xassert(c, fmt, ...)                                     \
-    do {                                                         \
-        if (!(c)) {                                              \
+#define xassert(c, fmt, ...)                                              \
+    do {                                                                  \
+        if (!(c)) {                                                       \
             fprintf(stderr, "ASSERT: " #c " : " fmt "\n", ##__VA_ARGS__); \
-            assert(c);                                           \
-        }                                                        \
+            assert(c);                                                    \
+        }                                                                 \
     } while (0)
 
 #define DEBUG0(msg) fprintf(stderr, "DEBUG: " msg "\n");
@@ -822,13 +822,16 @@ BlockResults analyze_block(const char* const buf, size_t size) {
                             return a.value < b.value;
                         })->value;
     DEBUG("max_lit_value: %d", max_lit_value);
+    int max_dst_value = std::max_element(dst_tree.begin(), dst_tree.end(), [](TreeNode a, TreeNode b) {
+                            return a.value < b.value;
+                        })->value;
 
     // Ranges:
     // HLIT:  257 - 286
     // HDIST: 1 - 32
 
     size_t hlit = std::max(max_lit_value + 1, 257);
-    size_t hdist = dst_counts.size();
+    size_t hdist = std::max(max_dst_value + 1, 1);
     assert(257 <= hlit && hlit <= 286);
     assert(1 <= hdist && hdist <= 32);
 
