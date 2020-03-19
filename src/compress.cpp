@@ -1,15 +1,15 @@
 #include <algorithm>
 #include <cassert>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <climits>
+#include <list>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
-#include <list>
-#include <memory>
 
 #define panic(fmt, ...)                                   \
     do {                                                  \
@@ -19,10 +19,9 @@
 
 #define xassert(c, fmt, ...)                                     \
     do {                                                         \
-        auto r = (c);                                            \
-        if (!r) {                                                \
-            fprintf(stderr, "ASSERT: " fmt "\n", ##__VA_ARGS__); \
-            assert(0);                                           \
+        if (!(c)) {                                              \
+            fprintf(stderr, "ASSERT: " #c " : " fmt "\n", ##__VA_ARGS__); \
+            assert(c);                                           \
         }                                                        \
     } while (0)
 
@@ -31,12 +30,12 @@
 
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
-constexpr size_t BUFSIZE  = 2056;
+constexpr size_t BUFSIZE = 2056;
 constexpr size_t READSIZE = 2056;
 constexpr size_t BLOCKSIZE = 2056;
 constexpr uint16_t EmptySentinel = UINT16_MAX;
 constexpr size_t NumHeaderCodeLengths = 19;
-constexpr size_t LiteralCodes = 256; // doesn't include END_BLOCK code
+constexpr size_t LiteralCodes = 256;  // doesn't include END_BLOCK code
 constexpr size_t LengthCodes = 29;
 constexpr size_t LitCodes = LiteralCodes + LengthCodes + 1;
 constexpr size_t DistCodes = 30;
@@ -45,52 +44,10 @@ constexpr size_t HeaderLengthBits = 3;
 constexpr size_t MaxHeaderCodeLength = 1u << HeaderLengthBits;
 
 // TODO: switch to MaxNumCodes
-// TODO: can definitely reduce this -- but do need it to work with fixed huffman? unless i'm just going to use the generated versions
+// TODO: can definitely reduce this -- but do need it to work with fixed huffman? unless i'm just going to use the
+// generated versions
 constexpr size_t MaxCodes = 512;
 constexpr size_t MaxBits = 15;
-constexpr size_t HLIT = 258;
-constexpr size_t HDIST = 10;
-
-// TEMP TEMP
-constexpr uint16_t _codelens[HLIT + HDIST] = {
-    // HLIT
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 6, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    6, 5, 6, 6, 5, 5, 6, 5,
-    6, 5, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 5, 5, 6, 5, 5, 5, 5,
-    5, 6, 5, 5, 5, 5, 5, 6,
-    5, 6, 6, 5, 5, 6, 5, 5,
-    5, 5, 5, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    6, 6,
-    // HDIST
-    1, 0, 0, 0, 0, 0, 0, 0,
-    0, 1,
-};
 
 uint32_t crc_table[256];
 
@@ -198,12 +155,11 @@ struct NodeCmp {
 };
 
 void assign_depth(Node* n, int depth) {
-    if (!n)
-        return;
-    assign_depth(n->left, depth+1);
+    if (!n) return;
+    assign_depth(n->left, depth + 1);
     n->depth = depth;
     // printf("n: value=%d weight=%d depth=%d\n", n->value, n->weight, depth);
-    assign_depth(n->right, depth+1);
+    assign_depth(n->right, depth + 1);
 }
 
 std::map<int, int> count_values(const int* values, size_t n_values) {
@@ -242,7 +198,7 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
         Node* b = nodes[0];
         pop_heap(nodes);
         auto& n = pool.emplace_back(-1, a->weight + b->weight);
-        n.left  = a->weight < b->weight ? a : b;
+        n.left = a->weight < b->weight ? a : b;
         n.right = a->weight < b->weight ? b : a;
         nodes.push_back(&n);
         std::push_heap(nodes.begin(), nodes.end(), NodeCmp{});
@@ -266,23 +222,22 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
             result.emplace_back(node.value, node.depth);
         }
     }
+
+    if (result.empty()) {
+        result.push_back({0, 1});
+    } else if (result[0].codelen == 0) {
+        assert(result.size() == 1);
+        result[0].codelen = 1;
+    }
+
     return result;
 }
 
 struct DynamicCodeLengths {
     CodeLengths codelens;
-    size_t      hlit;
-    size_t      hdist;
+    size_t hlit;
+    size_t hdist;
 };
-
-// TODO: need to pass in data
-DynamicCodeLengths make_code_lengths() {
-    CodeLengths result;
-    result.assign(&_codelens[0], &_codelens[ARRSIZE(_codelens)]);
-    // result.insert(result.end(), &_codelens[0], &_codelens[HLIT]);
-    // result.insert(result.end(), &_codelens[HLIT], &_codelens[HDIST]);
-    return { result, HLIT, HDIST };
-}
 
 static const unsigned char BitReverseTable256[256] = {
 // clang-format off
@@ -310,12 +265,9 @@ uint16_t flip_code(uint16_t code, size_t codelen) {
     return static_cast<uint16_t>(flip_u16(code) >> (16 - codelen));
 }
 
-
 Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
 #ifndef NDEBUG
-    constexpr auto calc_min_code_len = [](uint16_t code) -> int {
-        return code != 0 ? 16 - __builtin_clz(code) : 0;
-    };
+    constexpr auto calc_min_code_len = [](uint16_t code) -> int { return code != 0 ? 16 - __builtin_clz(code) : 0; };
 #endif
 
     size_t bl_count[MaxBits];
@@ -418,8 +370,7 @@ struct BitWriter {
 
     BitWriter(FILE* fp) noexcept : out_{fp}, buff_{0}, bits_{0} {}
 
-    void write_bits(uint16_t val, size_t n_bits) noexcept
-    {
+    void write_bits(uint16_t val, size_t n_bits) noexcept {
         // DEBUG("Enter write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
         assert(n_bits <= MaxBits);
         if (bits_ == BufferSizeInBits) {
@@ -475,7 +426,7 @@ struct BitWriter {
 
     Buffer buff_ = 0;
     size_t bits_ = 0;
-    FILE*  out_ = nullptr;
+    FILE* out_ = nullptr;
 
     constexpr static size_t BufferSizeInBits = 32;
     static_assert((sizeof(Buffer) * CHAR_BIT) >= BufferSizeInBits);
@@ -508,7 +459,8 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         }
         auto&& [code, n_bits] = it->second;
         out.write_bits(code, n_bits);
-        // DEBUG("value(%c, %u) => code(0x%02x) len=%u, flipped=0x%02x", val, val, code, n_bits, flip_code(code, n_bits));
+        // DEBUG("value(%c, %u) => code(0x%02x) len=%u, flipped=0x%02x", val, val, code, n_bits, flip_code(code,
+        // n_bits));
     }
     {
         auto it = lits.find(static_cast<uint16_t>(256));
@@ -520,9 +472,8 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
 }
 
 CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
-    constexpr std::array<int, NumHeaderCodeLengths> order = {
-        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
-    };
+    constexpr std::array<int, NumHeaderCodeLengths> order = {16, 17, 18, 0, 8,  7, 9,  6, 10, 5,
+                                                             11, 4,  12, 3, 13, 2, 14, 1, 15};
     // std::array<int, NumHeaderCodeLengths> counts;
     // std::fill(counts.begin(), counts.end(), 0);
     std::vector<int> counts(order.size(), 0);
@@ -539,7 +490,7 @@ CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
 struct DynamicHeader {
     std::vector<int> codes;
     std::vector<int> extra;
-    Tree             tree;
+    Tree tree;
 };
 
 DynamicHeader make_header_tree(const CodeLengths& codelens) {
@@ -662,13 +613,12 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
         header_codelens[value] = static_cast<uint8_t>(bits);
     }
     auto tree = init_huffman_tree(header_codelens.data(), header_codelens.size());
-    return { codes, extra, tree };
+    return {codes, extra, tree};
 }
 
 CodeLengths make_header_tree_length_data(const Tree& tree) {
-    constexpr std::array<int, NumHeaderCodeLengths> order = {
-        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
-    };
+    constexpr std::array<int, NumHeaderCodeLengths> order = {16, 17, 18, 0, 8,  7, 9,  6, 10, 5,
+                                                             11, 4,  12, 3, 13, 2, 14, 1, 15};
     CodeLengths results(order.size(), 0);
     for (size_t index = 0; index < order.size(); ++index) {
         auto value = order[index];
@@ -685,7 +635,6 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
     assert(4 <= results.size() && results.size() <= 19);
     return results;
 }
-
 
 [[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
     if (x < 256) {
@@ -710,14 +659,80 @@ constexpr uint32_t update_hash(uint32_t current, char c) noexcept {
     return ((current << 8) ^ c) & mask;
 }
 
-int longest_match(const char* wnd, const char *str, const char *const end) {
-    const char *p1 = wnd;
-    const char *p2 = str;
+int longest_match(const char* wnd, const char* str, const char* const end) {
+    const char* p1 = wnd;
+    const char* p2 = str;
     while (p2 < end && *p1 == *p2) {
         ++p1;
         ++p2;
     }
     return p2 - str;
+}
+
+// TODO: make this a table based lookup
+int get_length_code(int length) {
+    if (length <= 10) {
+        return length + 254;
+    } else if (length <= 12) {
+        return 265;
+    } else if (length <= 14) {
+        return 266;
+    } else if (length <= 16) {
+        return 267;
+    } else if (length <= 18) {
+        return 268;
+    } else if (length <= 22) {
+        return 269;
+    } else if (length <= 26) {
+        return 270;
+    } else if (length <= 30) {
+        return 271;
+    } else if (length <= 34) {
+        return 272;
+    } else if (length <= 42) {
+        return 273;
+    } else if (length <= 50) {
+        return 274;
+    } else if (length <= 58) {
+        return 275;
+    } else if (length <= 66) {
+        return 276;
+    } else if (length <= 82) {
+        return 277;
+    } else if (length <= 98) {
+        return 278;
+    } else if (length <= 114) {
+        return 279;
+    } else if (length <= 130) {
+        return 280;
+    } else if (length <= 162) {
+        return 281;
+    } else if (length <= 194) {
+        return 282;
+    } else if (length <= 226) {
+        return 283;
+    } else if (length <= 257) {
+        return 284;
+    } else if (length == 285) {
+        return 258;
+    } else {
+        xassert(0, "invalid length: %d", length);
+        return -1;
+    }
+}
+
+int get_distance_code(int distance) {
+    std::vector<int> table = {
+        1,   2,   3,   4,   6,    8,    12,   16,   24,   32,   48,   64,    96,    128,   192,
+        256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768,
+    };
+    for (size_t i = 0; i < table.size(); ++i) {
+        if (distance <= table[i]) {
+            return i;
+        }
+    }
+    xassert(0, "invalid distance: %d", distance);
+    return -1;
 }
 
 BlockResults analyze_block(const char* const buf, size_t size) {
@@ -733,9 +748,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     size_t i = 0;
     while (i < (size - 3)) {
         assert(i + 2 < size);
-        int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
-        lit_counts[value]++;
-        h = update_hash(h, buf[i+2]);
+        h = update_hash(h, buf[i + 2]);
         auto& locs = htable[h];
         int length = 2;
         int distance = 0;
@@ -749,11 +762,15 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         locs.push_back(i);
         if (length >= 3) {
             const char* pp = &buf[i - distance];
-            std::string match{pp, pp+length};
-            DEBUG("!!! Found match: %d %d for \"%c%c%c\" === \"%s\"",
-                    length, distance, pp[0], pp[1], pp[2], match.c_str());
+            std::string match{pp, pp + length};
+            DEBUG("!!! Found match: len=%d dist=%d for \"%c%c%c\" === \"%s\"", length, distance, pp[0], pp[1], pp[2],
+                  match.c_str());
             i += length;
+            lit_counts[get_length_code(length)]++;
+            dst_counts[get_distance_code(distance)]++;
         } else {
+            int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
+            lit_counts[value]++;
             i += 1;
         }
     }
@@ -761,20 +778,19 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
         lit_counts[value]++;
     }
-
     // TODO: remove this, shouldn't do dynamic encoding if the input is empty
     // edge case for when input is empty
     if (lit_counts.empty()) {
         assert(size == 0u);
         lit_counts[0] = 1;
     }
-    lit_counts[256] = 1; // must have code for END_BLOCK
+    lit_counts[256] = 1;  // must have code for END_BLOCK
     auto lit_tree = construct_huffman_tree(lit_counts);
     printf("--- LIT BLOCK ENCODING ---\n");
     for (auto&& [value, codelen] : lit_tree) {
         xassert(0 <= value && value < 286, "invalid lit value: %d", value);
         xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
-        // printf("%d: %d\n", value, codelen);
+        printf("%d: %d\n", value, codelen);
     }
     printf("--- END LIT BLOCK ENCODING ---\n");
 
@@ -786,20 +802,25 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         dst_counts[0] = 1;
         dst_counts[1] = 1;
     }
+    printf("--- DST BLOCK COUNTS ---\n");
+    for (auto&& [value, count] : dst_counts) {
+        printf("%d: %d\n", value, count);
+    }
+    printf("--- END DST BLOCK COUNTS ---\n");
+
     auto dst_tree = construct_huffman_tree(dst_counts);
     printf("--- DST BLOCK ENCODING ---\n");
     for (auto&& [value, codelen] : dst_tree) {
         xassert(0 <= value && value < 32, "invalid dst value: %d", value);
         xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
-        // printf("%d: %d\n", value, codelen);
+        printf("%d: %d\n", value, codelen);
     }
     printf("--- END DST BLOCK ENCODING ---\n");
 
     assert(!lit_tree.empty());
-    int max_lit_value = std::max_element(lit_tree.begin(), lit_tree.end(),
-            [](TreeNode a, TreeNode b) {
-                return a.value < b.value;
-            })->value;
+    int max_lit_value = std::max_element(lit_tree.begin(), lit_tree.end(), [](TreeNode a, TreeNode b) {
+                            return a.value < b.value;
+                        })->value;
     DEBUG("max_lit_value: %d", max_lit_value);
 
     // Ranges:
@@ -825,13 +846,12 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         codelens[value] = codelen;
     }
     assert(codelens[256] != 0);
-    return { codelens, hlit, hdist };
+    return {codelens, hlit, hdist};
 }
 
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
     DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
     auto&& [codelens, hlit, hdist] = analyze_block(buf, size);
-    // auto&& [codelens, hlit, hdist] = make_code_lengths();
     auto lits = init_huffman_tree(&codelens[0], hlit);
     auto dsts = init_huffman_tree(&codelens[hlit], hdist);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
@@ -870,20 +890,20 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         auto&& [code, bits] = it->second;
         out.write_bits(code, bits);
         switch (codelen) {
-            case 16:
-                xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 3, 2);
-                break;
-            case 17:
-                xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 3, 3);
-                break;
-            case 18:
-                xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 11, 7);
-                break;
-            default:
-                break;
+        case 16:
+            xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
+            out.write_bits(hextra[i] - 3, 2);
+            break;
+        case 17:
+            xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
+            out.write_bits(hextra[i] - 3, 3);
+            break;
+        case 18:
+            xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
+            out.write_bits(hextra[i] - 11, 7);
+            break;
+        default:
+            break;
         }
     }
 
@@ -908,8 +928,6 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         out.write_bits(code, n_bits);
     }
 }
-
-
 
 int main(int argc, char** argv) {
     if (argc != 2 && argc != 3) {
@@ -971,7 +989,7 @@ int main(int argc, char** argv) {
 #elif 1
     auto* compress_fn = &blkwrite_dynamic;
 #else
-    #error "Must select an implementation"
+#error "Must select an implementation"
 #endif
 
     static char buf[BUFSIZE];
