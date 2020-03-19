@@ -165,9 +165,9 @@ void xwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
 }
 
 struct Code {
-    constexpr Code(uint16_t code_, uint16_t bits_) noexcept : code{code_}, bits{bits_} {}
+    constexpr Code(uint16_t code_, uint16_t codelen_) noexcept : code{code_}, codelen{codelen_} {}
     uint16_t code;
-    uint16_t bits;
+    uint16_t codelen;
 };
 
 using Value = uint16_t;
@@ -176,9 +176,9 @@ using CodeLengths = std::vector<uint16_t>;
 
 // TODO: use Code
 struct TreeNode {
-    TreeNode(int v, int b) noexcept : value{v}, bits{b} {}
+    TreeNode(int v, int b) noexcept : value{v}, codelen{b} {}
     int value;
-    int bits;
+    int codelen;
 };
 
 struct Node {
@@ -224,7 +224,9 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
         auto& n = pool.emplace_back(value, count);
         n.left = n.right = nullptr;
         nodes.push_back(&n);
+#if 0
         printf("%d: %d\n", value, count);
+#endif
     }
     printf("--- END COUNTS ---\n");
 
@@ -249,12 +251,14 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
     assert(nodes.size() == 1);
     assign_depth(nodes[0], 0);
 
+#if 0
     printf("--- PRINT NODES ---\n");
     for (auto&& node : pool) {
         printf("(%d, %d) ", node.value, node.depth);
     }
     printf("\n");
     printf("--- END PRINT NODES ---\n");
+#endif
 
     std::vector<TreeNode> result;
     for (auto&& node : pool) {
@@ -670,9 +674,9 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
         auto value = order[index];
         auto it = tree.find(value);
         if (it != tree.end()) {
-            auto bits = it->second.bits;
-            assert(0 <= bits && bits < MaxHeaderCodeLength);
-            results[index] = bits;
+            auto codelen = it->second.codelen;
+            assert(0 <= codelen && codelen < MaxHeaderCodeLength);
+            results[index] = codelen;
         }
     }
     while (results.size() > 4 && results.back() == 0) {
@@ -701,12 +705,68 @@ struct BlockResults {
     size_t hdist;
 };
 
-BlockResults analyze_block(const char* buf, size_t size) {
+constexpr uint32_t update_hash(uint32_t current, char c) noexcept {
+    constexpr uint32_t mask = (1u << 24) - 1;
+    return ((current << 8) ^ c) & mask;
+}
+
+int longest_match(const char* wnd, const char *str, const char *const end) {
+    const char *p1 = wnd;
+    const char *p2 = str;
+    while (p2 < end && *p1 == *p2) {
+        ++p1;
+        ++p2;
+    }
+    return p2 - str;
+}
+
+BlockResults analyze_block(const char* const buf, size_t size) {
+    std::map<uint32_t, std::vector<int>> htable;
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
-    for (const char* p = buf, *end = p + size; p != end; ++p) {
-        lit_counts[static_cast<int>(*reinterpret_cast<const uint8_t*>(p))]++;
+    // uint32_t h = 0;
+    // if (size >= 2) {
+    //     h = update_hash(h, buf[0]);
+    //     h = update_hash(h, buf[1]);
+    //     // h = update_hash(h, buf[2]);
+    // }
+
+    size_t i = 0;
+    while (i < (size - 3)) {
+        assert(i + 2 < size);
+        int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
+        lit_counts[value]++;
+        uint32_t h = 0;
+        h = update_hash(h, buf[i+0]);
+        h = update_hash(h, buf[i+1]);
+        h = update_hash(h, buf[i+2]);
+        // h = update_hash(h, buf[i+2]);
+        auto& locs = htable[h];
+        int length = 2;
+        int distance = 0;
+        for (int pos : locs) {
+            int match_length = longest_match(buf + pos, buf + i, buf + size);
+            if (match_length > length) {
+                length = match_length;
+                distance = i - pos;
+            }
+        }
+        locs.push_back(i);
+        if (length >= 3) {
+            const char* pp = &buf[i - distance];
+            std::string match{pp, pp+length};
+            DEBUG("!!! Found match: %d %d for \"%c%c%c\" === \"%s\"",
+                    length, distance, pp[0], pp[1], pp[2], match.c_str());
+            i += length;
+        } else {
+            i += 1;
+        }
     }
+    for (; i < size; ++i) {
+        int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
+        lit_counts[value]++;
+    }
+
     // TODO: remove this, shouldn't do dynamic encoding if the input is empty
     // edge case for when input is empty
     if (lit_counts.empty()) {
@@ -719,7 +779,7 @@ BlockResults analyze_block(const char* buf, size_t size) {
     for (auto&& [value, codelen] : lit_tree) {
         xassert(0 <= value && value < 286, "invalid lit value: %d", value);
         xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
-        printf("%d: %d\n", value, codelen);
+        // printf("%d: %d\n", value, codelen);
     }
     printf("--- END LIT BLOCK ENCODING ---\n");
 
@@ -736,7 +796,7 @@ BlockResults analyze_block(const char* buf, size_t size) {
     for (auto&& [value, codelen] : dst_tree) {
         xassert(0 <= value && value < 32, "invalid dst value: %d", value);
         xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
-        printf("%d: %d\n", value, codelen);
+        // printf("%d: %d\n", value, codelen);
     }
     printf("--- END DST BLOCK ENCODING ---\n");
 
@@ -792,7 +852,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
 
     // TEMP TEMP
     for (auto&& [value, code] : htree) {
-        DEBUG("value=%2u code=0x%02x codelen=%u", value, code.code, code.bits);
+        DEBUG("value=%2u code=0x%02x codelen=%u", value, code.code, code.codelen);
     }
 
     uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
