@@ -30,6 +30,19 @@
 
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
+// True literal (<= 256)
+struct literal_value {
+    uint8_t value;
+};
+
+// Length + Distance Code
+struct length_distance_pair {
+    uint8_t length;
+    uint16_t distance;
+    uint16_t literal_code;
+    uint8_t distance_code;
+};
+
 constexpr size_t BUFSIZE = 2056;
 constexpr size_t READSIZE = 2056;
 constexpr size_t BLOCKSIZE = 2056;
@@ -652,6 +665,9 @@ struct BlockResults {
     CodeLengths codelens;
     size_t hlit;
     size_t hdist;
+    std::vector<int> lit_codes;
+    std::vector<int> dst_vals;
+    std::vector<int> len_vals;
 };
 
 constexpr uint32_t update_hash(uint32_t current, char c) noexcept {
@@ -669,73 +685,127 @@ int longest_match(const char* wnd, const char* str, const char* const end) {
     return p2 - str;
 }
 
-// TODO: make this a table based lookup
-int get_length_code(int length) {
-    if (length <= 10) {
-        return length + 254;
-    } else if (length <= 12) {
-        return 265;
-    } else if (length <= 14) {
-        return 266;
-    } else if (length <= 16) {
-        return 267;
-    } else if (length <= 18) {
-        return 268;
-    } else if (length <= 22) {
-        return 269;
-    } else if (length <= 26) {
-        return 270;
-    } else if (length <= 30) {
-        return 271;
-    } else if (length <= 34) {
-        return 272;
-    } else if (length <= 42) {
-        return 273;
-    } else if (length <= 50) {
-        return 274;
-    } else if (length <= 58) {
-        return 275;
-    } else if (length <= 66) {
-        return 276;
-    } else if (length <= 82) {
-        return 277;
-    } else if (length <= 98) {
-        return 278;
-    } else if (length <= 114) {
-        return 279;
-    } else if (length <= 130) {
-        return 280;
-    } else if (length <= 162) {
-        return 281;
-    } else if (length <= 194) {
-        return 282;
-    } else if (length <= 226) {
-        return 283;
-    } else if (length <= 257) {
-        return 284;
-    } else if (length == 285) {
-        return 258;
-    } else {
-        xassert(0, "invalid length: %d", length);
-        return -1;
-    }
-}
+struct LenDstInfo {
+    int code;
+    int extra_bits;
+    int start; // inclusive
+    int stop;  // inclusive
+};
+constexpr LenDstInfo length_info[] = {
+    { 257,   0,     3,   3, },
+    { 258,   0,     4,   4, },
+    { 259,   0,     5,   5, },
+    { 260,   0,     6,   6, },
+    { 261,   0,     7,   7, },
+    { 262,   0,     8,   8, },
+    { 263,   0,     9,   9, },
+    { 264,   0,    10,  10, },
+    { 265,   1,    11,  12, },
+    { 266,   1,    13,  14, },
+    { 267,   1,    15,  16, },
+    { 268,   1,    17,  18, },
+    { 269,   2,    19,  22, },
+    { 270,   2,    23,  26, },
+    { 271,   2,    27,  30, },
+    { 272,   2,    31,  34, },
+    { 273,   3,    35,  42, },
+    { 274,   3,    43,  50, },
+    { 275,   3,    51,  58, },
+    { 276,   3,    59,  66, },
+    { 277,   4,    67,  82, },
+    { 278,   4,    83,  98, },
+    { 279,   4,    99, 114, },
+    { 280,   4,   115, 130, },
+    { 281,   5,   131, 162, },
+    { 282,   5,   163, 194, },
+    { 283,   5,   195, 226, },
+    { 284,   5,   227, 257, },
+    { 285,   0,   258, 258, },
+};
+constexpr LenDstInfo distance_info[] = {
+    {  0,    0,       1,     1, },
+    {  1,    0,       2,     2, },
+    {  2,    0,       3,     3, },
+    {  3,    0,       4,     4, },
+    {  4,    1,       5,     6, },
+    {  5,    1,       7,     8, },
+    {  6,    2,       9,    12, },
+    {  7,    2,      13,    16, },
+    {  8,    3,      17,    24, },
+    {  9,    3,      25,    32, },
+    { 10,    4,      33,    48, },
+    { 11,    4,      49,    64, },
+    { 12,    5,      65,    96, },
+    { 13,    5,      97,   128, },
+    { 14,    6,     129,   192, },
+    { 15,    6,     193,   256, },
+    { 16,    7,     257,   384, },
+    { 17,    7,     385,   512, },
+    { 18,    8,     513,   768, },
+    { 19,    8,     769,  1024, },
+    { 20,    9,    1025,  1536, },
+    { 21,    9,    1537,  2048, },
+    { 22,   10,    2049,  3072, },
+    { 23,   10,    3073,  4096, },
+    { 24,   11,    4097,  6144, },
+    { 25,   11,    6145,  8192, },
+    { 26,   12,    8193, 12288, },
+    { 27,   12,   12289, 16384, },
+    { 28,   13,   16385, 24576, },
+    { 29,   13,   24577, 32768, },
+};
 
-int get_distance_code(int distance) {
-    std::vector<int> table = {
-        1,   2,   3,   4,   6,    8,    12,   16,   24,   32,   48,   64,    96,    128,   192,
-        256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768,
-    };
-    for (size_t i = 0; i < table.size(); ++i) {
-        if (distance <= table[i]) {
-            return i;
+int get_len_dst_code(int value, const LenDstInfo* info, size_t n_info) {
+    for (size_t i = 0; i < n_info; ++i) {
+        if (info[i].start <= value && value <= info[i].stop) {
+            return info[i].code;
         }
     }
-    xassert(0, "invalid distance: %d", distance);
+    xassert(0, "invalid value: %d", value);
     return -1;
+}
+int get_len_dst_base(int value, const LenDstInfo* info, size_t n_info) {
+    for (size_t i = 0; i < n_info; ++i) {
+        if (info[i].start <= value && value <= info[i].stop) {
+            return info[i].start;
+        }
+    }
+    xassert(0, "invalid value: %d", value);
+    return -1;
+}
+int get_len_dst_extra_bits(int value, const LenDstInfo* info, size_t n_info) {
+    for (size_t i = 0; i < n_info; ++i) {
+        if (info[i].start <= value && value <= info[i].stop) {
+            return info[i].extra_bits;
+        }
+    }
+    xassert(0, "invalid value: %d", value);
+    return -1;
+}
+int get_length_code(int length) {
+    return get_len_dst_code(length, length_info, ARRSIZE(length_info));
+}
+int get_length_base(int length) {
+    return get_len_dst_base(length, length_info, ARRSIZE(length_info));
+}
+int get_length_extra_bits(int length) {
+    return get_len_dst_extra_bits(length, length_info, ARRSIZE(length_info));
+}
+int get_distance_code(int distance) {
+    return get_len_dst_code(distance, distance_info, ARRSIZE(distance_info));
+}
+int get_distance_base(int distance) {
+    return get_len_dst_base(distance, distance_info, ARRSIZE(distance_info));
+}
+int get_distance_extra_bits(int distance) {
+    return get_len_dst_extra_bits(distance, distance_info, ARRSIZE(distance_info));
 }
 
 BlockResults analyze_block(const char* const buf, size_t size) {
+    std::vector<int> lit_codes;
+    std::vector<int> len_vals;
+    std::vector<int> dst_vals;
+
     std::map<uint32_t, std::vector<int>> htable;
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
@@ -766,17 +836,26 @@ BlockResults analyze_block(const char* const buf, size_t size) {
             DEBUG("!!! Found match: len=%d dist=%d for \"%c%c%c\" === \"%s\"", length, distance, pp[0], pp[1], pp[2],
                   match.c_str());
             i += length;
-            lit_counts[get_length_code(length)]++;
-            dst_counts[get_distance_code(distance)]++;
+            lit_codes.push_back(get_length_code(length));
+            len_vals.push_back(length);
+            dst_vals.push_back(distance);
+            lit_counts[lit_codes.back()]++;
+            dst_counts[get_distance_code(dst_vals.back())]++;
         } else {
             int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
-            lit_counts[value]++;
+            lit_codes.push_back(value);
+            len_vals.push_back(0);
+            dst_vals.push_back(0);
+            lit_counts[lit_codes.back()]++;
             i += 1;
         }
     }
     for (; i < size; ++i) {
         int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
-        lit_counts[value]++;
+        lit_codes.push_back(value);
+        len_vals.push_back(0);
+        dst_vals.push_back(0);
+        lit_counts[lit_codes.back()]++;
     }
     // TODO: remove this, shouldn't do dynamic encoding if the input is empty
     // edge case for when input is empty
@@ -784,7 +863,15 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         assert(size == 0u);
         lit_counts[0] = 1;
     }
-    lit_counts[256] = 1;  // must have code for END_BLOCK
+    // must have code for END_BLOCK
+    lit_codes.push_back(256);
+    dst_vals.push_back(0);
+    len_vals.push_back(0);
+    lit_counts[lit_codes.back()] = 1;
+
+    assert(lit_codes.size() == dst_vals.size());
+    assert(lit_codes.size() == len_vals.size());
+
     auto lit_tree = construct_huffman_tree(lit_counts);
     printf("--- LIT BLOCK ENCODING ---\n");
     for (auto&& [value, codelen] : lit_tree) {
@@ -849,14 +936,14 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         codelens[value] = codelen;
     }
     assert(codelens[256] != 0);
-    return {codelens, hlit, hdist};
+    return {codelens, hlit, hdist, lit_codes, len_vals, dst_vals};
 }
 
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
     DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
-    auto&& [codelens, hlit, hdist] = analyze_block(buf, size);
-    auto lits = init_huffman_tree(&codelens[0], hlit);
-    auto dsts = init_huffman_tree(&codelens[hlit], hdist);
+    auto&& [codelens, hlit, hdist, lit_codes, dst_vals, len_vals] = analyze_block(buf, size);
+    auto lits_htree = init_huffman_tree(&codelens[0], hlit);
+    auto dsts_htree = init_huffman_tree(&codelens[hlit], hdist);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto htree_length_data = make_header_tree_length_data(htree);
     auto hclen = htree_length_data.size();
@@ -910,25 +997,45 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         }
     }
 
-    // huffman data
-    for (const char *p = buf, *end = buf + size; p != end; ++p) {
-        auto val = static_cast<uint16_t>(*reinterpret_cast<const uint8_t*>(p));
-        auto it = lits.find(val);
-        xassert(it != lits.end(), "no code for %u (%c)", val, *p);
-        auto&& [code, n_bits] = it->second;
-        // DEBUG("Writing val=%u (%c) code=0x%02x bits=%u", val, safelit(val), code, n_bits);
-        out.write_bits(code, n_bits);
-    }
+    assert(!lit_codes.empty());
+    assert(lit_codes.size() == dst_vals.size());
+    for (size_t i = 0; i < lit_codes.size(); ++i) {
+        auto lit_code = lit_codes[i];
+        xassert(0 <= lit_code && lit_code <= 285, "invalid literal: %u", lit_code);
+        auto lit_it = lits_htree.find(lit_code);
+        xassert(lit_it != lits_htree.end(), "no code for %u (%c)", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?');
+        auto&& [lit_bit_code, lit_n_bits] = lit_it->second;
+        assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
+        out.write_bits(static_cast<uint16_t>(lit_bit_code), lit_n_bits);
+        if (lit_code >= 257) {
+            int length = len_vals[i];
+            xassert(length != 0, "invalid length: %d", length);
+            int length_base = get_length_base(length);
+            int length_extra = length - length_base;
+            int length_extra_bits = get_length_extra_bits(length);
+            xassert(length_extra >= 0, "invalid length extra: %d", length_extra);
+            assert((length_extra >= 0) == (length_extra_bits >= 0));
+            if (length_extra > 0) {
+                out.write_bits(static_cast<uint16_t>(length_extra), length_extra_bits);
+            }
 
-    // end block marker
-    {
-        uint16_t val = 256;
-        auto it = lits.find(static_cast<uint16_t>(val));
-        assert(it != lits.end());
-        auto&& [code, n_bits] = it->second;
-        // DEBUG("value=%u code=0x%02x len=%u", val, code, n_bits);
-        // DEBUG("Writing val=%u (%c) code=0x%02x bits=%u", val, safelit(val), code, n_bits);
-        out.write_bits(code, n_bits);
+            int distance = dst_vals[i];
+            xassert(distance != 0, "invalid distance: %d", distance);
+            int dst_code = get_distance_code(distance);
+            xassert(0 <= dst_code && dst_code <= 29, "invalid distance code: %d", dst_code);
+            int distance_base = get_distance_base(distance);
+            int distance_extra = distance - distance_base;
+            int distance_extra_bits = get_distance_extra_bits(distance);
+            xassert(distance_extra >= 0, "invalid distance extra: %d", distance_extra);
+            assert((distance_extra >= 0) == (distance_extra_bits >= 0));
+            auto dst_it = dsts_htree.find(dst_code);
+            xassert(dst_it != dsts_htree.end(), "no code for %d", dst_code);
+            auto&& [dst_bit_code, dst_n_bits] = dst_it->second;
+            out.write_bits(static_cast<uint16_t>(dst_bit_code), dst_n_bits);
+            if (distance_extra > 0) {
+                out.write_bits(static_cast<uint16_t>(distance_extra), distance_extra_bits);
+            }
+        }
     }
 }
 
