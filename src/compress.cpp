@@ -685,6 +685,7 @@ int longest_match(const char* wnd, const char* str, const char* const end) {
     return p2 - str;
 }
 
+// clang-format off
 struct LenDstInfo {
     int code;
     int extra_bits;
@@ -754,6 +755,7 @@ constexpr LenDstInfo distance_info[] = {
     { 28,   13,   16385, 24576, },
     { 29,   13,   24577, 32768, },
 };
+// clang-format off
 
 int get_len_dst_code(int value, const LenDstInfo* info, size_t n_info) {
     for (size_t i = 0; i < n_info; ++i) {
@@ -832,9 +834,9 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         locs.push_back(i);
         if (length >= 3) {
             const char* pp = &buf[i - distance];
-            std::string match{pp, pp + length};
-            DEBUG("!!! Found match: len=%d dist=%d for \"%c%c%c\" === \"%s\"", length, distance, pp[0], pp[1], pp[2],
-                  match.c_str());
+            std::string m1{&buf[i-distance], &buf[i-distance+length]};
+            std::string m2{&buf[i], &buf[i+length]};
+            DEBUG("!!! Found match: len=%d dist=%d dstcode=%d for \"%s\" === \"%s\"", length, distance, get_distance_code(distance), m1.c_str(), m2.c_str());
             i += length;
             lit_codes.push_back(get_length_code(length));
             len_vals.push_back(length);
@@ -857,6 +859,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         dst_vals.push_back(0);
         lit_counts[lit_codes.back()]++;
     }
+
     // TODO: remove this, shouldn't do dynamic encoding if the input is empty
     // edge case for when input is empty
     if (lit_counts.empty()) {
@@ -936,7 +939,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         codelens[value] = codelen;
     }
     assert(codelens[256] != 0);
-    return {codelens, hlit, hdist, lit_codes, len_vals, dst_vals};
+    return {codelens, hlit, hdist, lit_codes, dst_vals, len_vals};
 }
 
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
@@ -1029,7 +1032,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
             xassert(distance_extra >= 0, "invalid distance extra: %d", distance_extra);
             assert((distance_extra >= 0) == (distance_extra_bits >= 0));
             auto dst_it = dsts_htree.find(dst_code);
-            xassert(dst_it != dsts_htree.end(), "no code for %d", dst_code);
+            xassert(dst_it != dsts_htree.end(), "no code for %d (dist=%d)", dst_code, distance);
             auto&& [dst_bit_code, dst_n_bits] = dst_it->second;
             out.write_bits(static_cast<uint16_t>(dst_bit_code), dst_n_bits);
             if (distance_extra > 0) {
