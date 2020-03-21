@@ -379,12 +379,12 @@ std::pair<Tree, Tree> init_fixed_huffman_data() noexcept {
 //  3. Everything else is least significant -> most significant
 
 struct BitWriter {
-    using Buffer = uint32_t;
+    using Buffer = uint16_t;
 
     BitWriter(FILE* fp) noexcept : out_{fp}, buff_{0}, bits_{0} {}
 
     void write_bits(uint16_t val, size_t n_bits) noexcept {
-        // DEBUG("Enter write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
+        DEBUG("Enter write_bits: val=%u n_bits=%2zu bits_=%2zu buff_=0x%08x", val, n_bits, bits_, buff_);
         assert(n_bits <= MaxBits);
         if (bits_ == BufferSizeInBits) {
             write_full_buffer();
@@ -441,7 +441,7 @@ struct BitWriter {
     size_t bits_ = 0;
     FILE* out_ = nullptr;
 
-    constexpr static size_t BufferSizeInBits = 32;
+    constexpr static size_t BufferSizeInBits = 16;
     static_assert((sizeof(Buffer) * CHAR_BIT) >= BufferSizeInBits);
 };
 
@@ -1008,6 +1008,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         auto lit_it = lits_htree.find(lit_code);
         xassert(lit_it != lits_htree.end(), "no code for %u (%c)", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?');
         auto&& [lit_bit_code, lit_n_bits] = lit_it->second;
+        DEBUG("huffman value: %d (%c) 0x%02x %d", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?', lit_bit_code, lit_n_bits);
         assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
         out.write_bits(static_cast<uint16_t>(lit_bit_code), lit_n_bits);
         if (lit_code >= 257) {
@@ -1034,10 +1035,19 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
             auto dst_it = dsts_htree.find(dst_code);
             xassert(dst_it != dsts_htree.end(), "no code for %d (dist=%d)", dst_code, distance);
             auto&& [dst_bit_code, dst_n_bits] = dst_it->second;
+            DEBUG("length_extra=%d length_extra_bits=%d, dst_bit_code=0x%02x dst_n_bits=%d", length_extra, length_extra_bits, dst_bit_code, dst_n_bits);
             out.write_bits(static_cast<uint16_t>(dst_bit_code), dst_n_bits);
             if (distance_extra > 0) {
                 out.write_bits(static_cast<uint16_t>(distance_extra), distance_extra_bits);
             }
+            DEBUG("length=%d distance=%d distance_base=%d distance_extra=%d distance_extra_bits=%d",
+                    length, distance, distance_base, distance_extra, distance_extra_bits);
+            // DEBUG("len=%d len_code=%d dst=%d dst_code=%d "
+            //       "len_base=%d len_extra=%d len_bits=%d "
+            //       "dst_base=%d dst_extra=%d dst_extra_bits=%d",
+            //       length, lit_code, distance, dst_code,
+            //       length_base, length_extra, length_extra_bits,
+            //       distance_base, distance_extra, distance_extra_bits);
         }
     }
 }

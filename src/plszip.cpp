@@ -284,6 +284,8 @@ static void windowAdd(internal_state *s, const Bytef *buf, int n) {
 }
 
 static bool checkDistance(const internal_state *s, size_t distance) {
+    assert(distance <= s->wnd_size);
+    assert(distance <= s->wnd_mask);
     return distance <= s->wnd_size && distance <= s->wnd_mask;
 }
 
@@ -856,6 +858,7 @@ int PLS_inflate(z_streamp strm, int flush) {
             panic(Z_STREAM_ERROR, "invalid huffman code", "invalid bit sequence: 0x%04lx length=%u",
                   PEEKBITS(state->litmaxbits), state->litmaxbits);
         }
+        DEBUG("HUFFMAN_READ: %u", value); // TEMP TEMP TEMP
         if (value < 256) {
             if (avail_out == 0) {
                 goto exit;
@@ -889,6 +892,7 @@ int PLS_inflate(z_streamp strm, int flush) {
             DROPBITS(state->litlens[value]);
             assert(257 <= value && value <= 285);
             state->lencode = static_cast<uint16_t>(value - 257);
+            DEBUG("HUFFMAN_READ state->lencode=%u", state->lencode); // TEMP TEMP TEMP
             assert(state->lencode < ARRSIZE(LengthBases));
             assert(state->lencode < ARRSIZE(LengthExtraBits));
             mode = HUFFMAN_LENGTH_CODE;
@@ -903,6 +907,7 @@ int PLS_inflate(z_streamp strm, int flush) {
         extra = LengthExtraBits[state->lencode];
         NEEDBITS(extra);
         state->length = static_cast<uint16_t>(LengthBases[state->lencode] + PEEKBITS(extra));
+        DEBUG("HUFFMAN_LENGTH_CODE extra=%u state->length=%u", extra, state->length); // TEMP TEMP TEMP
         DROPBITS(extra);
         mode = READ_HUFFMAN_DISTANCE_CODE;
         goto read_huffman_distance_code;
@@ -920,6 +925,7 @@ int PLS_inflate(z_streamp strm, int flush) {
             panic(Z_STREAM_ERROR, "invalid distance code", "invalid distance code: %u", value);
         }
         state->dstcode = value;
+        DEBUG("READ_HUFFMAN_DISTANCE_CODE state->dstcode: %u", state->dstcode); // TEMP TEMP TEMP
         mode = HUFFMAN_DISTANCE_CODE;
         goto huffman_distance_code;
         break;
@@ -929,6 +935,7 @@ int PLS_inflate(z_streamp strm, int flush) {
         NEEDBITS(extra);
         size_t distance = DISTANCE_BASES[state->dstcode] + PEEKBITS(extra);
         DROPBITS(extra);
+        DEBUG("HUFFMAN_DISTANCE_CODE extra=%u distance=%zu", extra, distance); // TEMP TEMP TEMP
         if (!checkDistance(state, distance)) {
             panic(Z_STREAM_ERROR, "invalid distance", "invalid distance %zu", distance);
         }
