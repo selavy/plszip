@@ -81,6 +81,132 @@ uint32_t calc_crc32(uint32_t crc, const char* buf, size_t len) {
     return crc ^ 0xffffffffUL;
 }
 
+// clang-format off
+struct LenDstInfo {
+    int code;
+    int extra_bits;
+    int start; // inclusive
+    int stop;  // inclusive
+};
+constexpr LenDstInfo length_info[] = {
+    { 257,   0,     3,   3, },
+    { 258,   0,     4,   4, },
+    { 259,   0,     5,   5, },
+    { 260,   0,     6,   6, },
+    { 261,   0,     7,   7, },
+    { 262,   0,     8,   8, },
+    { 263,   0,     9,   9, },
+    { 264,   0,    10,  10, },
+    { 265,   1,    11,  12, },
+    { 266,   1,    13,  14, },
+    { 267,   1,    15,  16, },
+    { 268,   1,    17,  18, },
+    { 269,   2,    19,  22, },
+    { 270,   2,    23,  26, },
+    { 271,   2,    27,  30, },
+    { 272,   2,    31,  34, },
+    { 273,   3,    35,  42, },
+    { 274,   3,    43,  50, },
+    { 275,   3,    51,  58, },
+    { 276,   3,    59,  66, },
+    { 277,   4,    67,  82, },
+    { 278,   4,    83,  98, },
+    { 279,   4,    99, 114, },
+    { 280,   4,   115, 130, },
+    { 281,   5,   131, 162, },
+    { 282,   5,   163, 194, },
+    { 283,   5,   195, 226, },
+    { 284,   5,   227, 257, },
+    { 285,   0,   258, 258, },
+};
+constexpr LenDstInfo distance_info[] = {
+    {  0,    0,       1,     1, },
+    {  1,    0,       2,     2, },
+    {  2,    0,       3,     3, },
+    {  3,    0,       4,     4, },
+    {  4,    1,       5,     6, },
+    {  5,    1,       7,     8, },
+    {  6,    2,       9,    12, },
+    {  7,    2,      13,    16, },
+    {  8,    3,      17,    24, },
+    {  9,    3,      25,    32, },
+    { 10,    4,      33,    48, },
+    { 11,    4,      49,    64, },
+    { 12,    5,      65,    96, },
+    { 13,    5,      97,   128, },
+    { 14,    6,     129,   192, },
+    { 15,    6,     193,   256, },
+    { 16,    7,     257,   384, },
+    { 17,    7,     385,   512, },
+    { 18,    8,     513,   768, },
+    { 19,    8,     769,  1024, },
+    { 20,    9,    1025,  1536, },
+    { 21,    9,    1537,  2048, },
+    { 22,   10,    2049,  3072, },
+    { 23,   10,    3073,  4096, },
+    { 24,   11,    4097,  6144, },
+    { 25,   11,    6145,  8192, },
+    { 26,   12,    8193, 12288, },
+    { 27,   12,   12289, 16384, },
+    { 28,   13,   16385, 24576, },
+    { 29,   13,   24577, 32768, },
+};
+// clang-format off
+
+int get_len_dst_code(int value, const LenDstInfo* info, size_t n_info) {
+    for (size_t i = 0; i < n_info; ++i) {
+        if (info[i].start <= value && value <= info[i].stop) {
+            return info[i].code;
+        }
+    }
+    xassert(0, "invalid value: %d", value);
+    return -1;
+}
+
+int get_len_dst_base(int value, const LenDstInfo* info, size_t n_info) {
+    for (size_t i = 0; i < n_info; ++i) {
+        if (info[i].start <= value && value <= info[i].stop) {
+            return info[i].start;
+        }
+    }
+    xassert(0, "invalid value: %d", value);
+    return -1;
+}
+
+int get_len_dst_extra_bits(int value, const LenDstInfo* info, size_t n_info) {
+    for (size_t i = 0; i < n_info; ++i) {
+        if (info[i].start <= value && value <= info[i].stop) {
+            return info[i].extra_bits;
+        }
+    }
+    xassert(0, "invalid value: %d", value);
+    return -1;
+}
+
+int get_length_code(int length) {
+    return get_len_dst_code(length, length_info, ARRSIZE(length_info));
+}
+
+int get_length_base(int length) {
+    return get_len_dst_base(length, length_info, ARRSIZE(length_info));
+}
+
+int get_length_extra_bits(int length) {
+    return get_len_dst_extra_bits(length, length_info, ARRSIZE(length_info));
+}
+
+int get_distance_code(int distance) {
+    return get_len_dst_code(distance, distance_info, ARRSIZE(distance_info));
+}
+
+int get_distance_base(int distance) {
+    return get_len_dst_base(distance, distance_info, ARRSIZE(distance_info));
+}
+
+int get_distance_extra_bits(int distance) {
+    return get_len_dst_extra_bits(distance, distance_info, ARRSIZE(distance_info));
+}
+
 uint8_t ID1_GZIP = 31;
 uint8_t ID2_GZIP = 139;
 uint8_t CM_DEFLATE = 8;
@@ -384,7 +510,7 @@ struct BitWriter {
     BitWriter(FILE* fp) noexcept : out_{fp}, buff_{0}, bits_{0} {}
 
     void write_bits(uint16_t val, size_t n_bits) noexcept {
-        DEBUG("Enter write_bits: val=%u n_bits=%2zu bits_=%2zu buff_=0x%08x", val, n_bits, bits_, buff_);
+        // DEBUG("Enter write_bits: val=%u n_bits=%2zu bits_=%2zu buff_=0x%08x", val, n_bits, bits_, buff_);
         assert(n_bits <= MaxBits);
         if (bits_ == BufferSizeInBits) {
             write_full_buffer();
@@ -457,6 +583,45 @@ void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, Bi
     out.write(&len, sizeof(len));
     out.write(&nlen, sizeof(nlen));
     out.write(&buffer[0], size);
+}
+
+void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, const std::vector<int>& lens,
+                 const Tree& lit_tree, const Tree& dst_tree, BitWriter& out) {
+    assert(lits.size() == dsts.size() && lits.size() == lens.size());
+    for (size_t i = 0; i < lits.size(); ++i) {
+        auto lit = lits[i];
+        xassert(0 <= lit && lit <= 285, "invalid literal: %d", lit);
+        auto lit_iter = lit_tree.find(lit);
+        xassert(lit_iter != lit_tree.end(), "invalid literal: %d", lit);
+        auto&& [lit_huff_code, lit_n_bits] = lit_iter->second;
+        assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
+        out.write_bits(static_cast<uint16_t>(lit_huff_code), lit_n_bits);
+        if (lit >= 257) {
+            auto len = lens[i];
+            auto len_base = get_length_base(len);
+            auto len_extra = len - len_base;
+            assert(len_extra >= 0);
+            auto len_extra_bits = get_length_extra_bits(len);
+            if (len_extra > 0) {
+                out.write_bits(static_cast<uint16_t>(len_extra), len_extra_bits);
+            }
+
+            auto dst = dsts[i];
+            auto dst_code = get_distance_code(dst);
+            auto dst_iter = dst_tree.find(dst_code);
+            xassert(dst_iter != dst_tree.end(), "invalid distance: %d", dst_code);
+            auto&& [dst_huff_code, dst_n_bits] = dst_iter->second;
+            out.write_bits(static_cast<uint16_t>(dst_huff_code), dst_n_bits);
+
+            auto dst_base = get_distance_base(dst);
+            auto dst_extra = dst - dst_base;
+            assert(dst_extra >= 0);
+            auto dst_extra_bits = get_distance_extra_bits(dst);
+            if (dst_extra > 0) {
+                out.write_bits(static_cast<uint16_t>(dst_extra), dst_extra_bits);
+            }
+        }
+    }
 }
 
 void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
@@ -685,123 +850,6 @@ int longest_match(const char* wnd, const char* str, const char* const end) {
     return p2 - str;
 }
 
-// clang-format off
-struct LenDstInfo {
-    int code;
-    int extra_bits;
-    int start; // inclusive
-    int stop;  // inclusive
-};
-constexpr LenDstInfo length_info[] = {
-    { 257,   0,     3,   3, },
-    { 258,   0,     4,   4, },
-    { 259,   0,     5,   5, },
-    { 260,   0,     6,   6, },
-    { 261,   0,     7,   7, },
-    { 262,   0,     8,   8, },
-    { 263,   0,     9,   9, },
-    { 264,   0,    10,  10, },
-    { 265,   1,    11,  12, },
-    { 266,   1,    13,  14, },
-    { 267,   1,    15,  16, },
-    { 268,   1,    17,  18, },
-    { 269,   2,    19,  22, },
-    { 270,   2,    23,  26, },
-    { 271,   2,    27,  30, },
-    { 272,   2,    31,  34, },
-    { 273,   3,    35,  42, },
-    { 274,   3,    43,  50, },
-    { 275,   3,    51,  58, },
-    { 276,   3,    59,  66, },
-    { 277,   4,    67,  82, },
-    { 278,   4,    83,  98, },
-    { 279,   4,    99, 114, },
-    { 280,   4,   115, 130, },
-    { 281,   5,   131, 162, },
-    { 282,   5,   163, 194, },
-    { 283,   5,   195, 226, },
-    { 284,   5,   227, 257, },
-    { 285,   0,   258, 258, },
-};
-constexpr LenDstInfo distance_info[] = {
-    {  0,    0,       1,     1, },
-    {  1,    0,       2,     2, },
-    {  2,    0,       3,     3, },
-    {  3,    0,       4,     4, },
-    {  4,    1,       5,     6, },
-    {  5,    1,       7,     8, },
-    {  6,    2,       9,    12, },
-    {  7,    2,      13,    16, },
-    {  8,    3,      17,    24, },
-    {  9,    3,      25,    32, },
-    { 10,    4,      33,    48, },
-    { 11,    4,      49,    64, },
-    { 12,    5,      65,    96, },
-    { 13,    5,      97,   128, },
-    { 14,    6,     129,   192, },
-    { 15,    6,     193,   256, },
-    { 16,    7,     257,   384, },
-    { 17,    7,     385,   512, },
-    { 18,    8,     513,   768, },
-    { 19,    8,     769,  1024, },
-    { 20,    9,    1025,  1536, },
-    { 21,    9,    1537,  2048, },
-    { 22,   10,    2049,  3072, },
-    { 23,   10,    3073,  4096, },
-    { 24,   11,    4097,  6144, },
-    { 25,   11,    6145,  8192, },
-    { 26,   12,    8193, 12288, },
-    { 27,   12,   12289, 16384, },
-    { 28,   13,   16385, 24576, },
-    { 29,   13,   24577, 32768, },
-};
-// clang-format off
-
-int get_len_dst_code(int value, const LenDstInfo* info, size_t n_info) {
-    for (size_t i = 0; i < n_info; ++i) {
-        if (info[i].start <= value && value <= info[i].stop) {
-            return info[i].code;
-        }
-    }
-    xassert(0, "invalid value: %d", value);
-    return -1;
-}
-int get_len_dst_base(int value, const LenDstInfo* info, size_t n_info) {
-    for (size_t i = 0; i < n_info; ++i) {
-        if (info[i].start <= value && value <= info[i].stop) {
-            return info[i].start;
-        }
-    }
-    xassert(0, "invalid value: %d", value);
-    return -1;
-}
-int get_len_dst_extra_bits(int value, const LenDstInfo* info, size_t n_info) {
-    for (size_t i = 0; i < n_info; ++i) {
-        if (info[i].start <= value && value <= info[i].stop) {
-            return info[i].extra_bits;
-        }
-    }
-    xassert(0, "invalid value: %d", value);
-    return -1;
-}
-int get_length_code(int length) {
-    return get_len_dst_code(length, length_info, ARRSIZE(length_info));
-}
-int get_length_base(int length) {
-    return get_len_dst_base(length, length_info, ARRSIZE(length_info));
-}
-int get_length_extra_bits(int length) {
-    return get_len_dst_extra_bits(length, length_info, ARRSIZE(length_info));
-}
-int get_distance_code(int distance) {
-    return get_len_dst_code(distance, distance_info, ARRSIZE(distance_info));
-}
-int get_distance_base(int distance) {
-    return get_len_dst_base(distance, distance_info, ARRSIZE(distance_info));
-}
-int get_distance_extra_bits(int distance) {
-    return get_len_dst_extra_bits(distance, distance_info, ARRSIZE(distance_info));
-}
 
 BlockResults analyze_block(const char* const buf, size_t size) {
     std::vector<int> lit_codes;
@@ -1000,56 +1048,57 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         }
     }
 
-    assert(!lit_codes.empty());
-    assert(lit_codes.size() == dst_vals.size());
-    for (size_t i = 0; i < lit_codes.size(); ++i) {
-        auto lit_code = lit_codes[i];
-        xassert(0 <= lit_code && lit_code <= 285, "invalid literal: %u", lit_code);
-        auto lit_it = lits_htree.find(lit_code);
-        xassert(lit_it != lits_htree.end(), "no code for %u (%c)", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?');
-        auto&& [lit_bit_code, lit_n_bits] = lit_it->second;
-        DEBUG("huffman value: %d (%c) 0x%02x %d", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?', lit_bit_code, lit_n_bits);
-        assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
-        out.write_bits(static_cast<uint16_t>(lit_bit_code), lit_n_bits);
-        if (lit_code >= 257) {
-            int length = len_vals[i];
-            xassert(length != 0, "invalid length: %d", length);
-            int length_base = get_length_base(length);
-            int length_extra = length - length_base;
-            int length_extra_bits = get_length_extra_bits(length);
-            xassert(length_extra >= 0, "invalid length extra: %d", length_extra);
-            assert((length_extra >= 0) == (length_extra_bits >= 0));
-            if (length_extra > 0) {
-                out.write_bits(static_cast<uint16_t>(length_extra), length_extra_bits);
-            }
+    write_block(lit_codes, dst_vals, len_vals, lits_htree, dsts_htree, out);
 
-            int distance = dst_vals[i];
-            xassert(distance != 0, "invalid distance: %d", distance);
-            int dst_code = get_distance_code(distance);
-            xassert(0 <= dst_code && dst_code <= 29, "invalid distance code: %d", dst_code);
-            int distance_base = get_distance_base(distance);
-            int distance_extra = distance - distance_base;
-            int distance_extra_bits = get_distance_extra_bits(distance);
-            xassert(distance_extra >= 0, "invalid distance extra: %d", distance_extra);
-            assert((distance_extra >= 0) == (distance_extra_bits >= 0));
-            auto dst_it = dsts_htree.find(dst_code);
-            xassert(dst_it != dsts_htree.end(), "no code for %d (dist=%d)", dst_code, distance);
-            auto&& [dst_bit_code, dst_n_bits] = dst_it->second;
-            DEBUG("length_extra=%d length_extra_bits=%d, dst_bit_code=0x%02x dst_n_bits=%d", length_extra, length_extra_bits, dst_bit_code, dst_n_bits);
-            out.write_bits(static_cast<uint16_t>(dst_bit_code), dst_n_bits);
-            if (distance_extra > 0) {
-                out.write_bits(static_cast<uint16_t>(distance_extra), distance_extra_bits);
-            }
-            DEBUG("length=%d distance=%d distance_base=%d distance_extra=%d distance_extra_bits=%d",
-                    length, distance, distance_base, distance_extra, distance_extra_bits);
-            // DEBUG("len=%d len_code=%d dst=%d dst_code=%d "
-            //       "len_base=%d len_extra=%d len_bits=%d "
-            //       "dst_base=%d dst_extra=%d dst_extra_bits=%d",
-            //       length, lit_code, distance, dst_code,
-            //       length_base, length_extra, length_extra_bits,
-            //       distance_base, distance_extra, distance_extra_bits);
-        }
-    }
+    // assert(!lit_codes.empty());
+    // assert(lit_codes.size() == dst_vals.size());
+    // for (size_t i = 0; i < lit_codes.size(); ++i) {
+    //     auto lit_code = lit_codes[i];
+    //     xassert(0 <= lit_code && lit_code <= 285, "invalid literal: %u", lit_code);
+    //     auto lit_it = lits_htree.find(lit_code);
+    //     xassert(lit_it != lits_htree.end(), "no code for %u (%c)", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?');
+    //     auto&& [lit_bit_code, lit_n_bits] = lit_it->second;
+    //     DEBUG("huffman value: %d (%c) 0x%02x %d", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?', lit_bit_code, lit_n_bits);
+    //     assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
+    //     out.write_bits(static_cast<uint16_t>(lit_bit_code), lit_n_bits);
+    //     if (lit_code >= 257) {
+    //         int length = len_vals[i];
+    //         xassert(length != 0, "invalid length: %d", length);
+    //         int length_base = get_length_base(length);
+    //         int length_extra = length - length_base;
+    //         int length_extra_bits = get_length_extra_bits(length);
+    //         xassert(length_extra >= 0, "invalid length extra: %d", length_extra);
+    //         if (length_extra > 0) {
+    //             out.write_bits(static_cast<uint16_t>(length_extra), length_extra_bits);
+    //         }
+
+    //         int distance = dst_vals[i];
+    //         xassert(distance != 0, "invalid distance: %d", distance);
+    //         int dst_code = get_distance_code(distance);
+    //         xassert(0 <= dst_code && dst_code <= 29, "invalid distance code: %d", dst_code);
+    //         int distance_base = get_distance_base(distance);
+    //         int distance_extra = distance - distance_base;
+    //         int distance_extra_bits = get_distance_extra_bits(distance);
+    //         xassert(distance_extra >= 0, "invalid distance extra: %d", distance_extra);
+    //         assert((distance_extra >= 0) == (distance_extra_bits >= 0));
+    //         auto dst_it = dsts_htree.find(dst_code);
+    //         xassert(dst_it != dsts_htree.end(), "no code for %d (dist=%d)", dst_code, distance);
+    //         auto&& [dst_bit_code, dst_n_bits] = dst_it->second;
+    //         DEBUG("length_extra=%d length_extra_bits=%d, dst_bit_code=0x%02x dst_n_bits=%d", length_extra, length_extra_bits, dst_bit_code, dst_n_bits);
+    //         out.write_bits(static_cast<uint16_t>(dst_bit_code), dst_n_bits);
+    //         if (distance_extra > 0) {
+    //             out.write_bits(static_cast<uint16_t>(distance_extra), distance_extra_bits);
+    //         }
+    //         DEBUG("length=%d distance=%d distance_base=%d distance_extra=%d distance_extra_bits=%d",
+    //                 length, distance, distance_base, distance_extra, distance_extra_bits);
+    //         // DEBUG("len=%d len_code=%d dst=%d dst_code=%d "
+    //         //       "len_base=%d len_extra=%d len_bits=%d "
+    //         //       "dst_base=%d dst_extra=%d dst_extra_bits=%d",
+    //         //       length, lit_code, distance, dst_code,
+    //         //       length_base, length_extra, length_extra_bits,
+    //         //       distance_base, distance_extra, distance_extra_bits);
+    //     }
+    // }
 }
 
 int main(int argc, char** argv) {
