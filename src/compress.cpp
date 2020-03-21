@@ -992,113 +992,72 @@ BlockResults analyze_block(const char* const buf, size_t size) {
 
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
     DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
-    auto&& [codelens, hlit, hdist, lit_codes, dst_vals, len_vals] = analyze_block(buf, size);
-    auto lits_htree = init_huffman_tree(&codelens[0], hlit);
-    auto dsts_htree = init_huffman_tree(&codelens[hlit], hdist);
-    auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
-    auto htree_length_data = make_header_tree_length_data(htree);
-    auto hclen = htree_length_data.size();
-    xassert(257 <= hlit && hlit <= 286, "hlit = %zu", hlit);
-    xassert(1 <= hdist && hdist <= 32, "hdist = %zu", hdist);
-    xassert(4 <= hclen && hclen <= 19, "hclen = %zu", hclen);
+    auto&& [codelens, hlit, hdist, lits, dsts, lens] = analyze_block(buf, size);
+    auto&& [fixed_lits, fixed_dsts] = init_fixed_huffman_data();
 
-    DEBUG("hlit = %zu", hlit);
-    DEBUG("hdist = %zu", hdist);
-    DEBUG("hclen = %zu", hclen);
+    if (0) {
+        auto lits_htree = init_huffman_tree(&codelens[0], hlit);
+        auto dsts_htree = init_huffman_tree(&codelens[hlit], hdist);
+        auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
+        auto htree_length_data = make_header_tree_length_data(htree);
+        auto hclen = htree_length_data.size();
+        xassert(257 <= hlit && hlit <= 286, "hlit = %zu", hlit);
+        xassert(1 <= hdist && hdist <= 32, "hdist = %zu", hdist);
+        xassert(4 <= hclen && hclen <= 19, "hclen = %zu", hclen);
 
-    // TEMP TEMP
-    for (auto&& [value, code] : htree) {
-        DEBUG("value=%2u code=0x%02x codelen=%u", value, code.code, code.codelen);
-    }
+        DEBUG("hlit = %zu", hlit);
+        DEBUG("hdist = %zu", hdist);
+        DEBUG("hclen = %zu", hclen);
 
-    uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
-    out.write_bits(bfinal, 1);
-    out.write_bits(block_type, 2);
-    out.write_bits(hlit - 257, 5);
-    out.write_bits(hdist - 1, 5);
-    out.write_bits(hclen - 4, 4);
-
-    // header tree code lengths
-    for (auto codelen : htree_length_data) {
-        out.write_bits(codelen, 3);
-    }
-
-    // literal and distance code lengths
-    for (size_t i = 0; i < hcodes.size(); ++i) {
-        auto codelen = hcodes[i];
-        auto it = htree.find(codelen);
-        xassert(it != htree.end(), "no code for header lit value: %u", codelen);
-        auto&& [code, bits] = it->second;
-        out.write_bits(code, bits);
-        switch (codelen) {
-        case 16:
-            xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
-            out.write_bits(hextra[i] - 3, 2);
-            break;
-        case 17:
-            xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
-            out.write_bits(hextra[i] - 3, 3);
-            break;
-        case 18:
-            xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
-            out.write_bits(hextra[i] - 11, 7);
-            break;
-        default:
-            break;
+        // TEMP TEMP
+        for (auto&& [value, code] : htree) {
+            DEBUG("value=%2u code=0x%02x codelen=%u", value, code.code, code.codelen);
         }
+
+        uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
+        out.write_bits(bfinal, 1);
+        out.write_bits(block_type, 2);
+        out.write_bits(hlit - 257, 5);
+        out.write_bits(hdist - 1, 5);
+        out.write_bits(hclen - 4, 4);
+
+        // header tree code lengths
+        for (auto codelen : htree_length_data) {
+            out.write_bits(codelen, 3);
+        }
+
+        // literal and distance code lengths
+        for (size_t i = 0; i < hcodes.size(); ++i) {
+            auto codelen = hcodes[i];
+            auto it = htree.find(codelen);
+            xassert(it != htree.end(), "no code for header lit value: %u", codelen);
+            auto&& [code, bits] = it->second;
+            out.write_bits(code, bits);
+            switch (codelen) {
+                case 16:
+                    xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
+                    out.write_bits(hextra[i] - 3, 2);
+                    break;
+                case 17:
+                    xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
+                    out.write_bits(hextra[i] - 3, 3);
+                    break;
+                case 18:
+                    xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
+                    out.write_bits(hextra[i] - 11, 7);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        write_block(lits, dsts, lens, lits_htree, dsts_htree, out);
+    } else {
+        uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
+        out.write_bits(bfinal, 1);
+        out.write_bits(block_type, 2);
+        write_block(lits, dsts, lens, fixed_lits, fixed_dsts, out);
     }
-
-    write_block(lit_codes, dst_vals, len_vals, lits_htree, dsts_htree, out);
-
-    // assert(!lit_codes.empty());
-    // assert(lit_codes.size() == dst_vals.size());
-    // for (size_t i = 0; i < lit_codes.size(); ++i) {
-    //     auto lit_code = lit_codes[i];
-    //     xassert(0 <= lit_code && lit_code <= 285, "invalid literal: %u", lit_code);
-    //     auto lit_it = lits_htree.find(lit_code);
-    //     xassert(lit_it != lits_htree.end(), "no code for %u (%c)", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?');
-    //     auto&& [lit_bit_code, lit_n_bits] = lit_it->second;
-    //     DEBUG("huffman value: %d (%c) 0x%02x %d", lit_code, lit_code < 256 ? static_cast<char>(lit_code) : '?', lit_bit_code, lit_n_bits);
-    //     assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
-    //     out.write_bits(static_cast<uint16_t>(lit_bit_code), lit_n_bits);
-    //     if (lit_code >= 257) {
-    //         int length = len_vals[i];
-    //         xassert(length != 0, "invalid length: %d", length);
-    //         int length_base = get_length_base(length);
-    //         int length_extra = length - length_base;
-    //         int length_extra_bits = get_length_extra_bits(length);
-    //         xassert(length_extra >= 0, "invalid length extra: %d", length_extra);
-    //         if (length_extra > 0) {
-    //             out.write_bits(static_cast<uint16_t>(length_extra), length_extra_bits);
-    //         }
-
-    //         int distance = dst_vals[i];
-    //         xassert(distance != 0, "invalid distance: %d", distance);
-    //         int dst_code = get_distance_code(distance);
-    //         xassert(0 <= dst_code && dst_code <= 29, "invalid distance code: %d", dst_code);
-    //         int distance_base = get_distance_base(distance);
-    //         int distance_extra = distance - distance_base;
-    //         int distance_extra_bits = get_distance_extra_bits(distance);
-    //         xassert(distance_extra >= 0, "invalid distance extra: %d", distance_extra);
-    //         assert((distance_extra >= 0) == (distance_extra_bits >= 0));
-    //         auto dst_it = dsts_htree.find(dst_code);
-    //         xassert(dst_it != dsts_htree.end(), "no code for %d (dist=%d)", dst_code, distance);
-    //         auto&& [dst_bit_code, dst_n_bits] = dst_it->second;
-    //         DEBUG("length_extra=%d length_extra_bits=%d, dst_bit_code=0x%02x dst_n_bits=%d", length_extra, length_extra_bits, dst_bit_code, dst_n_bits);
-    //         out.write_bits(static_cast<uint16_t>(dst_bit_code), dst_n_bits);
-    //         if (distance_extra > 0) {
-    //             out.write_bits(static_cast<uint16_t>(distance_extra), distance_extra_bits);
-    //         }
-    //         DEBUG("length=%d distance=%d distance_base=%d distance_extra=%d distance_extra_bits=%d",
-    //                 length, distance, distance_base, distance_extra, distance_extra_bits);
-    //         // DEBUG("len=%d len_code=%d dst=%d dst_code=%d "
-    //         //       "len_base=%d len_extra=%d len_bits=%d "
-    //         //       "dst_base=%d dst_extra=%d dst_extra_bits=%d",
-    //         //       length, lit_code, distance, dst_code,
-    //         //       length_base, length_extra, length_extra_bits,
-    //         //       distance_base, distance_extra, distance_extra_bits);
-    //     }
-    // }
 }
 
 int main(int argc, char** argv) {
