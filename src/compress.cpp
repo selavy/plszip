@@ -75,6 +75,7 @@ constexpr size_t MaxNumCodes = LitCodes + DistCodes;
 constexpr size_t HeaderLengthBits = 3;
 constexpr size_t MaxHeaderCodeLength = 1u << HeaderLengthBits;
 constexpr size_t MaxMatchLength = 258;
+constexpr size_t MaxMatchDistance = 32768;
 
 // TODO: switch to MaxNumCodes
 // TODO: can definitely reduce this -- but do need it to work with fixed huffman? unless i'm just going to use the
@@ -845,19 +846,20 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     }
 
     size_t i = 0;
-    while (i < (size - 3)) {
-        assert(i + 2 < size);
+    while (i + 3 < size) {
+        xassert(i + 2 < size, "i=%zu size=%zu", i, size);
         h = update_hash(h, buf[i + 2]);
         auto& locs = htable[h];
         int length = 2;
         int distance = 0;
         for (int pos : locs) {
-            int match_length = longest_match(buf + pos, buf + i, buf + std::min(size, MaxMatchLength));
+            int match_length = longest_match(buf + pos, buf + i, buf + std::min(size, MaxMatchLength + 1));
             if (match_length > length) {
                 length = match_length;
                 distance = i - pos;
+                xassert(3 <= length && length <= MaxMatchLength, "invalid match length (too long): %d", length);
+                xassert(0 <= distance && distance <= MaxMatchDistance, "invalid distance (too far): %d", distance);
             }
-            xassert(match_length < MaxMatchLength, "invalid match length (too long): %d", match_length);
         }
         locs.push_back(i);
         if (length >= 3) {
