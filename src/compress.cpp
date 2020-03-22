@@ -73,6 +73,7 @@ constexpr size_t LitCodes = LiteralCodes + LengthCodes + 1;
 constexpr size_t DistCodes = 30;
 constexpr size_t MaxNumCodes = LitCodes + DistCodes;
 constexpr size_t HeaderLengthBits = 3;
+// TODO(peter): need to standardize if "MaxXXX" is inclusive or not
 constexpr size_t MaxHeaderCodeLength = 1u << HeaderLengthBits;
 constexpr size_t MaxMatchLength = 258;
 constexpr size_t MaxMatchDistance = 32768;
@@ -969,11 +970,15 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
     auto&& [codelens, hlit, hdist, lits, dsts, lens] = analyze_block(buf, size);
     auto&& [fixed_lits, fixed_dsts] = init_fixed_huffman_data();
+    auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
 
-    if (1) {
+    bool is_possible = std::all_of(htree.begin(), htree.end(),
+                                   [](std::pair<Value, Code> node) { return node.second.codelen < MaxHeaderCodeLength; });
+
+    if (is_possible) {
+        DEBUG("Using dynamic tree");
         auto lits_htree = init_huffman_tree(&codelens[0], hlit);
         auto dsts_htree = init_huffman_tree(&codelens[hlit], hdist);
-        auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
         auto htree_length_data = make_header_tree_length_data(htree);
         auto hclen = htree_length_data.size();
         xassert(257 <= hlit && hlit <= 286, "hlit = %zu", hlit);
@@ -1023,6 +1028,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
 
         write_block(lits, dsts, lens, lits_htree, dsts_htree, out);
     } else {
+        DEBUG("Using fixed tree");
         uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
