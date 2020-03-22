@@ -11,26 +11,6 @@
 #include <string>
 #include <vector>
 
-[[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
-    if (x < 256) {
-        if (x >= '!') {
-            return static_cast<char>(x);
-        } else {
-            return x == ' ' ? x : '*';
-        }
-    } else {
-        return '?';
-    }
-};
-
-[[maybe_unused]] auto bin = [](uint16_t code, size_t codelen) -> std::string {
-    std::string result;
-    for (int i = static_cast<int>(codelen) - 1; i >= 0; --i) {
-        result += (code & (1u << i)) != 0 ? '1' : '0';
-    }
-    return result;
-};
-
 #define panic(fmt, ...)                                   \
     do {                                                  \
         fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); \
@@ -67,14 +47,13 @@ constexpr size_t READSIZE = 2056;
 constexpr size_t BLOCKSIZE = 2056;
 constexpr uint16_t EmptySentinel = UINT16_MAX;
 constexpr size_t NumHeaderCodeLengths = 19;
-constexpr size_t LiteralCodes = 256;  // doesn't include END_BLOCK code
-constexpr size_t LengthCodes = 29;
+constexpr size_t LiteralCodes = 256;  // [0, 255] doesn't include END_BLOCK code
+constexpr size_t LengthCodes = 29;    // [257, 285]
 constexpr size_t LitCodes = LiteralCodes + LengthCodes + 1;
-constexpr size_t DistCodes = 30;
+constexpr size_t DistCodes = 30;      // [0, 29]
 constexpr size_t MaxNumCodes = LitCodes + DistCodes;
 constexpr size_t HeaderLengthBits = 3;
-// TODO(peter): need to standardize if "MaxXXX" is inclusive or not
-constexpr size_t MaxHeaderCodeLength = 1u << HeaderLengthBits;
+constexpr size_t MaxHeaderCodeLength = (1u << HeaderLengthBits) - 1;
 constexpr size_t MaxMatchLength = 258;
 constexpr size_t MaxMatchDistance = 32768;
 
@@ -796,7 +775,7 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
         auto it = tree.find(value);
         if (it != tree.end()) {
             auto codelen = it->second.codelen;
-            xassert(0 <= codelen && codelen < MaxHeaderCodeLength, "invalid header codelen: %u", codelen);
+            xassert(0 <= codelen && codelen <= MaxHeaderCodeLength, "invalid header codelen: %u", codelen);
             results[index] = codelen;
         }
     }
@@ -973,7 +952,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
 
     bool is_possible = std::all_of(htree.begin(), htree.end(),
-                                   [](std::pair<Value, Code> node) { return node.second.codelen < MaxHeaderCodeLength; });
+                                   [](std::pair<Value, Code> node) { return node.second.codelen <= MaxHeaderCodeLength; });
 
     if (is_possible) {
         DEBUG("Using dynamic tree");
