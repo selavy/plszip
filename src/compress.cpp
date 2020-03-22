@@ -334,7 +334,6 @@ std::map<int, int> count_values(const int* values, size_t n_values) {
 
 std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
     // TODO: max number of nodes is 2*N + 1?
-    printf("--- COUNTS ---\n");
     std::list<Node> pool;
     std::vector<Node*> nodes;
     for (auto&& [value, count] : counts) {
@@ -342,11 +341,7 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
         auto& n = pool.emplace_back(value, count);
         n.left = n.right = nullptr;
         nodes.push_back(&n);
-#if 0
-        printf("%d: %d\n", value, count);
-#endif
     }
-    printf("--- END COUNTS ---\n");
 
     auto&& pop_heap = [](std::vector<Node*>& nodes) {
         std::pop_heap(nodes.begin(), nodes.end(), NodeCmp{});
@@ -368,15 +363,6 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
 
     assert(nodes.size() == 1);
     assign_depth(nodes[0], 0);
-
-#if 0
-    printf("--- PRINT NODES ---\n");
-    for (auto&& node : pool) {
-        printf("(%d, %d) ", node.value, node.depth);
-    }
-    printf("\n");
-    printf("--- END PRINT NODES ---\n");
-#endif
 
     std::vector<TreeNode> result;
     for (auto&& node : pool) {
@@ -563,7 +549,6 @@ struct BitWriter {
 
     void flush() noexcept {
         auto n_bytes = (bits_ + 7) / 8;
-        // DEBUG("flush: bits_=%zu buff_=0x%08x n_bytes=%zu", bits_, buff_, n_bytes);
         xwrite(&buff_, 1, n_bytes, out_);
         buff_ = 0;
         bits_ = 0;
@@ -571,7 +556,6 @@ struct BitWriter {
 
     void write_full_buffer() noexcept {
         assert(bits_ == BufferSizeInBits);
-        // DEBUG("write_full_buffer: bits_=%zu buff_=0x%08x", bits_, buff_);
         xwrite(&buff_, sizeof(buff_), 1, out_);
         buff_ = 0;
         bits_ = 0;
@@ -659,15 +643,12 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         }
         auto&& [code, n_bits] = it->second;
         out.write_bits(code, n_bits);
-        // DEBUG("value(%c, %u) => code(0x%02x) len=%u, flipped=0x%02x", val, val, code, n_bits, flip_code(code,
-        // n_bits));
     }
     {
         auto it = lits.find(static_cast<uint16_t>(256));
         assert(it != lits.end());
         auto&& [code, n_bits] = it->second;
         out.write_bits(code, n_bits);
-        // DEBUG("value(%c) => code(0x%02x) len=%u, flipped=0x%02x", 256, code, n_bits, flip_code(code, n_bits));
     }
 }
 
@@ -958,7 +939,6 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     int max_lit_value = std::max_element(lit_tree.begin(), lit_tree.end(), [](TreeNode a, TreeNode b) {
                             return a.value < b.value;
                         })->value;
-    // DEBUG("max_lit_value: %d", max_lit_value);
     int max_dst_value = std::max_element(dst_tree.begin(), dst_tree.end(), [](TreeNode a, TreeNode b) {
                             return a.value < b.value;
                         })->value;
@@ -966,7 +946,6 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     // Ranges:
     // HLIT:  257 - 286
     // HDIST: 1 - 32
-
     size_t hlit = std::max(max_lit_value + 1, 257);
     size_t hdist = std::max(max_dst_value + 1, 1);
     assert(257 <= hlit && hlit <= 286);
@@ -1088,7 +1067,6 @@ int main(int argc, char** argv) {
     uint32_t mtime = 0;  // TODO: set mtime to seconds since epoch
     uint8_t xfl = 0;
     uint8_t os = 3;                                   // UNIX
-#if 1
     xwrite(&ID1_GZIP, sizeof(ID1_GZIP), 1, out);      // ID1
     xwrite(&ID2_GZIP, sizeof(ID2_GZIP), 1, out);      // ID2
     xwrite(&CM_DEFLATE, sizeof(CM_DEFLATE), 1, out);  // CM
@@ -1101,7 +1079,6 @@ int main(int argc, char** argv) {
     //   |...original file name, zero-terminated...| (more-->)
     //   +=========================================+
     xwrite(input_filename.c_str(), input_filename.size() + 1, 1, out);  // FNAME
-#endif
 
     uint32_t crc = calc_crc32(0, NULL, 0);
     // This contains the size of the original (uncompressed) input
@@ -1154,14 +1131,12 @@ int main(int argc, char** argv) {
     DEBUG("CRC32 = 0x%08x", crc);
     DEBUG("ISIZE = 0x%08x", isize);
 
-#if 1
     //   0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
     // |     CRC32     |     ISIZE     |
     // +---+---+---+---+---+---+---+---+
     xwrite(&crc, sizeof(crc), 1, out);      // CRC32
     xwrite(&isize, sizeof(isize), 1, out);  // ISIZE
-#endif
 
     return 0;
 }
