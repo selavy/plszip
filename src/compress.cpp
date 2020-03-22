@@ -627,25 +627,25 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
 }
 
 void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
-    auto&& [lits, dsts] = init_fixed_huffman_data();
+    auto&& [lit_tree, dst_tree] = init_fixed_huffman_data();
     uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
     out.write_bits(bfinal, 1);
     out.write_bits(block_type, 2);
+
+    std::vector<int> lits;
+    std::vector<int> dsts;
+    std::vector<int> lens;
     for (const char *p = buf, *end = buf + size; p != end; ++p) {
         auto val = static_cast<uint16_t>(*reinterpret_cast<const uint8_t*>(p));
-        auto it = lits.find(val);
-        if (it == lits.end()) {
-            panic("no code for literal: %c (%u)", val, val);
-        }
-        auto&& [code, n_bits] = it->second;
-        out.write_bits(code, n_bits);
+        lits.push_back(val);
+        dsts.push_back(0);
+        lens.push_back(0);
     }
-    {
-        auto it = lits.find(static_cast<uint16_t>(256));
-        assert(it != lits.end());
-        auto&& [code, n_bits] = it->second;
-        out.write_bits(code, n_bits);
-    }
+    lits.push_back(256);
+    dsts.push_back(0);
+    lens.push_back(0);
+
+    write_block(lits, dsts, lens, lit_tree, dst_tree, out);
 }
 
 CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
@@ -1084,9 +1084,9 @@ int main(int argc, char** argv) {
 #if 0
 #elif 0
     auto* compress_fn = &blkwrite_no_compression;
-#elif 0
-    auto* compress_fn = &blkwrite_fixed;
 #elif 1
+    auto* compress_fn = &blkwrite_fixed;
+#elif 0
     auto* compress_fn = &blkwrite_dynamic;
 #else
 #error "Must select an implementation"
