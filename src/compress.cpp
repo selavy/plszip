@@ -11,6 +11,26 @@
 #include <string>
 #include <vector>
 
+[[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
+    if (x < 256) {
+        if (x >= '!') {
+            return static_cast<char>(x);
+        } else {
+            return x == ' ' ? x : '*';
+        }
+    } else {
+        return '?';
+    }
+};
+
+[[maybe_unused]] auto bin = [](uint16_t code, size_t codelen) -> std::string {
+    std::string result;
+    for (int i = static_cast<int>(codelen) - 1; i >= 0; --i) {
+        result += (code & (1u << i)) != 0 ? '1' : '0';
+    }
+    return result;
+};
+
 #define panic(fmt, ...)                                   \
     do {                                                  \
         fprintf(stderr, "ERR: " fmt "\n", ##__VA_ARGS__); \
@@ -27,6 +47,9 @@
 
 #define DEBUG0(msg) fprintf(stderr, "DEBUG: " msg "\n");
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
+
+
+#define TRACE(fmt, ...) fprintf(stdout, "TRACE: " fmt "\n", ##__VA_ARGS__);
 
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
@@ -505,12 +528,13 @@ std::pair<Tree, Tree> init_fixed_huffman_data() noexcept {
 //  3. Everything else is least significant -> most significant
 
 struct BitWriter {
-    using Buffer = uint16_t;
+    using Buffer = uint32_t;
+    constexpr static size_t BufferSizeInBits = 32;
+    static_assert((sizeof(Buffer) * CHAR_BIT) >= BufferSizeInBits);
 
     BitWriter(FILE* fp) noexcept : out_{fp}, buff_{0}, bits_{0} {}
 
     void write_bits(uint16_t val, size_t n_bits) noexcept {
-        // DEBUG("Enter write_bits: val=%u n_bits=%2zu bits_=%2zu buff_=0x%08x", val, n_bits, bits_, buff_);
         assert(n_bits <= MaxBits);
         if (bits_ == BufferSizeInBits) {
             write_full_buffer();
@@ -530,7 +554,6 @@ struct BitWriter {
             bits_ += n2;
         }
         assert(bits_ <= BufferSizeInBits);
-        // DEBUG("Exit  write_bits: n_bits=%2zu bits_=%2zu buff_=0x%08x", n_bits, bits_, buff_);
     }
 
     void write(const void* p, size_t size) noexcept {
@@ -566,9 +589,6 @@ struct BitWriter {
     Buffer buff_ = 0;
     size_t bits_ = 0;
     FILE* out_ = nullptr;
-
-    constexpr static size_t BufferSizeInBits = 16;
-    static_assert((sizeof(Buffer) * CHAR_BIT) >= BufferSizeInBits);
 };
 
 void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out) {
@@ -602,12 +622,14 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
             auto len_extra = len - len_base;
             assert(len_extra >= 0);
             auto len_extra_bits = get_length_extra_bits(len);
-            if (len_extra > 0) {
+            if (len_extra_bits > 0) {
                 out.write_bits(static_cast<uint16_t>(len_extra), len_extra_bits);
             }
 
             auto dst = dsts[i];
+            xassert(1 <= dst && dst <= 32768, "invalid distance: %d", dst);
             auto dst_code = get_distance_code(dst);
+            xassert(0 <= dst_code && dst_code <= 29, "invalid distance code: %d", dst_code);
             auto dst_iter = dst_tree.find(dst_code);
             xassert(dst_iter != dst_tree.end(), "invalid distance: %d", dst_code);
             auto&& [dst_huff_code, dst_n_bits] = dst_iter->second;
@@ -617,7 +639,7 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
             auto dst_extra = dst - dst_base;
             assert(dst_extra >= 0);
             auto dst_extra_bits = get_distance_extra_bits(dst);
-            if (dst_extra > 0) {
+            if (dst_extra_bits > 0) {
                 out.write_bits(static_cast<uint16_t>(dst_extra), dst_extra_bits);
             }
         }
@@ -776,13 +798,6 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
 
     auto header_tree = construct_huffman_tree(count_values(codes.data(), codes.size()));
 
-    // TEMP TEMP
-    printf("--- HEADER ENCODING ---\n");
-    for (auto&& [value, bits] : header_tree) {
-        printf("%d: %d\n", value, bits);
-    }
-    printf("--- END HEADER ENCODING ---\n");
-
     CodeLengths header_codelens(NumHeaderCodeLengths, 0);
     assert(header_codelens.size() == NumHeaderCodeLengths);
     for (auto&& [value, bits] : header_tree) {
@@ -813,18 +828,6 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
     assert(4 <= results.size() && results.size() <= 19);
     return results;
 }
-
-[[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
-    if (x < 256) {
-        if (x >= '!') {
-            return static_cast<char>(x);
-        } else {
-            return x == ' ' ? x : '*';
-        }
-    } else {
-        return '?';
-    }
-};
 
 struct BlockResults {
     CodeLengths codelens;
@@ -881,10 +884,6 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         }
         locs.push_back(i);
         if (length >= 3) {
-            const char* pp = &buf[i - distance];
-            std::string m1{&buf[i-distance], &buf[i-distance+length]};
-            std::string m2{&buf[i], &buf[i+length]};
-            DEBUG("!!! Found match: len=%d dist=%d dstcode=%d for \"%s\" === \"%s\"", length, distance, get_distance_code(distance), m1.c_str(), m2.c_str());
             i += length;
             lit_codes.push_back(get_length_code(length));
             len_vals.push_back(length);
@@ -959,7 +958,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     int max_lit_value = std::max_element(lit_tree.begin(), lit_tree.end(), [](TreeNode a, TreeNode b) {
                             return a.value < b.value;
                         })->value;
-    DEBUG("max_lit_value: %d", max_lit_value);
+    // DEBUG("max_lit_value: %d", max_lit_value);
     int max_dst_value = std::max_element(dst_tree.begin(), dst_tree.end(), [](TreeNode a, TreeNode b) {
                             return a.value < b.value;
                         })->value;
@@ -1008,11 +1007,6 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         DEBUG("hlit = %zu", hlit);
         DEBUG("hdist = %zu", hdist);
         DEBUG("hclen = %zu", hclen);
-
-        // TEMP TEMP
-        for (auto&& [value, code] : htree) {
-            DEBUG("value=%2u code=0x%02x codelen=%u", value, code.code, code.codelen);
-        }
 
         uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
         out.write_bits(bfinal, 1);
@@ -1094,6 +1088,7 @@ int main(int argc, char** argv) {
     uint32_t mtime = 0;  // TODO: set mtime to seconds since epoch
     uint8_t xfl = 0;
     uint8_t os = 3;                                   // UNIX
+#if 1
     xwrite(&ID1_GZIP, sizeof(ID1_GZIP), 1, out);      // ID1
     xwrite(&ID2_GZIP, sizeof(ID2_GZIP), 1, out);      // ID2
     xwrite(&CM_DEFLATE, sizeof(CM_DEFLATE), 1, out);  // CM
@@ -1106,6 +1101,7 @@ int main(int argc, char** argv) {
     //   |...original file name, zero-terminated...| (more-->)
     //   +=========================================+
     xwrite(input_filename.c_str(), input_filename.size() + 1, 1, out);  // FNAME
+#endif
 
     uint32_t crc = calc_crc32(0, NULL, 0);
     // This contains the size of the original (uncompressed) input
@@ -1134,7 +1130,6 @@ int main(int argc, char** argv) {
         isize += read;
         size += read;
         if (size >= BLOCKSIZE) {
-            DEBUG("Calling compress on block of size: %zu", size);
             compress_fn(&buf[0], BLOCKSIZE, 0, writer);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
@@ -1152,7 +1147,6 @@ int main(int argc, char** argv) {
     // rare case that `size` == 0, and isize wraps to exactly 0, will write
     // an unnecessary empty block, but that is OK.
     if (size > 0 || isize == 0) {
-        DEBUG("Flushing final block size: %zu", size);
         compress_fn(&buf[0], size, 1, writer);
     }
     writer.flush();
@@ -1160,12 +1154,14 @@ int main(int argc, char** argv) {
     DEBUG("CRC32 = 0x%08x", crc);
     DEBUG("ISIZE = 0x%08x", isize);
 
+#if 1
     //   0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
     // |     CRC32     |     ISIZE     |
     // +---+---+---+---+---+---+---+---+
     xwrite(&crc, sizeof(crc), 1, out);      // CRC32
     xwrite(&isize, sizeof(isize), 1, out);  // ISIZE
+#endif
 
     return 0;
 }

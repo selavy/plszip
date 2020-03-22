@@ -30,8 +30,9 @@
             assert(0);                                           \
         }                                                        \
     } while (0)
-#define DEBUG(fmt, ...) fprintf(stderr, "DBG: " fmt "\n", ##__VA_ARGS__)
+#define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__)
 #endif
+#define TRACE(fmt, ...) fprintf(stdout, "TRACE: " fmt "\n", ##__VA_ARGS__);
 
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
@@ -477,9 +478,6 @@ void init_huffman_tree(HTree& tree)
         }
     }
 
-    // TEMP TEMP
-    DEBUG("--- Huffman Codes ---");
-
     // 4) Generate dense table. This means that can read `max_bit_length` bits at a
     // time, and do a lookup immediately; should then use `code_lengths` to
     // determine how many of the peek'd bits should be removed.
@@ -494,8 +492,6 @@ void init_huffman_tree(HTree& tree)
         code = static_cast<uint16_t>(code << empty_bits);
         uint16_t lowbits = static_cast<uint16_t>((1u << empty_bits) - 1);
         uint16_t maxcode = code | lowbits;
-        // TEMP TEMP
-        DEBUG("value=%2u code=0x%02x codelen=%u", value, flip_code(code, max_bit_length), codelen);
         while (code <= maxcode) {
             uint16_t flipped = flip_code(code, max_bit_length);
             xassert(tree.codes[flipped] == EmptySentinel, "reused index: %u", flipped);
@@ -504,11 +500,9 @@ void init_huffman_tree(HTree& tree)
         }
     }
     tree.maxlen = max_bit_length;
-    // TEMP TEMP
-    DEBUG("--- End Huffman Codes ---");
 }
 
-[[maybe_unused]] auto&& safelit = [](uint16_t x) -> char {
+[[maybe_unused]] auto safelit = [](uint16_t x) -> char {
     if (x < 256) {
         if (x >= '!') {
             return static_cast<char>(x);
@@ -520,7 +514,15 @@ void init_huffman_tree(HTree& tree)
     }
 };
 
-uint16_t read_huffman_value(BitReader& reader, HTree& tree)
+[[maybe_unused]] auto bin = [](uint16_t code, size_t codelen) -> std::string {
+    std::string result;
+    for (int i = static_cast<int>(codelen) - 1; i >= 0; --i) {
+        result += (code & (1u << i)) != 0 ? '1' : '0';
+    }
+    return result;
+};
+
+std::tuple<uint16_t, uint16_t, int> read_huffman_value2(BitReader& reader, HTree& tree)
 {
     reader.need(tree.maxlen);
     auto bits = reader.peek(tree.maxlen);
@@ -528,8 +530,14 @@ uint16_t read_huffman_value(BitReader& reader, HTree& tree)
     if (value == EmptySentinel)
         panic("invalid huffman bit pattern: 0x%04x (%zu bits)", bits, tree.maxlen);
     assert(0 <= value && value < tree.codelens.size());
-    // DEBUG("value=%u (%c) code=0x%04x len=%u", value, safelit(value), bits, tree.codelens[value]);
     reader.drop(tree.codelens[value]);
+    // TEMP
+    auto codelen = tree.codelens[value];
+    return std::make_tuple(value, bits & ((1u << codelen) - 1), codelen);
+}
+
+uint16_t read_huffman_value(BitReader& reader, HTree& htree) {
+    auto&& [value, code, codelen] = read_huffman_value2(reader, htree);
     return value;
 }
 
@@ -559,6 +567,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
 
     HTree header_tree;
     read_dynamic_header_tree(reader, hclen, header_tree);
+#if 0
     // TEMP TEMP
     {
         printf("--- DYNAMIC HEADER LENGTHS ---\n");
@@ -581,12 +590,13 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
         printf("--- END DYNAMIC HEADER LENGTHS ---\n");
     }
     // TEMP TEMP
+#endif
 
     std::vector<uint16_t> dynamic_code_lengths;
     dynamic_code_lengths.reserve(ncodes);
     while (dynamic_code_lengths.size() < ncodes) {
         uint16_t value = read_huffman_value(reader, header_tree);
-        printf("--- CODE: %u\n", value);
+        // printf("--- CODE: %u\n", value);
         if (value <= 15) {
             dynamic_code_lengths.push_back(value);
         } else if (value <= 18) {
@@ -612,8 +622,8 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
                 xassert(0, "branch should never be hit");
             }
             size_t repeat_times = reader.read_bits(nbits) + offset;
-            printf("--- repeat_times = %zu offset = %zu repeat_value = %u\n",
-                    repeat_times, offset, repeat_value);
+            // printf("--- repeat_times = %zu offset = %zu repeat_value = %u\n",
+            //         repeat_times, offset, repeat_value);
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
         } else {
             panic("invalid value: %u", value);
@@ -626,6 +636,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     literal_tree.codelens.assign(&dynamic_code_lengths[0], &dynamic_code_lengths[hlit]);
     literal_tree.maxlen = 0;
 
+#if 0
     // TEMP TEMP
     {
         printf("--- DYNAMIC HUFFMAN LENGTHS ---\n");
@@ -648,6 +659,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
         printf("--- END DYNAMIC HUFFMAN LENGTHS ---\n");
     }
     // TEMP TEMP
+#endif
 
     init_huffman_tree(literal_tree);
     assert(literal_tree.maxlen != 0);
@@ -659,6 +671,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     distance_tree.codelens.assign(&dynamic_code_lengths[hlit], &dynamic_code_lengths[ncodes]);
     distance_tree.maxlen = 0;
 
+#if 0
     // TEMP TEMP
     {
         printf("--- DYNAMIC HUFFMAN LENGTHS ---\n");
@@ -681,6 +694,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
         printf("--- END DYNAMIC HUFFMAN LENGTHS ---\n");
     }
     // TEMP TEMP
+#endif
 
     init_huffman_tree(distance_tree);
     assert(distance_tree.maxlen != 0);
@@ -941,7 +955,6 @@ int main(int argc, char** argv)
             };
             uint16_t len  = read2B_le();
             uint16_t nlen = read2B_le();
-            DEBUG("len = %u nlen = %u", len, nlen);
             if ((len & 0xffff) != (nlen ^ 0xffff)) {
                 panic("invalid stored block lengths: %u %u", len, nlen);
             }
@@ -972,12 +985,16 @@ int main(int argc, char** argv)
                 read_dynamic_huffman_trees(reader, literal_tree, distance_tree);
             }
 
-            // DEBUG("CodeLength for 256 ==> %u", literal_tree.codelens[256]);
-
             for (;;) {
-                uint16_t value = read_huffman_value(reader, literal_tree);
-                DEBUG("huffman value: %u (%c)", value, value < 256 ? static_cast<char>(value) : '?');
+                // uint16_t value = read_huffman_value(reader, literal_tree);
+                auto&& [value, lit_huff_code, lit_n_bits] = read_huffman_value2(reader, literal_tree);
+                const uint16_t lit = value;
+                // DEBUG("huffman value: %u (%c)", value, value < 256 ? static_cast<char>(value) : '?');
                 if (value < 256) {
+                    auto lcode = bin(lit_huff_code, lit_n_bits);
+                    // TRACE("lit=%u (%c) code=0x%02x codelen=%d code=%s",
+                    //         lit, safelit(lit), lit_huff_code, lit_n_bits, lcode.c_str());
+                    TRACE("lit=%u lit=%s", lit, lcode.c_str());
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
                 } else if (value == 256) {
@@ -987,16 +1004,47 @@ int main(int argc, char** argv)
                     value -= LENGTH_BASE_CODE;
                     assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
                     size_t base_length = LENGTH_BASES[value];
+                    // DEBUG("\tpre-extra_length:\t0x%04x %zu", reader.buff, reader.bits);
                     size_t extra_length = reader.read_bits(LENGTH_EXTRA_BITS[value]);
                     size_t length = base_length + extra_length;
                     xassert(length <= 258, "invalid length");
-                    size_t distance_code = read_huffman_value(reader, distance_tree);
+
+
+                    // TEMP TEMP
+                    // reader.need(24);
+                    // TRACE("BEFORE reading dst_code: 0x%04x bits=%zu", reader.buff, reader.bits);
+                    // TEMP TEMP
+
+                    // DEBUG("\tpre-distance_code:\t0x%04x %zu", reader.buff, reader.bits);
+                    // uint16_t distance_code = read_huffman_value(reader, distance_tree);
+                    auto&& [distance_code, dst_huff_code, dst_n_bits] = read_huffman_value2(reader, distance_tree);
+                    // DEBUG("dst_code=%zu", distance_code);
                     xassert(distance_code < 32, "invalid distance code");
                     size_t base_distance = DISTANCE_BASES[distance_code];
+                    // DEBUG("\tpre-extra_distance:\t0x%04x %zu", reader.buff, reader.bits);
                     size_t extra_distance = reader.read_bits(
                             DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
-                    DEBUG("\tlength=%zu distance=%zu", length, distance);
+
+                    auto lcode = bin(lit_huff_code, lit_n_bits);
+                    auto dcode = bin(dst_huff_code, dst_n_bits);
+                    auto xdst = bin(static_cast<uint16_t>(extra_distance), DISTANCE_EXTRA_BITS[distance_code]);
+                    auto xlen = bin(static_cast<uint16_t>(extra_length), LENGTH_EXTRA_BITS[value]);
+                    TRACE("lit=%u len=%s xlen=%s dst=%s xdst=%s", lit, lcode.c_str(), xlen.c_str(), dcode.c_str(), xdst.c_str());
+                    // TRACE("lencode=%u lenhuff=0x%02x lencodelen=%d len=%zu blen=%zu xlen=%zu dstcode=%u dst=%zu bdst=%zu xdst=%zu dsthuff=0x%02x dstcodelen=%d lencode=%s dstcode=%s",
+                    //         lit, lit_huff_code, lit_n_bits, length, base_length, extra_length,
+                    //         distance_code, distance, base_distance, extra_distance, dst_huff_code, dst_n_bits,
+                    //         lcode.c_str(), dcode.c_str()
+                    //      );
+
+                    // DEBUG("\tlength=%zu distance=%zu", length, distance);
+                    // DEBUG("length=%zu distance=%zu "
+                    //       "length_base=%zu length_extra=%zu length_extra_bits=%zu "
+                    //       "distance_base=%zu distance_extra=%zu distance_extra_bits=%zu",
+                    //        length, distance,
+                    //        base_length, extra_length, LENGTH_EXTRA_BITS[value],
+                    //        base_distance, extra_distance, DISTANCE_EXTRA_BITS[distance_code]
+                    //        );
                     if (distance >= write_buffer.size()) {
                         panic("invalid distance: %zu >= %zu",
                                 distance, write_buffer.size());
@@ -1031,7 +1079,6 @@ int main(int argc, char** argv)
         }
 
         ++block_number;
-        DEBUG("Block size = %zu", block_size);
     } while (bfinal == 0);
 
     //------------------------------------------------
