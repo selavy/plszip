@@ -29,19 +29,6 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
-// True literal (<= 256)
-struct literal_value {
-    uint8_t value;
-};
-
-// Length + Distance Code
-struct length_distance_pair {
-    uint8_t length;
-    uint16_t distance;
-    uint16_t literal_code;
-    uint8_t distance_code;
-};
-
 constexpr size_t BUFSIZE = 2056;
 constexpr size_t READSIZE = 2056;
 constexpr size_t BLOCKSIZE = 2056;
@@ -62,6 +49,9 @@ constexpr size_t MaxMatchDistance = 32768;
 // generated versions
 constexpr size_t MaxCodes = 512;
 constexpr size_t MaxBits = 15;
+constexpr uint8_t ID1_GZIP = 31;
+constexpr uint8_t ID2_GZIP = 139;
+constexpr uint8_t CM_DEFLATE = 8;
 
 uint32_t crc_table[256];
 
@@ -207,10 +197,6 @@ int get_distance_base(int distance) {
 int get_distance_extra_bits(int distance) {
     return get_len_dst_extra_bits(distance, distance_info, ARRSIZE(distance_info));
 }
-
-uint8_t ID1_GZIP = 31;
-uint8_t ID2_GZIP = 139;
-uint8_t CM_DEFLATE = 8;
 
 struct FileHandle {
     FileHandle(FILE* f = nullptr) noexcept : fp(f) {}
@@ -606,26 +592,6 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
             }
         }
     }
-}
-
-void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
-    auto&& [lit_tree, dst_tree] = init_fixed_huffman_data();
-    uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
-    out.write_bits(bfinal, 1);
-    out.write_bits(block_type, 2);
-    std::vector<int> lits;
-    std::vector<int> dsts;
-    std::vector<int> lens;
-    for (const char *p = buf, *end = buf + size; p != end; ++p) {
-        auto val = static_cast<uint16_t>(*reinterpret_cast<const uint8_t*>(p));
-        lits.push_back(val);
-        dsts.push_back(0);
-        lens.push_back(0);
-    }
-    lits.push_back(256);
-    dsts.push_back(0);
-    lens.push_back(0);
-    write_block(lits, dsts, lens, lit_tree, dst_tree, out);
 }
 
 CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
@@ -1070,8 +1036,6 @@ int main(int argc, char** argv) {
 #if 0
 #elif 0
     auto* compress_fn = &blkwrite_no_compression;
-#elif 0
-    auto* compress_fn = &blkwrite_fixed;
 #elif 1
     auto* compress_fn = &blkwrite_dynamic;
 #else
