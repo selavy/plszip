@@ -47,10 +47,6 @@
 
 #define DEBUG0(msg) fprintf(stderr, "DEBUG: " msg "\n");
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
-
-
-#define TRACE(fmt, ...) fprintf(stdout, "TRACE: " fmt "\n", ##__VA_ARGS__);
-
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 // True literal (<= 256)

@@ -32,7 +32,6 @@
     } while (0)
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__)
 #endif
-#define TRACE(fmt, ...) fprintf(stdout, "TRACE: " fmt "\n", ##__VA_ARGS__);
 
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
@@ -502,27 +501,7 @@ void init_huffman_tree(HTree& tree)
     tree.maxlen = max_bit_length;
 }
 
-[[maybe_unused]] auto safelit = [](uint16_t x) -> char {
-    if (x < 256) {
-        if (x >= '!') {
-            return static_cast<char>(x);
-        } else {
-            return x == ' ' ? x : '*';
-        }
-    } else {
-        return '?';
-    }
-};
-
-[[maybe_unused]] auto bin = [](uint16_t code, size_t codelen) -> std::string {
-    std::string result;
-    for (int i = static_cast<int>(codelen) - 1; i >= 0; --i) {
-        result += (code & (1u << i)) != 0 ? '1' : '0';
-    }
-    return result;
-};
-
-std::tuple<uint16_t, uint16_t, int> read_huffman_value2(BitReader& reader, HTree& tree)
+uint16_t read_huffman_value(BitReader& reader, HTree& tree)
 {
     reader.need(tree.maxlen);
     auto bits = reader.peek(tree.maxlen);
@@ -531,13 +510,6 @@ std::tuple<uint16_t, uint16_t, int> read_huffman_value2(BitReader& reader, HTree
         panic("invalid huffman bit pattern: 0x%04x (%zu bits)", bits, tree.maxlen);
     assert(0 <= value && value < tree.codelens.size());
     reader.drop(tree.codelens[value]);
-    // TEMP
-    auto codelen = tree.codelens[value];
-    return std::make_tuple(value, bits & ((1u << codelen) - 1), codelen);
-}
-
-uint16_t read_huffman_value(BitReader& reader, HTree& htree) {
-    auto&& [value, code, codelen] = read_huffman_value2(reader, htree);
     return value;
 }
 
@@ -596,7 +568,6 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     dynamic_code_lengths.reserve(ncodes);
     while (dynamic_code_lengths.size() < ncodes) {
         uint16_t value = read_huffman_value(reader, header_tree);
-        // printf("--- CODE: %u\n", value);
         if (value <= 15) {
             dynamic_code_lengths.push_back(value);
         } else if (value <= 18) {
@@ -986,15 +957,8 @@ int main(int argc, char** argv)
             }
 
             for (;;) {
-                // uint16_t value = read_huffman_value(reader, literal_tree);
-                auto&& [value, lit_huff_code, lit_n_bits] = read_huffman_value2(reader, literal_tree);
-                const uint16_t lit = value;
-                // DEBUG("huffman value: %u (%c)", value, value < 256 ? static_cast<char>(value) : '?');
+                uint16_t value = read_huffman_value(reader, literal_tree);
                 if (value < 256) {
-                    auto lcode = bin(lit_huff_code, lit_n_bits);
-                    // TRACE("lit=%u (%c) code=0x%02x codelen=%d code=%s",
-                    //         lit, safelit(lit), lit_huff_code, lit_n_bits, lcode.c_str());
-                    TRACE("lit=%u lit=%s", lit, lcode.c_str());
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
                 } else if (value == 256) {
@@ -1004,47 +968,16 @@ int main(int argc, char** argv)
                     value -= LENGTH_BASE_CODE;
                     assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
                     size_t base_length = LENGTH_BASES[value];
-                    // DEBUG("\tpre-extra_length:\t0x%04x %zu", reader.buff, reader.bits);
                     size_t extra_length = reader.read_bits(LENGTH_EXTRA_BITS[value]);
                     size_t length = base_length + extra_length;
                     xassert(length <= 258, "invalid length");
 
-
-                    // TEMP TEMP
-                    // reader.need(24);
-                    // TRACE("BEFORE reading dst_code: 0x%04x bits=%zu", reader.buff, reader.bits);
-                    // TEMP TEMP
-
-                    // DEBUG("\tpre-distance_code:\t0x%04x %zu", reader.buff, reader.bits);
-                    // uint16_t distance_code = read_huffman_value(reader, distance_tree);
-                    auto&& [distance_code, dst_huff_code, dst_n_bits] = read_huffman_value2(reader, distance_tree);
-                    // DEBUG("dst_code=%zu", distance_code);
+                    uint16_t distance_code = read_huffman_value(reader, distance_tree);
                     xassert(distance_code < 32, "invalid distance code");
                     size_t base_distance = DISTANCE_BASES[distance_code];
-                    // DEBUG("\tpre-extra_distance:\t0x%04x %zu", reader.buff, reader.bits);
                     size_t extra_distance = reader.read_bits(
                             DISTANCE_EXTRA_BITS[distance_code]);
                     size_t distance = base_distance + extra_distance;
-
-                    auto lcode = bin(lit_huff_code, lit_n_bits);
-                    auto dcode = bin(dst_huff_code, dst_n_bits);
-                    auto xdst = bin(static_cast<uint16_t>(extra_distance), DISTANCE_EXTRA_BITS[distance_code]);
-                    auto xlen = bin(static_cast<uint16_t>(extra_length), LENGTH_EXTRA_BITS[value]);
-                    TRACE("lit=%u len=%s xlen=%s dst=%s xdst=%s", lit, lcode.c_str(), xlen.c_str(), dcode.c_str(), xdst.c_str());
-                    // TRACE("lencode=%u lenhuff=0x%02x lencodelen=%d len=%zu blen=%zu xlen=%zu dstcode=%u dst=%zu bdst=%zu xdst=%zu dsthuff=0x%02x dstcodelen=%d lencode=%s dstcode=%s",
-                    //         lit, lit_huff_code, lit_n_bits, length, base_length, extra_length,
-                    //         distance_code, distance, base_distance, extra_distance, dst_huff_code, dst_n_bits,
-                    //         lcode.c_str(), dcode.c_str()
-                    //      );
-
-                    // DEBUG("\tlength=%zu distance=%zu", length, distance);
-                    // DEBUG("length=%zu distance=%zu "
-                    //       "length_base=%zu length_extra=%zu length_extra_bits=%zu "
-                    //       "distance_base=%zu distance_extra=%zu distance_extra_bits=%zu",
-                    //        length, distance,
-                    //        base_length, extra_length, LENGTH_EXTRA_BITS[value],
-                    //        base_distance, extra_distance, DISTANCE_EXTRA_BITS[distance_code]
-                    //        );
                     if (distance >= write_buffer.size()) {
                         panic("invalid distance: %zu >= %zu",
                                 distance, write_buffer.size());
