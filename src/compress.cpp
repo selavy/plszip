@@ -795,7 +795,7 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
         auto it = tree.find(value);
         if (it != tree.end()) {
             auto codelen = it->second.codelen;
-            assert(0 <= codelen && codelen < MaxHeaderCodeLength);
+            xassert(0 <= codelen && codelen < MaxHeaderCodeLength, "invalid header codelen: %u", codelen);
             results[index] = codelen;
         }
     }
@@ -829,7 +829,6 @@ int longest_match(const char* wnd, const char* str, const char* const end) {
     }
     return p2 - str;
 }
-
 
 BlockResults analyze_block(const char* const buf, size_t size) {
     std::vector<int> lit_codes;
@@ -971,7 +970,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     auto&& [codelens, hlit, hdist, lits, dsts, lens] = analyze_block(buf, size);
     auto&& [fixed_lits, fixed_dsts] = init_fixed_huffman_data();
 
-    if (0) {
+    if (1) {
         auto lits_htree = init_huffman_tree(&codelens[0], hlit);
         auto dsts_htree = init_huffman_tree(&codelens[hlit], hdist);
         auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
@@ -1005,20 +1004,20 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
             auto&& [code, bits] = it->second;
             out.write_bits(code, bits);
             switch (codelen) {
-                case 16:
-                    xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
-                    out.write_bits(hextra[i] - 3, 2);
-                    break;
-                case 17:
-                    xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
-                    out.write_bits(hextra[i] - 3, 3);
-                    break;
-                case 18:
-                    xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
-                    out.write_bits(hextra[i] - 11, 7);
-                    break;
-                default:
-                    break;
+            case 16:
+                xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
+                out.write_bits(hextra[i] - 3, 2);
+                break;
+            case 17:
+                xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
+                out.write_bits(hextra[i] - 3, 3);
+                break;
+            case 18:
+                xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
+                out.write_bits(hextra[i] - 11, 7);
+                break;
+            default:
+                break;
             }
         }
 
