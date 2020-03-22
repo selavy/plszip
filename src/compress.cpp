@@ -74,6 +74,7 @@ constexpr size_t DistCodes = 30;
 constexpr size_t MaxNumCodes = LitCodes + DistCodes;
 constexpr size_t HeaderLengthBits = 3;
 constexpr size_t MaxHeaderCodeLength = 1u << HeaderLengthBits;
+constexpr size_t MaxMatchLength = 258;
 
 // TODO: switch to MaxNumCodes
 // TODO: can definitely reduce this -- but do need it to work with fixed huffman? unless i'm just going to use the
@@ -631,7 +632,6 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
     out.write_bits(bfinal, 1);
     out.write_bits(block_type, 2);
-
     std::vector<int> lits;
     std::vector<int> dsts;
     std::vector<int> lens;
@@ -644,7 +644,6 @@ void blkwrite_fixed(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     lits.push_back(256);
     dsts.push_back(0);
     lens.push_back(0);
-
     write_block(lits, dsts, lens, lit_tree, dst_tree, out);
 }
 
@@ -853,11 +852,12 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         int length = 2;
         int distance = 0;
         for (int pos : locs) {
-            int match_length = longest_match(buf + pos, buf + i, buf + size);
+            int match_length = longest_match(buf + pos, buf + i, buf + std::min(size, MaxMatchLength));
             if (match_length > length) {
                 length = match_length;
                 distance = i - pos;
             }
+            xassert(match_length < MaxMatchLength, "invalid match length (too long): %d", match_length);
         }
         locs.push_back(i);
         if (length >= 3) {
@@ -1084,9 +1084,9 @@ int main(int argc, char** argv) {
 #if 0
 #elif 0
     auto* compress_fn = &blkwrite_no_compression;
-#elif 1
-    auto* compress_fn = &blkwrite_fixed;
 #elif 0
+    auto* compress_fn = &blkwrite_fixed;
+#elif 1
     auto* compress_fn = &blkwrite_dynamic;
 #else
 #error "Must select an implementation"
