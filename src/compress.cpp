@@ -595,15 +595,6 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
     return results;
 }
 
-struct BlockResults {
-    CodeLengths codelens;
-    size_t hlit;
-    size_t hdist;
-    std::vector<int> lit_codes;
-    std::vector<int> dst_vals;
-    std::vector<int> len_vals;
-};
-
 constexpr uint32_t update_hash(uint32_t current, char c) noexcept {
     constexpr uint32_t mask = (1u << 24) - 1;
     return ((current << 8) ^ c) & mask;
@@ -618,6 +609,17 @@ int longest_match(const char* wnd, const char* str, const char* const end) {
     }
     return p2 - str;
 }
+
+struct BlockResults {
+    CodeLengths codelens;
+    size_t hlit;
+    size_t hdist;
+    std::vector<int> lit_codes;
+    std::vector<int> dst_vals;
+    std::vector<int> len_vals;
+    int64_t fix_cost;
+    int64_t dyn_cost;
+};
 
 BlockResults analyze_block(const char* const buf, size_t size) {
     std::vector<int> lit_codes;
@@ -691,13 +693,12 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     assert(lit_codes.size() == len_vals.size());
 
     auto lit_tree = construct_huffman_tree(lit_counts);
-    printf("--- LIT BLOCK ENCODING ---\n");
+#ifndef NDEBUG
     for (auto&& [value, codelen] : lit_tree) {
         xassert(0 <= value && value < 286, "invalid lit value: %d", value);
         xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
-        printf("%d: %d\n", value, codelen);
     }
-    printf("--- END LIT BLOCK ENCODING ---\n");
+#endif
 
     // TODO: try out dst_counts.empty() case so I can test my inflate implementation
     //
@@ -707,20 +708,13 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         dst_counts[0] = 1;
         dst_counts[1] = 1;
     }
-    printf("--- DST BLOCK COUNTS ---\n");
-    for (auto&& [value, count] : dst_counts) {
-        printf("%d: %d\n", value, count);
-    }
-    printf("--- END DST BLOCK COUNTS ---\n");
-
     auto dst_tree = construct_huffman_tree(dst_counts);
-    printf("--- DST BLOCK ENCODING ---\n");
+#ifndef NDEBUG
     for (auto&& [value, codelen] : dst_tree) {
         xassert(0 <= value && value < 32, "invalid dst value: %d", value);
         xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
-        printf("%d: %d\n", value, codelen);
     }
-    printf("--- END DST BLOCK ENCODING ---\n");
+#endif
 
     assert(!lit_tree.empty());
     int max_lit_value = std::max_element(lit_tree.begin(), lit_tree.end(), [](TreeNode a, TreeNode b) {
@@ -752,24 +746,61 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         codelens[value] = codelen;
     }
     assert(codelens[256] != 0);
-    return {codelens, hlit, hdist, lit_codes, dst_vals, len_vals};
+
+    int64_t fix_cost = 0;
+    int64_t dyn_cost = 0;
+    for (auto&& [lit, count] : lit_counts) {
+        dyn_cost += count * codelens[lit];
+        fix_cost += count * fixed_codelens[lit];
+    }
+    for (auto&& [dst, count] : dst_counts) {
+        dyn_cost += count * codelens[hlit + dst];
+        fix_cost += count * fixed_codelens[NumFixedTreeLiterals + dst];
+    }
+
+    return {codelens, hlit, hdist, lit_codes, dst_vals, len_vals, fix_cost, dyn_cost};
+}
+
+int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, const CodeLengths& htree_codelens) {
+    int64_t cost = 5 + 5 + 4;
+    cost += 3 * htree_codelens.size();
+    for (size_t i = 0; i < hcodes.size(); ++i) {
+        cost += htree.codelens[hcodes[i]];
+        switch (hcodes[i]) {
+        case 16:
+            cost += 2;
+            break;
+        case 17:
+            cost += 3;
+            break;
+        case 18:
+            cost += 7;
+            break;
+        default:
+            break;
+        }
+    }
+    return cost;
 }
 
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
     DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
-    auto&& [codelens, hlit, hdist, lits, dsts, lens] = analyze_block(buf, size);
+    auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
+    auto htree_length_data = make_header_tree_length_data(htree);
+    auto hdr_cost = calculate_header_cost(htree, hcodes, htree_length_data);
 
     // TODO: improve heuristic for deciding dynamic vs fixed huffman encoding
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
 
-    if (is_possible) {
+    DEBUG("Header cost: %ld", hdr_cost);
+
+    if (is_possible && dyn_cost + hdr_cost < fix_cost) {
         DEBUG("Using dynamic tree");
         static uint16_t codes[MaxNumCodes + 1];   // TODO: figure out where to put this data
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
-        auto htree_length_data = make_header_tree_length_data(htree);
         auto hclen = htree_length_data.size();
         xassert(257 <= hlit && hlit <= 286, "hlit = %zu", hlit);
         xassert(1 <= hdist && hdist <= 32, "hdist = %zu", hdist);
@@ -779,16 +810,18 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         DEBUG("hdist = %zu", hdist);
         DEBUG("hclen = %zu", hclen);
 
+        int header_overhead = 0;
+
         uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
-        out.write_bits(hlit - 257, 5);
-        out.write_bits(hdist - 1, 5);
-        out.write_bits(hclen - 4, 4);
+        out.write_bits(hlit - 257, 5); header_overhead += 5;
+        out.write_bits(hdist - 1, 5); header_overhead += 5;
+        out.write_bits(hclen - 4, 4); header_overhead += 4;
 
         // header tree code lengths
         for (auto codelen : htree_length_data) {
-            out.write_bits(codelen, 3);
+            out.write_bits(codelen, 3); header_overhead += 3;
         }
 
         // literal and distance code lengths
@@ -797,24 +830,26 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
             uint16_t huff_code = htree.codes[hcode];
             int n_bits = htree.codelens[hcode];
             assert(n_bits > 0);
-            out.write_bits(huff_code, n_bits);
+            out.write_bits(huff_code, n_bits); header_overhead += n_bits;
             switch (hcode) {
             case 16:
                 xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 3, 2);
+                out.write_bits(hextra[i] - 3, 2); header_overhead += 2;
                 break;
             case 17:
                 xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 3, 3);
+                out.write_bits(hextra[i] - 3, 3); header_overhead += 3;
                 break;
             case 18:
                 xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 11, 7);
+                out.write_bits(hextra[i] - 11, 7); header_overhead += 7;
                 break;
             default:
                 break;
             }
         }
+
+        DEBUG("Header overhead: %d", header_overhead);
 
         HuffTrees trees;
         trees.codes = &codes[0];
