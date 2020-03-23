@@ -34,7 +34,6 @@
 constexpr size_t BUFSIZE = 2056;
 constexpr size_t READSIZE = 2056;
 constexpr size_t BLOCKSIZE = 2056;
-constexpr uint16_t EmptySentinel = UINT16_MAX;
 constexpr size_t NumHeaderCodeLengths = 19;
 constexpr size_t LiteralCodes = 256;  // [0, 255] doesn't include END_BLOCK code
 constexpr size_t LengthCodes = 29;    // [257, 285]
@@ -45,11 +44,6 @@ constexpr size_t HeaderLengthBits = 3;
 constexpr size_t MaxHeaderCodeLength = (1u << HeaderLengthBits) - 1;
 constexpr size_t MaxMatchLength = 258;
 constexpr size_t MaxMatchDistance = 32768;
-
-// TODO: switch to MaxNumCodes
-// TODO: can definitely reduce this -- but do need it to work with fixed huffman? unless i'm just going to use the
-// generated versions
-constexpr size_t MaxCodes = 512;
 constexpr size_t MaxBits = 15;
 constexpr uint8_t ID1_GZIP = 31;
 constexpr uint8_t ID2_GZIP = 139;
@@ -315,11 +309,6 @@ uint16_t flip_code(uint16_t code, size_t codelen) {
 void init_huffman_tree(const uint8_t* codelens, int n_values, uint16_t* out_codes) {
     size_t bl_count[MaxBits];
     uint16_t next_code[MaxBits];
-    uint16_t codes[MaxCodes];
-
-    if (!(n_values < MaxCodes)) {
-        throw std::runtime_error{"too many code lengths"};
-    }
 
     // 1) Count the number of codes for each code length. Let bl_count[N] be the
     // number of codes of length N, N >= 1.
