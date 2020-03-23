@@ -253,9 +253,14 @@ struct Code {
     uint16_t codelen;
 };
 
-using Value = uint16_t;
-using Tree = std::map<Value, Code>;
-using CodeLengths = std::vector<uint16_t>;
+using CodeLengths = std::vector<uint8_t>;
+
+struct Tree {
+    std::vector<uint16_t> codes;    // [MaxNumCodes+1];
+    std::vector<uint8_t>  codelens; // [MaxNumCodes+1];
+    int n_lits;
+    int n_dists;
+};
 
 // TODO: use Code
 struct TreeNode {
@@ -377,7 +382,7 @@ uint16_t flip_code(uint16_t code, size_t codelen) {
     return static_cast<uint16_t>(flip_u16(code) >> (16 - codelen));
 }
 
-Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
+void init_huffman_tree(const uint8_t* codelens, int n_values, uint16_t *out_codes) {
 #ifndef NDEBUG
     constexpr auto calc_min_code_len = [](uint16_t code) -> int { return code != 0 ? 16 - __builtin_clz(code) : 0; };
 #endif
@@ -386,25 +391,25 @@ Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
     uint16_t next_code[MaxBits];
     uint16_t codes[MaxCodes];
 
-    if (!(n < MaxCodes)) {
+    if (!(n_values < MaxCodes)) {
         throw std::runtime_error{"too many code lengths"};
     }
 
     // 1) Count the number of codes for each code length. Let bl_count[N] be the
     // number of codes of length N, N >= 1.
     memset(&bl_count[0], 0, sizeof(bl_count));
-    size_t max_bit_length = 0;
-    for (size_t i = 0; i < n; ++i) {
-        xassert(code_lengths[i] <= MaxBits, "Unsupported bit length");
-        ++bl_count[code_lengths[i]];
-        max_bit_length = std::max<uint16_t>(code_lengths[i], max_bit_length);
+    int max_bit_length = 0;
+    for (int i = 0; i < n_values; ++i) {
+        xassert(codelens[i] <= MaxBits, "Unsupported bit length");
+        ++bl_count[codelens[i]];
+        max_bit_length = std::max<int>(codelens[i], max_bit_length);
     }
     bl_count[0] = 0;
 
     // 2) Find the numerical value of the smallest code for each code length:
     memset(&next_code[0], 0, sizeof(next_code));
     uint32_t code = 0;
-    for (size_t bits = 1; bits <= max_bit_length; ++bits) {
+    for (int bits = 1; bits <= max_bit_length; ++bits) {
         code = (code + bl_count[bits - 1]) << 1;
         next_code[bits] = code;
     }
@@ -414,50 +419,47 @@ Tree init_huffman_tree(const uint16_t* code_lengths, size_t n) {
     // that are never used (which have a bit length of zero) must not be
     // assigned a value.
     memset(&codes[0], 0, sizeof(codes));
-    for (size_t i = 0; i < n; ++i) {
-        if (code_lengths[i] != 0) {
-            codes[i] = next_code[code_lengths[i]]++;
-            assert(calc_min_code_len(codes[i]) <= code_lengths[i]);
+    for (int i = 0; i < n_values; ++i) {
+        if (codelens[i] != 0) {
+            codes[i] = next_code[codelens[i]]++;
+            assert(calc_min_code_len(codes[i]) <= codelens[i]);
         }
     }
 
-    Tree tree;
-    auto n_values = static_cast<uint16_t>(n);
-    for (uint16_t value = 0; value < n_values; ++value) {
-        uint16_t code_length = code_lengths[value];
+    // TODO: move this into step 3
+    // 4) Expand tree
+    for (int value = 0; value < n_values; ++value) {
+        uint16_t code = codes[value];
+        uint16_t code_length = codelens[value];
         if (code_length == 0) {
             continue;
         }
-        uint16_t code = codes[value];
-        tree.emplace(value, Code{flip_code(code, code_length), code_length});
-        // tree.emplace(value, Code{code, code_length});
+        out_codes[value] = flip_code(code, code_length);
     }
-
-    return tree;
 }
 
-std::pair<Tree, Tree> init_fixed_huffman_data() noexcept {
-    std::vector<uint16_t> lit_codes;
-    while (lit_codes.size() < 144) {
-        lit_codes.push_back(8);
-    }
-    while (lit_codes.size() < 256) {
-        lit_codes.push_back(9);
-    }
-    while (lit_codes.size() < 280) {
-        lit_codes.push_back(7);
-    }
-    while (lit_codes.size() < 288) {
-        lit_codes.push_back(8);
-    }
-    assert(lit_codes.size() == 288);
-    auto lit_tree = init_huffman_tree(lit_codes.data(), lit_codes.size());
+Tree init_fixed_huffman_data() noexcept {
+    Tree tree;
 
-    std::vector<uint16_t> dst_codes(32, 5);
-    assert(dst_codes.size() == 32);
-    auto dst_tree = init_huffman_tree(dst_codes.data(), dst_codes.size());
+    tree.codelens.insert(tree.codelens.end(), 144, 8);
+    tree.codelens.insert(tree.codelens.end(), 112, 9);
+    tree.codelens.insert(tree.codelens.end(), 24, 7);
+    tree.codelens.insert(tree.codelens.end(), 8, 8);
+    tree.n_lits = tree.codelens.size();
+    tree.codes.assign(tree.n_lits, 0xffffu);
+    assert(tree.n_lits == 288);
+    assert(tree.n_lits == tree.codelens.size());
+    assert(tree.codelens.size() == tree.codes.size());
+    init_huffman_tree(&tree.codelens[0], tree.n_lits, &tree.codes[0]);
 
-    return std::make_pair(lit_tree, dst_tree);
+    tree.codelens.insert(tree.codelens.end(), 32, 5);
+    tree.codes.insert(tree.codes.end(), 32, 0xffffu);
+    tree.n_dists = 32;
+    assert(tree.n_dists + tree.n_lits == tree.codelens.size());
+    assert(tree.codelens.size() == tree.codes.size());
+    init_huffman_tree(&tree.codelens[tree.n_lits], tree.n_dists, &tree.codes[tree.n_lits]);
+
+    return tree;
 }
 
 // All multi-byte numbers in the format described here are stored with
@@ -554,16 +556,17 @@ void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, Bi
 }
 
 void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, const std::vector<int>& lens,
-                 const Tree& lit_tree, const Tree& dst_tree, BitWriter& out) {
+                 const Tree& tree, BitWriter& out) {
     assert(lits.size() == dsts.size() && lits.size() == lens.size());
     for (size_t i = 0; i < lits.size(); ++i) {
         auto lit = lits[i];
         xassert(0 <= lit && lit <= 285, "invalid literal: %d", lit);
-        auto lit_iter = lit_tree.find(lit);
-        xassert(lit_iter != lit_tree.end(), "invalid literal: %d", lit);
-        auto&& [lit_huff_code, lit_n_bits] = lit_iter->second;
+        uint16_t lit_huff_code = tree.codes[lit];
+        uint8_t lit_n_bits = tree.codelens[lit];
+        xassert(lit_huff_code != 0xffffu, "invalid literal: %d", lit);
+        xassert(lit_n_bits > 0, "invalid code length: %u", lit_n_bits);
         assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
-        out.write_bits(static_cast<uint16_t>(lit_huff_code), lit_n_bits);
+        out.write_bits(lit_huff_code, lit_n_bits);
         if (lit >= 257) {
             auto len = lens[i];
             auto len_base = get_length_base(len);
@@ -578,9 +581,10 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
             xassert(1 <= dst && dst <= 32768, "invalid distance: %d", dst);
             auto dst_code = get_distance_code(dst);
             xassert(0 <= dst_code && dst_code <= 29, "invalid distance code: %d", dst_code);
-            auto dst_iter = dst_tree.find(dst_code);
-            xassert(dst_iter != dst_tree.end(), "invalid distance: %d", dst_code);
-            auto&& [dst_huff_code, dst_n_bits] = dst_iter->second;
+            uint16_t dst_huff_code = tree.codes[tree.n_lits + dst_code];
+            uint8_t dst_n_bits = tree.codelens[tree.n_lits + dst_code];
+            xassert(dst_huff_code != 0xffffu, "invalid distance code: %d", dst_code);
+            xassert(dst_n_bits > 0, "invalid code length: %u", lit_n_bits);
             out.write_bits(static_cast<uint16_t>(dst_huff_code), dst_n_bits);
 
             auto dst_base = get_distance_base(dst);
@@ -592,22 +596,6 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
             }
         }
     }
-}
-
-CodeLengths make_header_code_lengths(const CodeLengths& codelens) {
-    constexpr std::array<int, NumHeaderCodeLengths> order = {16, 17, 18, 0, 8,  7, 9,  6, 10, 5,
-                                                             11, 4,  12, 3, 13, 2, 14, 1, 15};
-    // std::array<int, NumHeaderCodeLengths> counts;
-    // std::fill(counts.begin(), counts.end(), 0);
-    std::vector<int> counts(order.size(), 0);
-    for (auto&& codelen : codelens) {
-        counts[codelen]++;
-    }
-    CodeLengths result;
-    for (auto codelen : order) {
-        result.push_back(counts[codelen]);
-    }
-    return result;
 }
 
 struct DynamicHeader {
@@ -721,14 +709,17 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
 
     auto header_tree = construct_huffman_tree(count_values(codes.data(), codes.size()));
 
-    CodeLengths header_codelens(NumHeaderCodeLengths, 0);
-    assert(header_codelens.size() == NumHeaderCodeLengths);
+    Tree tree;
+    tree.codes.assign(NumHeaderCodeLengths, 0xffffu);
+    tree.codelens.assign(NumHeaderCodeLengths, 0);
+    tree.n_lits = NumHeaderCodeLengths;
+    tree.n_dists = 0; // TEMP TEMP
     for (auto&& [value, bits] : header_tree) {
         assert(0 <= value && value < NumHeaderCodeLengths);
         assert(0 <= bits && bits < MaxBits);
-        header_codelens[value] = static_cast<uint8_t>(bits);
+        tree.codelens[value] = static_cast<uint8_t>(bits);
     }
-    auto tree = init_huffman_tree(header_codelens.data(), header_codelens.size());
+    init_huffman_tree(&tree.codelens[0], tree.n_lits, &tree.codes[0]);
     return {codes, extra, tree};
 }
 
@@ -737,13 +728,7 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
                                                              11, 4,  12, 3, 13, 2, 14, 1, 15};
     CodeLengths results(order.size(), 0);
     for (size_t index = 0; index < order.size(); ++index) {
-        auto value = order[index];
-        auto it = tree.find(value);
-        if (it != tree.end()) {
-            auto codelen = it->second.codelen;
-            xassert(0 <= codelen && codelen <= MaxHeaderCodeLength, "invalid header codelen: %u", codelen);
-            results[index] = codelen;
-        }
+        results[index] = tree.codelens[order[index]];
     }
     while (results.size() > 4 && results.back() == 0) {
         results.pop_back();
@@ -837,6 +822,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         assert(size == 0u);
         lit_counts[0] = 1;
     }
+
     // must have code for END_BLOCK
     lit_codes.push_back(256);
     dst_vals.push_back(0);
@@ -913,10 +899,11 @@ BlockResults analyze_block(const char* const buf, size_t size) {
 
 void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
     DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
+    auto fixed_tree = init_fixed_huffman_data();
     auto&& [codelens, hlit, hdist, lits, dsts, lens] = analyze_block(buf, size);
-    auto&& [fixed_lits, fixed_dsts] = init_fixed_huffman_data();
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
 
+#if 0
     bool is_possible = std::all_of(htree.begin(), htree.end(),
                                    [](std::pair<Value, Code> node) { return node.second.codelen <= MaxHeaderCodeLength; });
 
@@ -948,12 +935,12 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
 
         // literal and distance code lengths
         for (size_t i = 0; i < hcodes.size(); ++i) {
-            auto codelen = hcodes[i];
-            auto it = htree.find(codelen);
-            xassert(it != htree.end(), "no code for header lit value: %u", codelen);
-            auto&& [code, bits] = it->second;
-            out.write_bits(code, bits);
-            switch (codelen) {
+            auto hcode = hcodes[i];
+            auto it = htree.find(hcode);
+            xassert(it != htree.end(), "no code for header lit value: %u", hcode);
+            auto&& [huff_code, n_bits] = it->second;
+            out.write_bits(huff_code, n_bits);
+            switch (hcode) {
             case 16:
                 xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
                 out.write_bits(hextra[i] - 3, 2);
@@ -972,12 +959,15 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         }
 
         write_block(lits, dsts, lens, lits_htree, dsts_htree, out);
+#endif
+    if (0) {
+        // pass
     } else {
         DEBUG("Using fixed tree");
         uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
-        write_block(lits, dsts, lens, fixed_lits, fixed_dsts, out);
+        write_block(lits, dsts, lens, fixed_tree, out);
     }
 }
 
