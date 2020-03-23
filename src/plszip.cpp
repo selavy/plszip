@@ -15,7 +15,7 @@
 #include <new>
 
 #include "crc32.h"
-#include "fixed_huffman_trees.h"
+#include "inflate_tables.h"
 
 #define UNREACHABLE()            \
     do {                         \

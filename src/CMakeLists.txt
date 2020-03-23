@@ -1,14 +1,19 @@
 # src/CMakeLists.txt
 
 add_executable(compress
-    crc32.cpp
     compress_tables.h
+    crc32.cpp
     compress.cpp
     )
 target_compile_features(compress PUBLIC cxx_std_17)
 target_link_libraries(compress PRIVATE cxx_project_options)
 
-add_executable(inflate plszip.cpp crc32.cpp inflate.cpp)
+add_executable(inflate
+    inflate_tables.h
+    crc32.cpp
+    plszip.cpp
+    inflate.cpp
+    )
 target_link_libraries(inflate
     PUBLIC
     # ZLIB::ZLIB
@@ -18,7 +23,12 @@ target_link_libraries(inflate
         cxx_project_options
 )
 
-add_executable(inflate_zlib plszip.cpp crc32.cpp inflate.cpp)
+add_executable(inflate_zlib
+    inflate_tables.h
+    crc32.cpp
+    plszip.cpp
+    inflate.cpp
+    )
 target_link_libraries(inflate_zlib
     PUBLIC
         # ZLIB::ZLIB

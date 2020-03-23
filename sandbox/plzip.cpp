@@ -568,6 +568,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     dynamic_code_lengths.reserve(ncodes);
     while (dynamic_code_lengths.size() < ncodes) {
         uint16_t value = read_huffman_value(reader, header_tree);
+        // DEBUG("header length: %u", value);
         if (value <= 15) {
             dynamic_code_lengths.push_back(value);
         } else if (value <= 18) {
@@ -982,6 +983,7 @@ int main(int argc, char** argv)
                         panic("invalid distance: %zu >= %zu",
                                 distance, write_buffer.size());
                     }
+                    DEBUG("len+dist => %zu %zu", length, distance);
                     size_t index = write_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
                         // NOTE: because the ring buffer is always full, the
