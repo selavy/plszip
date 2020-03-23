@@ -73,6 +73,78 @@ uint32_t calc_crc32(uint32_t crc, const char* buf, size_t len) {
 }
 
 // clang-format off
+constexpr uint16_t fixed_literal_codes[288] = {
+     12, 140,  76, 204,  44, 172, 108, 236,
+     28, 156,  92, 220,  60, 188, 124, 252,
+      2, 130,  66, 194,  34, 162,  98, 226,
+     18, 146,  82, 210,  50, 178, 114, 242,
+     10, 138,  74, 202,  42, 170, 106, 234,
+     26, 154,  90, 218,  58, 186, 122, 250,
+      6, 134,  70, 198,  38, 166, 102, 230,
+     22, 150,  86, 214,  54, 182, 118, 246,
+     14, 142,  78, 206,  46, 174, 110, 238,
+     30, 158,  94, 222,  62, 190, 126, 254,
+      1, 129,  65, 193,  33, 161,  97, 225,
+     17, 145,  81, 209,  49, 177, 113, 241,
+      9, 137,  73, 201,  41, 169, 105, 233,
+     25, 153,  89, 217,  57, 185, 121, 249,
+      5, 133,  69, 197,  37, 165, 101, 229,
+     21, 149,  85, 213,  53, 181, 117, 245,
+     13, 141,  77, 205,  45, 173, 109, 237,
+     29, 157,  93, 221,  61, 189, 125, 253,
+     19, 275, 147, 403,  83, 339, 211, 467,
+     51, 307, 179, 435, 115, 371, 243, 499,
+     11, 267, 139, 395,  75, 331, 203, 459,
+     43, 299, 171, 427, 107, 363, 235, 491,
+     27, 283, 155, 411,  91, 347, 219, 475,
+     59, 315, 187, 443, 123, 379, 251, 507,
+      7, 263, 135, 391,  71, 327, 199, 455,
+     39, 295, 167, 423, 103, 359, 231, 487,
+     23, 279, 151, 407,  87, 343, 215, 471,
+     55, 311, 183, 439, 119, 375, 247, 503,
+     15, 271, 143, 399,  79, 335, 207, 463,
+     47, 303, 175, 431, 111, 367, 239, 495,
+     31, 287, 159, 415,  95, 351, 223, 479,
+     63, 319, 191, 447, 127, 383, 255, 511,
+      0,  64,  32,  96,  16,  80,  48, 112,
+      8,  72,  40, 104,  24,  88,  56, 120,
+      4,  68,  36, 100,  20,  84,  52, 116,
+      3, 131,  67, 195,  35, 163,  99, 227,
+};
+
+constexpr uint8_t fixed_literal_codelens[288] = {
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8,
+};
+
+constexpr uint16_t fixed_distance_codes[32] = {
+     0, 16,  8, 24,  4, 20, 12, 28,  2, 18, 10, 26,  6, 22, 14, 30,
+     1, 17,  9, 25,  5, 21, 13, 29,  3, 19, 11, 27,  7, 23, 15, 31,
+};
+
+constexpr uint8_t fixed_distance_codelens[32] = {
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+};
+// clang-format on
+
+// clang-format off
 struct LenDstInfo {
     int code;
     int extra_bits;
@@ -436,11 +508,30 @@ void init_huffman_tree(const uint8_t* codelens, int n_values, uint16_t *out_code
         }
         out_codes[value] = flip_code(code, code_length);
     }
+
+
+    printf("TRACE: [\n");
+    for (int i = 0; i < n_values; ++i) {
+        printf("TRACE: %u\n", codes[i]);
+    }
+    printf("TRACE: ]\n");
 }
 
 Tree init_fixed_huffman_data() noexcept {
     Tree tree;
+    tree.codes.insert(tree.codes.end(), std::begin(fixed_literal_codes), std::end(fixed_literal_codes));
+    tree.codelens.insert(tree.codelens.end(), std::begin(fixed_literal_codelens), std::end(fixed_literal_codelens));
+    tree.n_lits = 288;
+    assert(tree.codes.size() == tree.n_lits);
+    assert(tree.codelens.size() == tree.n_lits);
 
+    tree.codes.insert(tree.codes.end(), std::begin(fixed_distance_codes), std::end(fixed_distance_codes));
+    tree.codelens.insert(tree.codelens.end(), std::begin(fixed_distance_codelens), std::end(fixed_distance_codelens));
+    tree.n_dists = 32;
+    assert(tree.codes.size() == (tree.n_lits + tree.n_dists));
+    assert(tree.codelens.size() == (tree.n_lits + tree.n_dists));
+
+#if 0
     tree.codelens.insert(tree.codelens.end(), 144, 8);
     tree.codelens.insert(tree.codelens.end(), 112, 9);
     tree.codelens.insert(tree.codelens.end(), 24, 7);
@@ -458,6 +549,7 @@ Tree init_fixed_huffman_data() noexcept {
     assert(tree.n_dists + tree.n_lits == tree.codelens.size());
     assert(tree.codelens.size() == tree.codes.size());
     init_huffman_tree(&tree.codelens[tree.n_lits], tree.n_dists, &tree.codes[tree.n_lits]);
+#endif
 
     return tree;
 }

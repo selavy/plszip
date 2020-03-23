@@ -3,21 +3,13 @@
 import pprint
 
 
-lit_codelens = []
-while len(lit_codelens) < 144:
-    lit_codelens.append(8)
-while len(lit_codelens) < 256:
-    lit_codelens.append(9)
-while len(lit_codelens) < 280:
-    lit_codelens.append(7)
-while len(lit_codelens) < 288:
-    lit_codelens.append(8)
-assert len(lit_codelens) == 288
-
-dst_codelens = [5]*32
-assert len(dst_codelens) == 32
-
 MAX_BIT_LENGTH = 15
+
+
+def flip_code(code, codelen):
+    binstr = f'{code:0{codelen}b}'
+    return int(binstr[::-1], 2)
+
 
 def init_tree(codelens):
     bl_count = [0]*MAX_BIT_LENGTH
@@ -37,7 +29,8 @@ def init_tree(codelens):
         if codelen == 0:
             codes.append(0)
         else:
-            codes.append(next_code[codelen])
+            code = flip_code(next_code[codelen], codelen)
+            codes.append(code)
             next_code[codelen] += 1
 
     return codes
@@ -57,30 +50,62 @@ def group_by(vals, amount):
     return grps
 
 
-def print_tree(dtype, name, vals, min_width=2):
+def print_tree(dtype, name, vals, min_width=2, nums_per_row=8):
     print(f"constexpr {dtype} {name}[{len(vals)}] = {{")
-    grps = group_by(vals, 8)
+    grps = group_by(vals, nums_per_row)
     for grp in grps:
         vs = [f'{v:{min_width}}' for v in grp]
-        print(f"    {', '.join(vs)}")
+        print(f"    {', '.join(vs)},")
     print("};")
-    print("")
 
+
+lit_codelens = []
+while len(lit_codelens) < 144:
+    lit_codelens.append(8)
+while len(lit_codelens) < 256:
+    lit_codelens.append(9)
+while len(lit_codelens) < 280:
+    lit_codelens.append(7)
+while len(lit_codelens) < 288:
+    lit_codelens.append(8)
+assert len(lit_codelens) == 288
+
+dst_codelens = [5]*32
+assert len(dst_codelens) == 32
 
 lits = init_tree(lit_codelens)
 dsts = init_tree(dst_codelens)
-# pprint.pprint(lits)
 
-
+print("// clang-format off")
 print_tree(
-    dtype='uint8_t',
-    name='fixed_literal_tree',
+    dtype='uint16_t',
+    name='fixed_literal_codes',
     vals=lits,
     min_width=3,
+    nums_per_row=8,
 )
+print("")
 print_tree(
     dtype='uint8_t',
-    name='fixed_distance_tree',
+    name='fixed_literal_codelens',
+    vals=lit_codelens,
+    min_width=1,
+    nums_per_row=16,
+)
+print("")
+print_tree(
+    dtype='uint16_t',
+    name='fixed_distance_codes',
     vals=dsts,
     min_width=2,
+    nums_per_row=16,
 )
+print("")
+print_tree(
+    dtype='uint8_t',
+    name='fixed_distance_codelens',
+    vals=dst_codelens,
+    min_width=1,
+    nums_per_row=16,
+)
+print("// clang-format on")
