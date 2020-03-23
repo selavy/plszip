@@ -1,6 +1,10 @@
 # src/CMakeLists.txt
 
-add_executable(compress compress_tables.h compress.cpp)
+add_executable(compress
+    crc32.cpp
+    compress_tables.h
+    compress.cpp
+    )
 target_compile_features(compress PUBLIC cxx_std_17)
 target_link_libraries(compress PRIVATE cxx_project_options)
 

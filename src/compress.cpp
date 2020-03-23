@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "crc32.h"
 #include "compress_tables.h"
 
 #define panic(fmt, ...)                                   \
@@ -48,25 +49,6 @@ constexpr size_t MaxBits = 15;
 constexpr uint8_t ID1_GZIP = 31;
 constexpr uint8_t ID2_GZIP = 139;
 constexpr uint8_t CM_DEFLATE = 8;
-
-uint32_t crc_table[256];
-
-void init_crc_table() {
-    for (int n = 0; n < 256; n++) {
-        uint32_t c = n;
-        for (int k = 0; k < 8; k++) c = c & 1 ? 0xedb88320u ^ (c >> 1) : c >> 1;
-        crc_table[n] = c;
-    }
-}
-
-uint32_t calc_crc32(uint32_t crc, const char* buf, size_t len) {
-    if (buf == NULL) return 0;
-    crc = crc ^ 0xffffffffUL;
-    for (size_t i = 0; i < len; ++i) {
-        crc = crc_table[((int)crc ^ (*buf++)) & 0xff] ^ (crc >> 8);
-    }
-    return crc ^ 0xffffffffUL;
-}
 
 struct HuffTrees {
     const uint16_t* codes;
@@ -785,7 +767,6 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
     if (is_possible) {
         DEBUG("Using dynamic tree");
         static uint16_t codes[MaxNumCodes + 1];   // TODO: figure out where to put this data
-        memset(&codes[0], 0xffu, sizeof(codes));  // TEMP TEMP
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
         auto htree_length_data = make_header_tree_length_data(htree);
@@ -874,8 +855,6 @@ int main(int argc, char** argv) {
     }
     BitWriter writer{out};
 
-    init_crc_table();
-
     // +---+---+---+---+---+---+---+---+---+---+
     // |ID1|ID2|CM |FLG|     MTIME     |XFL|OS | (more-->)
     // +---+---+---+---+---+---+---+---+---+---+
@@ -912,13 +891,10 @@ int main(int argc, char** argv) {
 #endif
 
     static char buf[BUFSIZE];
-    // std::vector<char> buf(BUFSIZE, 0);
-    // std::unique_ptr<char[]> buf = std::make_unique<char[]>(BUFSIZE);
-    // memset(&buf[0], 0, BUFSIZE*sizeof(buf[0]));
     size_t size = 0;
     size_t read;
     while ((read = fread(&buf[size], 1, READSIZE, fp)) > 0) {
-        crc = calc_crc32(crc, &buf[size], read);
+        crc = calc_crc32(crc, reinterpret_cast<const uint8_t*>(&buf[size]), read);
         isize += read;
         size += read;
         if (size >= BLOCKSIZE) {
