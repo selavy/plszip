@@ -635,6 +635,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         h = update_hash(h, buf[1]);
     }
 
+    const char* const match_end = buf + std::min(size, MaxMatchLength);
     size_t i = 0;
     while (i + 3 < size) {
         xassert(i + 2 < size, "i=%zu size=%zu", i, size);
@@ -643,7 +644,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         int length = 2;
         int distance = 0;
         for (int pos : locs) {
-            int match_length = longest_match(buf + pos, buf + i, buf + std::min(size, MaxMatchLength + 1));
+            int match_length = longest_match(buf + pos, buf + i, match_end);
             if (match_length > length) {
                 length = match_length;
                 distance = i - pos;
