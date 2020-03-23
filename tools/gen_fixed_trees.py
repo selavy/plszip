@@ -76,35 +76,24 @@ assert len(dst_codelens) == 32
 lits = init_tree(lit_codelens)
 dsts = init_tree(dst_codelens)
 
+codes = lits + dsts
+codelens = lit_codelens + dst_codelens
+
 print("// clang-format off")
+print(f"constexpr int NumFixedTreeLiterals = {len(lit_codelens)};")
+print(f"constexpr int NumFixedTreeDistances = {len(dst_codelens)};")
 print_tree(
     dtype='uint16_t',
-    name='fixed_literal_codes',
-    vals=lits,
+    name='fixed_codes',
+    vals=codes,
     min_width=3,
     nums_per_row=8,
 )
 print("")
 print_tree(
     dtype='uint8_t',
-    name='fixed_literal_codelens',
-    vals=lit_codelens,
-    min_width=1,
-    nums_per_row=16,
-)
-print("")
-print_tree(
-    dtype='uint16_t',
-    name='fixed_distance_codes',
-    vals=dsts,
-    min_width=2,
-    nums_per_row=16,
-)
-print("")
-print_tree(
-    dtype='uint8_t',
-    name='fixed_distance_codelens',
-    vals=dst_codelens,
+    name='fixed_codelens',
+    vals=codelens,
     min_width=1,
     nums_per_row=16,
 )
