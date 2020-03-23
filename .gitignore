@@ -38,3 +38,4 @@ output
 *.check
 
 benchs/big.txt
+__pycache__/

@@ -1,14 +1,10 @@
 #!/usr/bin/env python
 
 import pprint
+from utils import (flip_code, group_by, print_array)
 
 
 MAX_BIT_LENGTH = 15
-
-
-def flip_code(code, codelen):
-    binstr = f'{code:0{codelen}b}'
-    return int(binstr[::-1], 2)
 
 
 def init_tree(codelens):
@@ -36,28 +32,6 @@ def init_tree(codelens):
     return codes
 
 
-def group_by(vals, amount):
-    grps = []
-    grp = []
-    for v in vals:
-        if len(grp) == amount:
-            grps.append(grp)
-            grp = [v]
-        else:
-            grp.append(v)
-    if grp:
-        grps.append(grp)
-    return grps
-
-
-def print_tree(dtype, name, vals, min_width=2, nums_per_row=8):
-    print(f"constexpr {dtype} {name}[{len(vals)}] = {{")
-    grps = group_by(vals, nums_per_row)
-    for grp in grps:
-        vs = [f'{v:{min_width}}' for v in grp]
-        print(f"    {', '.join(vs)},")
-    print("};")
-
 
 lit_codelens = []
 while len(lit_codelens) < 144:
@@ -82,7 +56,7 @@ codelens = lit_codelens + dst_codelens
 print("// clang-format off")
 print(f"constexpr int NumFixedTreeLiterals = {len(lit_codelens)};")
 print(f"constexpr int NumFixedTreeDistances = {len(dst_codelens)};")
-print_tree(
+print_array(
     dtype='uint16_t',
     name='fixed_codes',
     vals=codes,
@@ -90,7 +64,7 @@ print_tree(
     nums_per_row=8,
 )
 print("")
-print_tree(
+print_array(
     dtype='uint8_t',
     name='fixed_codelens',
     vals=codelens,

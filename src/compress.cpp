@@ -152,6 +152,100 @@ struct HuffTrees {
 constexpr HuffTrees fixed_tree = {fixed_codes, fixed_codelens, NumFixedTreeLiterals, NumFixedTreeDistances};
 
 // clang-format off
+constexpr int length_codes[259] = {
+     -1,  -1,  -1, 257, 258, 259, 260, 261,
+    262, 263, 264, 265, 265, 266, 266, 267,
+    267, 268, 268, 269, 269, 269, 269, 270,
+    270, 270, 270, 271, 271, 271, 271, 272,
+    272, 272, 272, 273, 273, 273, 273, 273,
+    273, 273, 273, 274, 274, 274, 274, 274,
+    274, 274, 274, 275, 275, 275, 275, 275,
+    275, 275, 275, 276, 276, 276, 276, 276,
+    276, 276, 276, 277, 277, 277, 277, 277,
+    277, 277, 277, 277, 277, 277, 277, 277,
+    277, 277, 277, 278, 278, 278, 278, 278,
+    278, 278, 278, 278, 278, 278, 278, 278,
+    278, 278, 278, 279, 279, 279, 279, 279,
+    279, 279, 279, 279, 279, 279, 279, 279,
+    279, 279, 279, 280, 280, 280, 280, 280,
+    280, 280, 280, 280, 280, 280, 280, 280,
+    280, 280, 280, 281, 281, 281, 281, 281,
+    281, 281, 281, 281, 281, 281, 281, 281,
+    281, 281, 281, 281, 281, 281, 281, 281,
+    281, 281, 281, 281, 281, 281, 281, 281,
+    281, 281, 281, 282, 282, 282, 282, 282,
+    282, 282, 282, 282, 282, 282, 282, 282,
+    282, 282, 282, 282, 282, 282, 282, 282,
+    282, 282, 282, 282, 282, 282, 282, 282,
+    282, 282, 282, 283, 283, 283, 283, 283,
+    283, 283, 283, 283, 283, 283, 283, 283,
+    283, 283, 283, 283, 283, 283, 283, 283,
+    283, 283, 283, 283, 283, 283, 283, 283,
+    283, 283, 283, 284, 284, 284, 284, 284,
+    284, 284, 284, 284, 284, 284, 284, 284,
+    284, 284, 284, 284, 284, 284, 284, 284,
+    284, 284, 284, 284, 284, 284, 284, 284,
+    284, 284, 285,
+};
+
+constexpr int length_bases[259] = {
+     -1,  -1,  -1,   3,   4,   5,   6,   7,
+      8,   9,  10,  11,  11,  13,  13,  15,
+     15,  17,  17,  19,  19,  19,  19,  23,
+     23,  23,  23,  27,  27,  27,  27,  31,
+     31,  31,  31,  35,  35,  35,  35,  35,
+     35,  35,  35,  43,  43,  43,  43,  43,
+     43,  43,  43,  51,  51,  51,  51,  51,
+     51,  51,  51,  59,  59,  59,  59,  59,
+     59,  59,  59,  67,  67,  67,  67,  67,
+     67,  67,  67,  67,  67,  67,  67,  67,
+     67,  67,  67,  83,  83,  83,  83,  83,
+     83,  83,  83,  83,  83,  83,  83,  83,
+     83,  83,  83,  99,  99,  99,  99,  99,
+     99,  99,  99,  99,  99,  99,  99,  99,
+     99,  99,  99, 115, 115, 115, 115, 115,
+    115, 115, 115, 115, 115, 115, 115, 115,
+    115, 115, 115, 131, 131, 131, 131, 131,
+    131, 131, 131, 131, 131, 131, 131, 131,
+    131, 131, 131, 131, 131, 131, 131, 131,
+    131, 131, 131, 131, 131, 131, 131, 131,
+    131, 131, 131, 163, 163, 163, 163, 163,
+    163, 163, 163, 163, 163, 163, 163, 163,
+    163, 163, 163, 163, 163, 163, 163, 163,
+    163, 163, 163, 163, 163, 163, 163, 163,
+    163, 163, 163, 195, 195, 195, 195, 195,
+    195, 195, 195, 195, 195, 195, 195, 195,
+    195, 195, 195, 195, 195, 195, 195, 195,
+    195, 195, 195, 195, 195, 195, 195, 195,
+    195, 195, 195, 227, 227, 227, 227, 227,
+    227, 227, 227, 227, 227, 227, 227, 227,
+    227, 227, 227, 227, 227, 227, 227, 227,
+    227, 227, 227, 227, 227, 227, 227, 227,
+    227, 227, 258,
+};
+
+constexpr int length_extra_bits[259] = {
+    -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1,
+    1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 0,
+};
+// clang-format on
+
+// clang-format off
 struct LenDstInfo {
     int code;
     int extra_bits;
@@ -254,15 +348,18 @@ int get_len_dst_extra_bits(int value, const LenDstInfo* info, size_t n_info) {
 }
 
 int get_length_code(int length) {
-    return get_len_dst_code(length, length_info, ARRSIZE(length_info));
+    assert(0 <= length && length < ARRSIZE(length_codes));
+    return length_codes[length];
 }
 
 int get_length_base(int length) {
-    return get_len_dst_base(length, length_info, ARRSIZE(length_info));
+    assert(0 <= length && length < ARRSIZE(length_bases));
+    return length_bases[length];
 }
 
 int get_length_extra_bits(int length) {
-    return get_len_dst_extra_bits(length, length_info, ARRSIZE(length_info));
+    assert(0 <= length && length < ARRSIZE(length_extra_bits));
+    return length_extra_bits[length];
 }
 
 int get_distance_code(int distance) {
@@ -515,12 +612,6 @@ void init_huffman_tree(const uint8_t* codelens, int n_values, uint16_t* out_code
         }
         out_codes[value] = flip_code(code, code_length);
     }
-
-    printf("TRACE: [\n");
-    for (int i = 0; i < n_values; ++i) {
-        printf("TRACE: %u\n", codes[i]);
-    }
-    printf("TRACE: ]\n");
 }
 
 // All multi-byte numbers in the format described here are stored with
@@ -632,7 +723,7 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
             auto len = lens[i];
             auto len_base = get_length_base(len);
             auto len_extra = len - len_base;
-            assert(len_extra >= 0);
+            xassert(len_extra >= 0, "len < len_base: %d %d", len, len_base);
             auto len_extra_bits = get_length_extra_bits(len);
             if (len_extra_bits > 0) {
                 out.write_bits(static_cast<uint16_t>(len_extra), len_extra_bits);
@@ -969,7 +1060,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
 
     if (is_possible) {
         DEBUG("Using dynamic tree");
-        static uint16_t codes[MaxNumCodes+1]; // TODO: figure out where to put this data
+        static uint16_t codes[MaxNumCodes + 1];   // TODO: figure out where to put this data
         memset(&codes[0], 0xffu, sizeof(codes));  // TEMP TEMP
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
