@@ -313,10 +313,6 @@ uint16_t flip_code(uint16_t code, size_t codelen) {
 }
 
 void init_huffman_tree(const uint8_t* codelens, int n_values, uint16_t* out_codes) {
-#ifndef NDEBUG
-    constexpr auto calc_min_code_len = [](uint16_t code) -> int { return code != 0 ? 16 - __builtin_clz(code) : 0; };
-#endif
-
     size_t bl_count[MaxBits];
     uint16_t next_code[MaxBits];
     uint16_t codes[MaxCodes];
@@ -348,23 +344,10 @@ void init_huffman_tree(const uint8_t* codelens, int n_values, uint16_t* out_code
     // codes of the same length with the base values determined at step 2. Codes
     // that are never used (which have a bit length of zero) must not be
     // assigned a value.
-    memset(&codes[0], 0, sizeof(codes));
     for (int i = 0; i < n_values; ++i) {
         if (codelens[i] != 0) {
-            codes[i] = next_code[codelens[i]]++;
-            assert(calc_min_code_len(codes[i]) <= codelens[i]);
+            out_codes[i] = flip_code(next_code[codelens[i]]++, codelens[i]);
         }
-    }
-
-    // TODO: move this into step 3
-    // 4) Expand tree
-    for (int value = 0; value < n_values; ++value) {
-        uint16_t code = codes[value];
-        uint16_t code_length = codelens[value];
-        if (code_length == 0) {
-            continue;
-        }
-        out_codes[value] = flip_code(code, code_length);
     }
 }
 
@@ -469,7 +452,6 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
         xassert(0 <= lit && lit <= 285, "invalid literal: %d", lit);
         uint16_t lit_huff_code = tree.codes[lit];
         int lit_n_bits = tree.codelens[lit];
-        xassert(lit_huff_code != 0xffffu, "invalid literal: %d", lit);
         xassert(lit_n_bits > 0, "invalid code length: %u", lit_n_bits);
         assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
         out.write_bits(lit_huff_code, lit_n_bits);
@@ -489,7 +471,6 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
             xassert(0 <= dst_code && dst_code <= 29, "invalid distance code: %d", dst_code);
             uint16_t dst_huff_code = tree.codes[tree.n_lits + dst_code];
             int dst_n_bits = tree.codelens[tree.n_lits + dst_code];
-            xassert(dst_huff_code != 0xffffu, "invalid distance code: %d", dst_code);
             xassert(dst_n_bits > 0, "invalid code length: %u", lit_n_bits);
             out.write_bits(static_cast<uint16_t>(dst_huff_code), dst_n_bits);
 
