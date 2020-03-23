@@ -969,8 +969,8 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
 
     if (is_possible) {
         DEBUG("Using dynamic tree");
-        auto codes = std::make_unique<uint16_t[]>(codelens.size());
-        memset(&codes[0], 0xffffu, sizeof(codes[0]) * codelens.size());  // TEMP TEMP
+        static uint16_t codes[MaxNumCodes+1]; // TODO: figure out where to put this data
+        memset(&codes[0], 0xffu, sizeof(codes));  // TEMP TEMP
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
         auto htree_length_data = make_header_tree_length_data(htree);
