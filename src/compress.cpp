@@ -597,17 +597,16 @@ CodeLengths make_header_tree_length_data(const Tree& tree) {
 
 constexpr uint32_t update_hash(uint32_t current, char c) noexcept {
     constexpr uint32_t mask = (1u << 24) - 1;
-    return ((current << 8) ^ c) & mask;
+    return ((current << 8) | c) & mask;
 }
 
-int longest_match(const char* wnd, const char* str, const char* const end) {
-    const char* p1 = wnd;
-    const char* p2 = str;
-    while (p2 < end && *p1 == *p2) {
-        ++p1;
-        ++p2;
+int longest_match(const char* wnd, const char* str, int max_length) {
+    int i = 0;
+    for (; i < max_length; ++i) {
+        if (wnd[i] != str[i])
+            break;
     }
-    return p2 - str;
+    return i;
 }
 
 struct BlockResults {
@@ -622,29 +621,32 @@ struct BlockResults {
 };
 
 BlockResults analyze_block(const char* const buf, size_t size) {
+    DEBUG("analyze_block -- %zu", size);
     std::vector<int> lit_codes;
     std::vector<int> len_vals;
     std::vector<int> dst_vals;
 
-    std::map<uint32_t, std::vector<int>> htable;
+    using Hash = std::tuple<char, char, char>;
+    std::map<Hash, std::vector<int>> htable;
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
-    uint32_t h = 0;
-    if (size >= 2) {
-        h = update_hash(h, buf[0]);
-        h = update_hash(h, buf[1]);
-    }
+    // uint32_t h = 0;
+    // if (size >= 2) {
+    //     h = update_hash(h, buf[0]);
+    //     h = update_hash(h, buf[1]);
+    // }
 
-    const char* const match_end = buf + std::min(size, MaxMatchLength);
     size_t i = 0;
     while (i + 3 < size) {
         xassert(i + 2 < size, "i=%zu size=%zu", i, size);
-        h = update_hash(h, buf[i + 2]);
+        // h = update_hash(h, buf[i + 2]);
+        auto h = std::make_tuple(buf[i+0], buf[i+1], buf[i+2]);
         auto& locs = htable[h];
         int length = 2;
         int distance = 0;
-        for (int pos : locs) {
-            int match_length = longest_match(buf + pos, buf + i, match_end);
+        for (auto rit = locs.rbegin(); rit != locs.rend(); ++rit) {
+            int pos = *rit;
+            int match_length = longest_match(buf + pos, buf + i, std::min(MaxMatchLength, size - i));
             if (match_length > length) {
                 length = match_length;
                 distance = i - pos;
@@ -654,6 +656,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         }
         locs.push_back(i);
         if (length >= 3) {
+            // DEBUG("pos=%3zu len=%3d dist=%3d", i, length, distance);
             i += length;
             lit_codes.push_back(get_length_code(length));
             len_vals.push_back(length);
@@ -811,18 +814,16 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         DEBUG("hdist = %zu", hdist);
         DEBUG("hclen = %zu", hclen);
 
-        int header_overhead = 0;
-
         uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
-        out.write_bits(hlit - 257, 5); header_overhead += 5;
-        out.write_bits(hdist - 1, 5); header_overhead += 5;
-        out.write_bits(hclen - 4, 4); header_overhead += 4;
+        out.write_bits(hlit - 257, 5);
+        out.write_bits(hdist - 1, 5);
+        out.write_bits(hclen - 4, 4);
 
         // header tree code lengths
         for (auto codelen : htree_length_data) {
-            out.write_bits(codelen, 3); header_overhead += 3;
+            out.write_bits(codelen, 3);
         }
 
         // literal and distance code lengths
@@ -831,26 +832,24 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
             uint16_t huff_code = htree.codes[hcode];
             int n_bits = htree.codelens[hcode];
             assert(n_bits > 0);
-            out.write_bits(huff_code, n_bits); header_overhead += n_bits;
+            out.write_bits(huff_code, n_bits);
             switch (hcode) {
             case 16:
                 xassert(3 <= hextra[i] && hextra[i] <= 6, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 3, 2); header_overhead += 2;
+                out.write_bits(hextra[i] - 3, 2);
                 break;
             case 17:
                 xassert(3 <= hextra[i] && hextra[i] <= 10, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 3, 3); header_overhead += 3;
+                out.write_bits(hextra[i] - 3, 3);
                 break;
             case 18:
                 xassert(11 <= hextra[i] && hextra[i] <= 138, "invalid hextra: %d", hextra[i]);
-                out.write_bits(hextra[i] - 11, 7); header_overhead += 7;
+                out.write_bits(hextra[i] - 11, 7);
                 break;
             default:
                 break;
             }
         }
-
-        DEBUG("Header overhead: %d", header_overhead);
 
         HuffTrees trees;
         trees.codes = &codes[0];

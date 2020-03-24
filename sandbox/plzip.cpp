@@ -983,7 +983,7 @@ int main(int argc, char** argv)
                         panic("invalid distance: %zu >= %zu",
                                 distance, write_buffer.size());
                     }
-                    DEBUG("len+dist => %zu %zu", length, distance);
+                    DEBUG("pos=%zu len=%zu dist=%zu", write_length, length, distance);
                     size_t index = write_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
                         // NOTE: because the ring buffer is always full, the
