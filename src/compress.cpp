@@ -33,7 +33,7 @@
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 constexpr size_t BUFSIZE = 1 << 15; // 1 << 10;
-constexpr size_t BLOCKSIZE = (1 << 11) + 1;
+constexpr size_t BLOCKSIZE = 1 << 15;
 constexpr size_t NumHeaderCodeLengths = 19;
 constexpr size_t LiteralCodes = 256;  // [0, 255] doesn't include END_BLOCK code
 constexpr size_t LengthCodes = 29;    // [257, 285]
@@ -400,11 +400,13 @@ struct BitWriter {
     FILE* out_ = nullptr;
 };
 
-void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out) {
+void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
     uint8_t block_type = static_cast<uint8_t>(BType::NO_COMPRESSION);
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
+    xassert(size < UINT16_MAX, "invalid size: %zu", size);
     uint16_t len = size; //  & 0xffffu;
     uint16_t nlen = len ^ 0xffffu;
+    DEBUG("Block #%d Encoding: No Compression -- %u %u%s", block_number, len, nlen, bfinal ? " -- Final Block" : "");
     out.write_bits(bfinal, 1);
     out.write_bits(block_type, 2);
     out.flush();
@@ -624,7 +626,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     //       dynamic encoding in that case, and potentially gives optimization ability
     //       to know that there are at least N bytes of input
 
-    DEBUG("analyze_block -- %zu", size);
+    // DEBUG("analyze_block -- %zu", size);
     std::vector<int> lit_codes;
     std::vector<int> len_vals;
     std::vector<int> dst_vals;
@@ -798,7 +800,7 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
 }
 
 void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
-    DEBUG("compress_block(%d): bfinal=%s size=%zu", block_number, bfinal ? "TRUE" : "FALSE", size);
+    // DEBUG("compress_block(%d): bfinal=%s size=%zu", block_number, bfinal ? "TRUE" : "FALSE", size);
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto htree_length_data = make_header_tree_length_data(htree);
@@ -809,13 +811,12 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
     int64_t nc_cost = 8 + 16 + 16 + 8*size; // "Header Block flush" + LEN + NLEN + `LEN` bytes
 
-    DEBUG("dyn=%ld + hdr=%ld = totdyn=%ld; fix=%ld; nc=%ld", dyn_cost, hdr_cost, tot_dyn_cost, fix_cost, nc_cost);
+    // DEBUG("dyn=%ld + hdr=%ld = totdyn=%ld; fix=%ld; nc=%ld", dyn_cost, hdr_cost, tot_dyn_cost, fix_cost, nc_cost);
 
     if (nc_cost < fix_cost && nc_cost < tot_dyn_cost) {
-        DEBUG("Using NO_COMPRESSION")
-        blkwrite_no_compression(buf, size, bfinal, out);
+        blkwrite_no_compression(buf, size, bfinal, out, block_number);
     } else if (tot_dyn_cost < fix_cost) {
-        DEBUG("Using DYNAMIC_HUFFMAN");
+        DEBUG("Block #%d Encoding: Dynamic Huffman%s", block_number, bfinal ? " -- Final Block" : "");
         static uint16_t codes[MaxNumCodes + 1];   // TODO: figure out where to put this data
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
@@ -824,9 +825,9 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         xassert(1 <= hdist && hdist <= 32, "hdist = %zu", hdist);
         xassert(4 <= hclen && hclen <= 19, "hclen = %zu", hclen);
 
-        DEBUG("hlit = %zu", hlit);
-        DEBUG("hdist = %zu", hdist);
-        DEBUG("hclen = %zu", hclen);
+        // DEBUG("hlit = %zu", hlit);
+        // DEBUG("hdist = %zu", hdist);
+        // DEBUG("hclen = %zu", hclen);
 
         uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
         out.write_bits(bfinal, 1);
@@ -872,7 +873,7 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         trees.n_dists = hdist;
         write_block(lits, dsts, lens, trees, out);
     } else {
-        DEBUG("Using FIXED_HUFFMAN");
+        DEBUG("Block #%d Encoding: Fixed Huffman%s", block_number, bfinal ? " -- Final Block" : "");
         uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
@@ -940,7 +941,8 @@ int main(int argc, char** argv) {
         isize += read;
         size += read;
         while (size >= BLOCKSIZE) {
-            compress_fn(&buf[0], BLOCKSIZE, 0, writer, block_number++);
+            uint8_t bfinal = size <= BLOCKSIZE && feof(fp);
+            compress_fn(&buf[0], BLOCKSIZE, bfinal, writer, block_number++);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -957,7 +959,7 @@ int main(int argc, char** argv) {
     // rare case that `size` == 0, and isize wraps to exactly 0, will write
     // an unnecessary empty block, but that is OK.
     assert(size < BLOCKSIZE);
-    if (size > 0 || isize == 0) {
+    if (size > 0 || isize == 0 || read == 0) {
         compress_fn(&buf[0], size, 1, writer, block_number++);
     }
     writer.flush();

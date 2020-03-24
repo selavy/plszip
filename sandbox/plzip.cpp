@@ -918,7 +918,6 @@ int main(int argc, char** argv)
         bfinal = reader.read_bits(1);
         BType btype = static_cast<BType>(reader.read_bits(2));
         if (btype == BType::NO_COMPRESSION) {
-            DEBUG("Block #%d Encoding: No Compression", block_number);
             reader.flush_byte();
             auto read2B_le = [&]() {
                 reader.need(8 + 8);
@@ -928,8 +927,11 @@ int main(int argc, char** argv)
             };
             uint16_t len  = read2B_le();
             uint16_t nlen = read2B_le();
-            if ((len & 0xffff) != (nlen ^ 0xffff)) {
-                panic("invalid stored block lengths: %u %u", len, nlen);
+            DEBUG("Block #%d Encoding: No Compression -- %u %u", block_number, len, nlen);
+            if ((len & 0xffffu) != (nlen ^ 0xffffu)) {
+                DEBUG("len=%u nlen=%u len & 0xffff = %u nlen ^ 0xffff = %u",
+                        len, nlen, (len & 0xffffu), (nlen ^ 0xffffu));
+                panic("invalid stored block lengths: %u %u (expected %u)", len, nlen, (nlen ^ 0xffffu));
             }
             std::vector<uint8_t> temp_buffer;
             while (len >= BUFFERSZ) {
@@ -984,7 +986,7 @@ int main(int argc, char** argv)
                         panic("invalid distance: %zu >= %zu",
                                 distance, write_buffer.size());
                     }
-                    DEBUG("pos=%zu len=%zu dist=%zu", write_length, length, distance);
+                    // DEBUG("pos=%zu len=%zu dist=%zu", write_length, length, distance);
                     tot_match_length += length;
                     size_t index = write_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
