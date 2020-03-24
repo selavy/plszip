@@ -943,7 +943,7 @@ int main(int argc, char** argv) {
         crc = calc_crc32(crc, reinterpret_cast<const uint8_t*>(&buf[size]), read);
         isize += read;
         size += read;
-        assert(size <= filesize);
+        assert(isize <= filesize);
         while (size >= BLOCKSIZE) {
             uint8_t bfinal = size <= BLOCKSIZE && isize == filesize;
             compress_fn(&buf[0], BLOCKSIZE, bfinal, writer, block_number++);
