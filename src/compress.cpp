@@ -787,21 +787,25 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
     return cost;
 }
 
-void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
-    DEBUG("blkwrite_dynamic: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
+void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
+    DEBUG("compress_block: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto htree_length_data = make_header_tree_length_data(htree);
     auto hdr_cost = calculate_header_cost(htree, hcodes, htree_length_data);
-
-    // TODO: improve heuristic for deciding dynamic vs fixed huffman encoding
+    // TODO(peter): better way to detect this?
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
+    auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
+    int64_t nc_cost = size;
 
-    DEBUG("Header cost: %ld", hdr_cost);
+    DEBUG("dyn=%ld + hdr=%ld = totdyn=%ld; fix=%ld; nc=%ld", dyn_cost, hdr_cost, tot_dyn_cost, fix_cost, nc_cost);
 
-    if (is_possible && dyn_cost + hdr_cost < fix_cost) {
-        DEBUG("Using dynamic tree");
+    if (nc_cost < fix_cost && nc_cost < dyn_cost) {
+        DEBUG("Using NO_COMPRESSION")
+        blkwrite_no_compression(buf, size, bfinal, out);
+    } else if (tot_dyn_cost < fix_cost) {
+        DEBUG("Using DYNAMIC_HUFFMAN");
         static uint16_t codes[MaxNumCodes + 1];   // TODO: figure out where to put this data
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
@@ -858,7 +862,7 @@ void blkwrite_dynamic(const char* buf, size_t size, uint8_t bfinal, BitWriter& o
         trees.n_dists = hdist;
         write_block(lits, dsts, lens, trees, out);
     } else {
-        DEBUG("Using fixed tree");
+        DEBUG("Using FIXED_HUFFMAN");
         uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
@@ -916,15 +920,7 @@ int main(int argc, char** argv) {
     // data modulo 2^32.
     uint32_t isize = 0;
 
-#if 0
-#elif 0
-    auto* compress_fn = &blkwrite_no_compression;
-#elif 1
-    auto* compress_fn = &blkwrite_dynamic;
-#else
-#error "Must select an implementation"
-#endif
-
+    auto* compress_fn = &compress_block;
     static char buf[BUFSIZE];
     size_t size = 0;
     size_t read;
