@@ -660,7 +660,11 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         }
         locs.push_back(i);
         if (length >= 3) {
-            // DEBUG("pos=%3zu len=%3d dist=%3d", i, length, distance);
+            DEBUG("pos=%3zu len=%3d dist=%3d", i, length, distance);
+            for (int j = 1; j < length; ++j) {
+                auto h2 = std::make_tuple(buf[i+j+0], buf[i+j+1], buf[i+j+2]);
+                htable[h2].push_back(i+j);
+            }
             i += length;
             lit_codes.push_back(get_length_code(length));
             len_vals.push_back(length);

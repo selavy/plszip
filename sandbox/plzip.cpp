@@ -913,6 +913,7 @@ int main(int argc, char** argv)
     do {
         block_size = 0;
         size_t write_length = 0;
+        size_t tot_match_length = 0;
         reader.need(1 + 2);
         bfinal = reader.read_bits(1);
         BType btype = static_cast<BType>(reader.read_bits(2));
@@ -984,6 +985,7 @@ int main(int argc, char** argv)
                                 distance, write_buffer.size());
                     }
                     DEBUG("pos=%zu len=%zu dist=%zu", write_length, length, distance);
+                    tot_match_length += length;
                     size_t index = write_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
                         // NOTE: because the ring buffer is always full, the
@@ -1004,6 +1006,8 @@ int main(int argc, char** argv)
                     panic("invalid fixed huffman value: %u", value);
                 }
             }
+
+            DEBUG("total_match_length = %zu", tot_match_length);
         } else {
             panic("unsupported block encoding: %u", (uint8_t)btype);
         }
@@ -1012,6 +1016,7 @@ int main(int argc, char** argv)
             flush_buffer(output, write_buffer, write_length);
             block_size += write_length;
         }
+
 
         ++block_number;
     } while (bfinal == 0);
