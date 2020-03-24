@@ -32,9 +32,8 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
-constexpr size_t BUFSIZE = 2056;
-constexpr size_t READSIZE = 2056;
-constexpr size_t BLOCKSIZE = 2056;
+constexpr size_t BUFSIZE = 1 << 15; // 1 << 10;
+constexpr size_t BLOCKSIZE = (1 << 11) + 1;
 constexpr size_t NumHeaderCodeLengths = 19;
 constexpr size_t LiteralCodes = 256;  // [0, 255] doesn't include END_BLOCK code
 constexpr size_t LengthCodes = 29;    // [257, 285]
@@ -404,7 +403,7 @@ struct BitWriter {
 void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out) {
     uint8_t block_type = static_cast<uint8_t>(BType::NO_COMPRESSION);
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
-    uint16_t len = size;
+    uint16_t len = size; //  & 0xffffu;
     uint16_t nlen = len ^ 0xffffu;
     out.write_bits(bfinal, 1);
     out.write_bits(block_type, 2);
@@ -660,7 +659,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         }
         locs.push_back(i);
         if (length >= 3) {
-            DEBUG("pos=%3zu len=%3d dist=%3d", i, length, distance);
+            // DEBUG("pos=%3zu len=%3d dist=%3d", i, length, distance);
             for (int j = 1; j < length; ++j) {
                 if (i+j+2 >= size) {
                     break;
@@ -798,8 +797,8 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
     return cost;
 }
 
-void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out) {
-    DEBUG("compress_block: bfinal=%s size=%zu", bfinal ? "TRUE" : "FALSE", size);
+void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
+    DEBUG("compress_block(%d): bfinal=%s size=%zu", block_number, bfinal ? "TRUE" : "FALSE", size);
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto htree_length_data = make_header_tree_length_data(htree);
@@ -904,6 +903,7 @@ int main(int argc, char** argv) {
         exit(1);
     }
     BitWriter writer{out};
+    int block_number = 0;
 
     // +---+---+---+---+---+---+---+---+---+---+
     // |ID1|ID2|CM |FLG|     MTIME     |XFL|OS | (more-->)
@@ -935,12 +935,12 @@ int main(int argc, char** argv) {
     static char buf[BUFSIZE];
     size_t size = 0;
     size_t read;
-    while ((read = fread(&buf[size], 1, READSIZE, fp)) > 0) {
+    while ((read = fread(&buf[size], 1, BUFSIZE - size, fp)) > 0) {
         crc = calc_crc32(crc, reinterpret_cast<const uint8_t*>(&buf[size]), read);
         isize += read;
         size += read;
-        if (size >= BLOCKSIZE) {
-            compress_fn(&buf[0], BLOCKSIZE, 0, writer);
+        while (size >= BLOCKSIZE) {
+            compress_fn(&buf[0], BLOCKSIZE, 0, writer, block_number++);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -956,8 +956,9 @@ int main(int argc, char** argv) {
     // NOTE: it is compliant to have unnecessary empty blocks so in the very
     // rare case that `size` == 0, and isize wraps to exactly 0, will write
     // an unnecessary empty block, but that is OK.
+    assert(size < BLOCKSIZE);
     if (size > 0 || isize == 0) {
-        compress_fn(&buf[0], size, 1, writer);
+        compress_fn(&buf[0], size, 1, writer, block_number++);
     }
     writer.flush();
 
