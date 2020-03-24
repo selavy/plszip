@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#include "crc32.h"
 #include "compress_tables.h"
+#include "crc32.h"
 
 #define panic(fmt, ...)                                   \
     do {                                                  \
@@ -32,7 +32,7 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
-constexpr size_t BUFSIZE = 1 << 15; // 1 << 10;
+constexpr size_t BUFSIZE = 1 << 15;  // 1 << 10;
 constexpr size_t BLOCKSIZE = 1 << 15;
 constexpr size_t NumHeaderCodeLengths = 19;
 constexpr size_t LiteralCodes = 256;  // [0, 255] doesn't include END_BLOCK code
@@ -162,7 +162,7 @@ using CodeLengths = std::vector<uint8_t>;
 
 struct Tree {
     std::vector<uint16_t> codes;    // [MaxNumCodes+1];
-    std::vector<uint8_t>  codelens; // [MaxNumCodes+1];
+    std::vector<uint8_t> codelens;  // [MaxNumCodes+1];
     int n_lits;
     int n_dists;
 };
@@ -404,7 +404,7 @@ void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, Bi
     uint8_t block_type = static_cast<uint8_t>(BType::NO_COMPRESSION);
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
     xassert(size < UINT16_MAX, "invalid size: %zu", size);
-    uint16_t len = size; //  & 0xffffu;
+    uint16_t len = size;  //  & 0xffffu;
     uint16_t nlen = len ^ 0xffffu;
     DEBUG("Block #%d Encoding: No Compression -- %u %u%s", block_number, len, nlen, bfinal ? " -- Final Block" : "");
     out.write_bits(bfinal, 1);
@@ -604,8 +604,7 @@ constexpr uint32_t update_hash(uint32_t current, char c) noexcept {
 int longest_match(const char* wnd, const char* str, int max_length) {
     int i = 0;
     for (; i < max_length; ++i) {
-        if (wnd[i] != str[i])
-            break;
+        if (wnd[i] != str[i]) break;
     }
     return i;
 }
@@ -645,7 +644,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     while (i + 3 < size) {
         xassert(i + 2 < size, "i=%zu size=%zu", i, size);
         // h = update_hash(h, buf[i + 2]);
-        auto h = std::make_tuple(buf[i+0], buf[i+1], buf[i+2]);
+        auto h = std::make_tuple(buf[i + 0], buf[i + 1], buf[i + 2]);
         auto& locs = htable[h];
         int length = 2;
         int distance = 0;
@@ -663,11 +662,11 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         if (length >= 3) {
             // DEBUG("pos=%3zu len=%3d dist=%3d", i, length, distance);
             for (int j = 1; j < length; ++j) {
-                if (i+j+2 >= size) {
+                if (i + j + 2 >= size) {
                     break;
                 }
-                auto h2 = std::make_tuple(buf[i+j+0], buf[i+j+1], buf[i+j+2]);
-                htable[h2].push_back(i+j);
+                auto h2 = std::make_tuple(buf[i + j + 0], buf[i + j + 1], buf[i + j + 2]);
+                htable[h2].push_back(i + j);
             }
             i += length;
             lit_codes.push_back(get_length_code(length));
@@ -809,7 +808,7 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
     auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
-    int64_t nc_cost = 8 + 16 + 16 + 8*size; // "Header Block flush" + LEN + NLEN + `LEN` bytes
+    int64_t nc_cost = 5 + 16 + 16 + 8*size; // "Header Block flush" + LEN + NLEN + `LEN` bytes
 
     // DEBUG("dyn=%ld + hdr=%ld = totdyn=%ld; fix=%ld; nc=%ld", dyn_cost, hdr_cost, tot_dyn_cost, fix_cost, nc_cost);
 
@@ -817,7 +816,7 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         blkwrite_no_compression(buf, size, bfinal, out, block_number);
     } else if (tot_dyn_cost < fix_cost) {
         DEBUG("Block #%d Encoding: Dynamic Huffman%s", block_number, bfinal ? " -- Final Block" : "");
-        static uint16_t codes[MaxNumCodes + 1];   // TODO: figure out where to put this data
+        static uint16_t codes[MaxNumCodes + 1];  // TODO: figure out where to put this data
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
         auto hclen = htree_length_data.size();
@@ -927,6 +926,10 @@ int main(int argc, char** argv) {
     //   +=========================================+
     xwrite(input_filename.c_str(), input_filename.size() + 1, 1, out);  // FNAME
 
+    std::fseek(fp, 0, SEEK_END);
+    std::size_t filesize = std::ftell(fp);
+    std::fseek(fp, 0, SEEK_SET);
+
     uint32_t crc = calc_crc32(0, NULL, 0);
     // This contains the size of the original (uncompressed) input
     // data modulo 2^32.
@@ -940,8 +943,9 @@ int main(int argc, char** argv) {
         crc = calc_crc32(crc, reinterpret_cast<const uint8_t*>(&buf[size]), read);
         isize += read;
         size += read;
+        assert(size <= filesize);
         while (size >= BLOCKSIZE) {
-            uint8_t bfinal = size <= BLOCKSIZE && feof(fp);
+            uint8_t bfinal = size <= BLOCKSIZE && isize == filesize;
             compress_fn(&buf[0], BLOCKSIZE, bfinal, writer, block_number++);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
@@ -954,12 +958,8 @@ int main(int argc, char** argv) {
 
     // If the input file is empty, do need to write at least 1 block, which can
     // contain no data.
-    //
-    // NOTE: it is compliant to have unnecessary empty blocks so in the very
-    // rare case that `size` == 0, and isize wraps to exactly 0, will write
-    // an unnecessary empty block, but that is OK.
     assert(size < BLOCKSIZE);
-    if (size > 0 || isize == 0 || read == 0) {
+    if (size > 0 || block_number == 0) {
         compress_fn(&buf[0], size, 1, writer, block_number++);
     }
     writer.flush();
