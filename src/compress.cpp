@@ -769,7 +769,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         fix_cost += count * fixed_codelens[lit];
         assert(0 <= lit && lit < ARRSIZE(literal_to_extra_bits));
         dyn_cost += count * literal_to_extra_bits[lit];
-		fix_cost += count * literal_to_extra_bits[lit];
+        fix_cost += count * literal_to_extra_bits[lit];
     }
     for (auto&& [dst_code, count] : dst_counts) {
         dyn_cost += count * codelens[hlit + dst_code];
@@ -812,10 +812,16 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     // TODO(peter): better way to detect this?
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
-    auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
     int64_t nc_cost = 5 + 16 + 16 + 8 * size;  // "Header Block flush" + LEN + NLEN + `LEN` bytes
-    const char* compress_type = nullptr;
-    uint64_t before = 0, after = 0, hdr_after = 0;
+    const char* compress_type = nullptr; // TEMP TEMP
+    uint64_t before = 0, after = 0, hdr_after = 0; // TEMP TEMP
+
+    // TEMP TEMP -- 3 bits for the header, can delete this later because same for all
+    dyn_cost += 3;
+    fix_cost += 3;
+    nc_cost  += 3;
+
+    auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
 
     // DEBUG("dyn=%ld + hdr=%ld = totdyn=%ld; fix=%ld; nc=%ld", dyn_cost, hdr_cost, tot_dyn_cost, fix_cost, nc_cost);
 
@@ -891,8 +897,9 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     }
 
     const char* bfinal_desc = bfinal ? " -- Final Block" : "";
-    DEBUG("Block #%d Encoding: %s -- nc=%ld fix=%ld dyn=%ld hdr=%ld hdr_actual=%lu actual=%lu%s", block_number,
-          compress_type, nc_cost, fix_cost, dyn_cost, hdr_cost, hdr_after - before, after - before, bfinal_desc);
+    DEBUG("Block #%d Encoding: %s -- nc=%ld fix=%ld totdyn=%ld dyn=%ld hdr=%ld hdr_actual=%lu actual=%lu%s",
+          block_number, compress_type, nc_cost, fix_cost, tot_dyn_cost, dyn_cost, hdr_cost, hdr_after - before,
+          after - before, bfinal_desc);
 }
 
 int main(int argc, char** argv) {
