@@ -343,12 +343,13 @@ struct BitWriter {
     constexpr static size_t BufferSizeInBits = 32;
     static_assert((sizeof(Buffer) * CHAR_BIT) >= BufferSizeInBits);
 
-    BitWriter(FILE* fp) noexcept : out_{fp}, buff_{0}, bits_{0} {}
+    BitWriter(FILE* fp) noexcept : out_{fp} {}
 
     void write_bits(uint16_t val, size_t n_bits) noexcept {
+        total_written += n_bits;
         assert(n_bits <= MaxBits);
         if (bits_ == BufferSizeInBits) {
-            write_full_buffer();
+            _write_full_buffer();
         }
         auto room = BufferSizeInBits - bits_;
         if (room >= n_bits) {
@@ -359,7 +360,7 @@ struct BitWriter {
             auto n2 = n_bits - n1;
             buff_ |= (val & _ones_mask(n1)) << bits_;
             bits_ += n1;
-            write_full_buffer();
+            _write_full_buffer();
             assert(bits_ == 0);
             buff_ |= val >> n1;
             bits_ += n2;
@@ -368,6 +369,7 @@ struct BitWriter {
     }
 
     void write(const void* p, size_t size) noexcept {
+        total_written += 8 * size;
         flush();
         xwrite(p, 1, size, out_);
     }
@@ -379,7 +381,7 @@ struct BitWriter {
         bits_ = 0;
     }
 
-    void write_full_buffer() noexcept {
+    void _write_full_buffer() noexcept {
         assert(bits_ == BufferSizeInBits);
         xwrite(&buff_, sizeof(buff_), 1, out_);
         buff_ = 0;
@@ -398,15 +400,15 @@ struct BitWriter {
     Buffer buff_ = 0;
     size_t bits_ = 0;
     FILE* out_ = nullptr;
+    uint64_t total_written = 0;
 };
 
-void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
+void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out) {
     uint8_t block_type = static_cast<uint8_t>(BType::NO_COMPRESSION);
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
     xassert(size < UINT16_MAX, "invalid size: %zu", size);
     uint16_t len = size;  //  & 0xffffu;
     uint16_t nlen = len ^ 0xffffu;
-    DEBUG("Block #%d Encoding: No Compression -- %u %u%s", block_number, len, nlen, bfinal ? " -- Final Block" : "");
     out.write_bits(bfinal, 1);
     out.write_bits(block_type, 2);
     out.flush();
@@ -625,7 +627,6 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     //       dynamic encoding in that case, and potentially gives optimization ability
     //       to know that there are at least N bytes of input
 
-    // DEBUG("analyze_block -- %zu", size);
     std::vector<int> lit_codes;
     std::vector<int> len_vals;
     std::vector<int> dst_vals;
@@ -660,7 +661,6 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         }
         locs.push_back(i);
         if (length >= 3) {
-            // DEBUG("pos=%3zu len=%3d dist=%3d", i, length, distance);
             for (int j = 1; j < length; ++j) {
                 if (i + j + 2 >= size) {
                     break;
@@ -767,18 +767,24 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     for (auto&& [lit, count] : lit_counts) {
         dyn_cost += count * codelens[lit];
         fix_cost += count * fixed_codelens[lit];
+        assert(0 <= lit && lit < ARRSIZE(literal_to_extra_bits));
+        dyn_cost += count * literal_to_extra_bits[lit];
+		fix_cost += count * literal_to_extra_bits[lit];
     }
-    for (auto&& [dst, count] : dst_counts) {
-        dyn_cost += count * codelens[hlit + dst];
-        fix_cost += count * fixed_codelens[NumFixedTreeLiterals + dst];
+    for (auto&& [dst_code, count] : dst_counts) {
+        dyn_cost += count * codelens[hlit + dst_code];
+        fix_cost += count * fixed_codelens[NumFixedTreeLiterals + dst_code];
+        assert(0 <= dst_code && dst_code <= ARRSIZE(distance_code_to_extra_bits));
+        dyn_cost += count * distance_code_to_extra_bits[dst_code];
+        fix_cost += count * distance_code_to_extra_bits[dst_code];
     }
 
     return {codelens, hlit, hdist, lit_codes, dst_vals, len_vals, fix_cost, dyn_cost};
 }
 
-int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, const CodeLengths& htree_codelens) {
+int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, size_t n_hcodelens) {
     int64_t cost = 5 + 5 + 4;
-    cost += 3 * htree_codelens.size();
+    cost += 3 * n_hcodelens;
     for (size_t i = 0; i < hcodes.size(); ++i) {
         cost += htree.codelens[hcodes[i]];
         switch (hcodes[i]) {
@@ -799,23 +805,26 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
 }
 
 void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
-    // DEBUG("compress_block(%d): bfinal=%s size=%zu", block_number, bfinal ? "TRUE" : "FALSE", size);
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto htree_length_data = make_header_tree_length_data(htree);
-    auto hdr_cost = calculate_header_cost(htree, hcodes, htree_length_data);
+    auto hdr_cost = calculate_header_cost(htree, hcodes, htree_length_data.size());
     // TODO(peter): better way to detect this?
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
     auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
-    int64_t nc_cost = 5 + 16 + 16 + 8*size; // "Header Block flush" + LEN + NLEN + `LEN` bytes
+    int64_t nc_cost = 5 + 16 + 16 + 8 * size;  // "Header Block flush" + LEN + NLEN + `LEN` bytes
+    const char* compress_type = nullptr;
+    uint64_t before = 0, after = 0, hdr_after = 0;
 
     // DEBUG("dyn=%ld + hdr=%ld = totdyn=%ld; fix=%ld; nc=%ld", dyn_cost, hdr_cost, tot_dyn_cost, fix_cost, nc_cost);
 
     if (nc_cost < fix_cost && nc_cost < tot_dyn_cost) {
-        blkwrite_no_compression(buf, size, bfinal, out, block_number);
+        before = hdr_after = out.total_written;
+        blkwrite_no_compression(buf, size, bfinal, out);
+        after = out.total_written;
+        compress_type = "No Compression";
     } else if (tot_dyn_cost < fix_cost) {
-        DEBUG("Block #%d Encoding: Dynamic Huffman%s", block_number, bfinal ? " -- Final Block" : "");
         static uint16_t codes[MaxNumCodes + 1];  // TODO: figure out where to put this data
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
@@ -824,10 +833,7 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         xassert(1 <= hdist && hdist <= 32, "hdist = %zu", hdist);
         xassert(4 <= hclen && hclen <= 19, "hclen = %zu", hclen);
 
-        // DEBUG("hlit = %zu", hlit);
-        // DEBUG("hdist = %zu", hdist);
-        // DEBUG("hclen = %zu", hclen);
-
+        before = out.total_written;
         uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
@@ -870,14 +876,23 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         trees.codelens = &codelens[0];
         trees.n_lits = hlit;
         trees.n_dists = hdist;
+        hdr_after = out.total_written;
         write_block(lits, dsts, lens, trees, out);
+        after = out.total_written;
+        compress_type = "Dynamic Huffman";
     } else {
-        DEBUG("Block #%d Encoding: Fixed Huffman%s", block_number, bfinal ? " -- Final Block" : "");
+        before = hdr_after = out.total_written;
         uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
         write_block(lits, dsts, lens, fixed_tree, out);
+        after = out.total_written;
+        compress_type = "Fixed Huffman";
     }
+
+    const char* bfinal_desc = bfinal ? " -- Final Block" : "";
+    DEBUG("Block #%d Encoding: %s -- nc=%ld fix=%ld dyn=%ld hdr=%ld hdr_actual=%lu actual=%lu%s", block_number,
+          compress_type, nc_cost, fix_cost, dyn_cost, hdr_cost, hdr_after - before, after - before, bfinal_desc);
 }
 
 int main(int argc, char** argv) {

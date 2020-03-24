@@ -37,6 +37,57 @@ length_info = (
 )
 
 
+distance_info = (
+    # code, extra_bits, start, stop
+    (  0,    0,       1,     1, ),
+    (  1,    0,       2,     2, ),
+    (  2,    0,       3,     3, ),
+    (  3,    0,       4,     4, ),
+    (  4,    1,       5,     6, ),
+    (  5,    1,       7,     8, ),
+    (  6,    2,       9,    12, ),
+    (  7,    2,      13,    16, ),
+    (  8,    3,      17,    24, ),
+    (  9,    3,      25,    32, ),
+    ( 10,    4,      33,    48, ),
+    ( 11,    4,      49,    64, ),
+    ( 12,    5,      65,    96, ),
+    ( 13,    5,      97,   128, ),
+    ( 14,    6,     129,   192, ),
+    ( 15,    6,     193,   256, ),
+    ( 16,    7,     257,   384, ),
+    ( 17,    7,     385,   512, ),
+    ( 18,    8,     513,   768, ),
+    ( 19,    8,     769,  1024, ),
+    ( 20,    9,    1025,  1536, ),
+    ( 21,    9,    1537,  2048, ),
+    ( 22,   10,    2049,  3072, ),
+    ( 23,   10,    3073,  4096, ),
+    ( 24,   11,    4097,  6144, ),
+    ( 25,   11,    6145,  8192, ),
+    ( 26,   12,    8193, 12288, ),
+    ( 27,   12,   12289, 16384, ),
+    ( 28,   13,   16385, 24576, ),
+    ( 29,   13,   24577, 32768, ),
+)
+
+
+def get_extra_bits_from_distance_code(dst_code):
+    for code, extra_bits, start, stop in distance_info:
+        if dst_code == code:
+            return extra_bits
+    raise ValueError(f"invalid distance code: {dst_code}")
+
+
+def get_extra_bits_from_literal(lit):
+    if lit < 257:
+        return 0
+    for code, extra_bits, start, stop in length_info:
+        if code == lit:
+            return extra_bits
+    raise ValueError(f"invalid literal: {lit}")
+
+
 def get_length_code(x):
     for code, extra_bits, start, stop in length_info:
         if start <= x <= stop:
@@ -74,6 +125,13 @@ for index in range(3, N):
     length_bases[index] = get_length_base(index)
     length_extra[index] = get_length_extra(index)
 
+literal_to_extra_bits = [
+    get_extra_bits_from_literal(lit) for lit in range(0, 285+1)
+]
+distance_code_to_extra_bits = [
+    get_extra_bits_from_distance_code(dst_code) for dst_code in range(0, 29+1)
+]
+
 
 print("// clang-format off")
 print_array(
@@ -97,6 +155,22 @@ print_array(
     name='length_extra_bits',
     vals=length_extra,
     min_width=1,
+    nums_per_row=16,
+)
+print("")
+print_array(
+    dtype='int',
+    name='literal_to_extra_bits',
+    vals=literal_to_extra_bits,
+    min_width=1,
+    nums_per_row=16,
+)
+print("")
+print_array(
+    dtype='int',
+    name='distance_code_to_extra_bits',
+    vals=distance_code_to_extra_bits,
+    min_width=2,
     nums_per_row=16,
 )
 print("// clang-format on")
