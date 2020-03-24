@@ -621,6 +621,10 @@ struct BlockResults {
 };
 
 BlockResults analyze_block(const char* const buf, size_t size) {
+    // TODO: add fast path for analyzing very small blocks. no point in even trying
+    //       dynamic encoding in that case, and potentially gives optimization ability
+    //       to know that there are at least N bytes of input
+
     DEBUG("analyze_block -- %zu", size);
     std::vector<int> lit_codes;
     std::vector<int> len_vals;
@@ -797,11 +801,11 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
     auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
-    int64_t nc_cost = size;
+    int64_t nc_cost = 8 + 16 + 16 + 8*size; // "Header Block flush" + LEN + NLEN + `LEN` bytes
 
     DEBUG("dyn=%ld + hdr=%ld = totdyn=%ld; fix=%ld; nc=%ld", dyn_cost, hdr_cost, tot_dyn_cost, fix_cost, nc_cost);
 
-    if (nc_cost < fix_cost && nc_cost < dyn_cost) {
+    if (nc_cost < fix_cost && nc_cost < tot_dyn_cost) {
         DEBUG("Using NO_COMPRESSION")
         blkwrite_no_compression(buf, size, bfinal, out);
     } else if (tot_dyn_cost < fix_cost) {
