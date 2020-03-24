@@ -662,6 +662,9 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         if (length >= 3) {
             DEBUG("pos=%3zu len=%3d dist=%3d", i, length, distance);
             for (int j = 1; j < length; ++j) {
+                if (i+j+2 >= size) {
+                    break;
+                }
                 auto h2 = std::make_tuple(buf[i+j+0], buf[i+j+1], buf[i+j+2]);
                 htable[h2].push_back(i+j);
             }
