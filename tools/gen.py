@@ -15,6 +15,7 @@ from gen_length_codes import distance_bases
 from gen_length_codes import distance_extra
 from gen_length_codes import literal_to_extra_bits
 from gen_length_codes import distance_code_to_extra_bits
+from gen_length_codes import header_extra_bits
 
 #
 # ----------------- BEGIN GENERATION --------------------------------------- #
@@ -53,6 +54,16 @@ print("static_assert(std::extent<decltype(fixed_codes)>::value == std::extent<de
 print("static_assert(std::extent<decltype(fixed_codes)>::value == NumFixedTreeLiterals + NumFixedTreeDistances);")
 print("")
 print("// END FIXED HUFFMAN TABLES -----------------------------------------")
+print("")
+print("// HEADER TABLES ----------------------------------------------------")
+print("")
+print_array(
+    dtype='int',
+    name='header_extra_bits',
+    vals=header_extra_bits,
+    min_width=1,
+    nums_per_row=16,
+)
 print("")
 print("// LENGTH + DISTANCE TABLES -----------------------------------------")
 print("")

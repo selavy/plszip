@@ -82,6 +82,13 @@ static_assert(std::extent<decltype(fixed_codes)>::value == NumFixedTreeLiterals 
 
 // END FIXED HUFFMAN TABLES -----------------------------------------
 
+// HEADER TABLES ----------------------------------------------------
+
+constexpr int header_extra_bits[19] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    2, 3, 7,
+};
+
 // LENGTH + DISTANCE TABLES -----------------------------------------
 
 constexpr int length_codes[259] = {

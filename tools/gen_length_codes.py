@@ -130,6 +130,7 @@ def get_length_extra(x):
     else:
         raise ValueError(f"invalid length: {x}")
 
+# Length Tables
 
 N = 258+1
 length_codes = [-1]*N
@@ -147,6 +148,8 @@ distance_code_to_extra_bits = [
     get_extra_bits_from_distance_code(dst_code) for dst_code in range(0, 29+1)
 ]
 
+
+# Distance Tables
 
 def dist_index(dst):
     if dst <= 256:
@@ -172,3 +175,9 @@ for dst in range(1, max_dist+1):
     distance_bases[index] = base
     distance_extra[index] = extra
 
+# Header Tables
+
+header_extra_bits = [0]*19
+header_extra_bits[16] = 2
+header_extra_bits[17] = 3
+header_extra_bits[18] = 7

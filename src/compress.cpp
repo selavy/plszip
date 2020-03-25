@@ -117,7 +117,7 @@ using CodeLengths = std::vector<uint8_t>;
 
 struct Tree {
     std::vector<uint16_t> codes;    // [MaxNumCodes+1];
-    std::vector<uint8_t> codelens;  // [MaxNumCodes+1];
+    CodeLengths codelens;  // [MaxNumCodes+1];
     int n_lits;
     int n_dists;
 };
@@ -740,22 +740,9 @@ BlockResults analyze_block(const char* const buf, size_t size) {
 int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, size_t n_hcodelens) {
     int64_t cost = 5 + 5 + 4;
     cost += 3 * n_hcodelens;
-    for (size_t i = 0; i < hcodes.size(); ++i) {
-        cost += htree.codelens[hcodes[i]];
-        // TODO: generate table for this?
-        switch (hcodes[i]) {
-        case 16:
-            cost += 2;
-            break;
-        case 17:
-            cost += 3;
-            break;
-        case 18:
-            cost += 7;
-            break;
-        default:
-            break;
-        }
+    for (auto hcode : hcodes) {
+        cost += htree.codelens[hcode];
+        cost += header_extra_bits[hcode];
     }
     return cost;
 }
