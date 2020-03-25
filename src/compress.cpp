@@ -542,7 +542,6 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
 struct HeaderTreeData {
     std::array<int, NumHeaderCodeLengths> codelens;
     int hclen = 0;
-    int64_t cost = 0;
 };
 HeaderTreeData make_header_tree_data(const Tree& tree) {
     constexpr std::array<int, NumHeaderCodeLengths> order = {16, 17, 18, 0, 8,  7, 9,  6, 10, 5,
@@ -551,15 +550,12 @@ HeaderTreeData make_header_tree_data(const Tree& tree) {
     HeaderTreeData results = {};
     for (size_t i = 0; i < order.size(); ++i) {
         results.codelens[i] = tree.codelens[order[i]];
-        if (results.codelens[i] > 0) {
-            results.cost += results.codelens[i];
-            results.cost += header_extra_bits[i];
-        }
     }
     results.hclen = static_cast<int>(order.size());
     while (results.hclen > 4 && results.codelens[results.hclen-1] == 0) {
         --results.hclen;
     }
+    assert(results.hclen >= 4 && (results.codelens[results.hclen-1] != 0 || results.hclen == 4));
     return results;
 }
 
@@ -760,7 +756,8 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
 void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
-    auto&& [header_data, hclen, hdr_cost] = make_header_tree_data(htree);
+    auto&& [header_data, hclen] = make_header_tree_data(htree);
+    auto hdr_cost = calculate_header_cost(htree, hcodes, hclen);
     // TODO(peter): better way to detect this?
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
@@ -774,8 +771,6 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     nc_cost  += 3;
 
     auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
-
-    // DEBUG("dyn=%ld + hdr=%ld = totdyn=%ld; fix=%ld; nc=%ld", dyn_cost, hdr_cost, tot_dyn_cost, fix_cost, nc_cost);
 
     if (nc_cost < fix_cost && nc_cost < tot_dyn_cost) {
         before = hdr_after = out.total_written;
