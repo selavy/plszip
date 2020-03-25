@@ -116,8 +116,8 @@ struct Code {
 using CodeLengths = std::vector<uint8_t>;
 
 struct Tree {
-    std::vector<uint16_t> codes;    // [MaxNumCodes+1];
-    CodeLengths codelens;  // [MaxNumCodes+1];
+    std::vector<uint16_t> codes;  // [MaxNumCodes+1];
+    CodeLengths codelens;         // [MaxNumCodes+1];
     int n_lits;
     int n_dists;
 };
@@ -552,14 +552,14 @@ HeaderTreeData make_header_tree_data(const Tree& tree) {
         results.codelens[i] = tree.codelens[order[i]];
     }
     results.hclen = static_cast<int>(order.size());
-    while (results.hclen > 4 && results.codelens[results.hclen-1] == 0) {
+    while (results.hclen > 4 && results.codelens[results.hclen - 1] == 0) {
         --results.hclen;
     }
-    assert(results.hclen >= 4 && (results.codelens[results.hclen-1] != 0 || results.hclen == 4));
+    assert(results.hclen >= 4 && (results.codelens[results.hclen - 1] != 0 || results.hclen == 4));
     return results;
 }
 
-constexpr uint32_t update_hash(uint32_t current, char c) noexcept {
+constexpr uint32_t update_hash(uint32_t current, uint8_t c) noexcept {
     constexpr uint32_t mask = (1u << 24) - 1;
     return ((current << 8) | c) & mask;
 }
@@ -583,6 +583,49 @@ struct BlockResults {
     int64_t dyn_cost;
 };
 
+#if 0
+template <class T>
+void analyze_hash_table(const T& ht, const char* buf) {
+    size_t longest_chain = 0;
+    uint64_t total_chain = 0;
+    uint64_t num_chains = 0;
+    for (auto&& [h, locs] : ht) {
+        ++num_chains;
+        total_chain += locs.size();
+        longest_chain = std::max(longest_chain, locs.size());
+
+        auto* bb = reinterpret_cast<const uint8_t*>(buf);
+        auto p1 = locs[0];
+        for (size_t i = 1; i < locs.size(); ++i) {
+            auto p2 = locs[i];
+            xassert(bb[p1+0] == bb[p2+0], "%u %u", bb[p1+0], bb[p2+0]);
+            xassert(bb[p1+1] == bb[p2+1], "%u %u", bb[p1+1], bb[p2+1]);
+            xassert(bb[p1+2] == bb[p2+2], "%u %u", bb[p1+2], bb[p2+2]);
+        }
+    }
+    DEBUG("HASH TABLE STATS");
+    DEBUG("num_chains : %lu", num_chains);
+    DEBUG("total chain: %lu", total_chain);
+    DEBUG("mean chain : %0.3f", total_chain / static_cast<double>(num_chains));
+    DEBUG("longest    : %zu", longest_chain);
+    DEBUG("END HASH TABLE STATS");
+}
+#endif
+
+#define CU8PTR(b) reinterpret_cast<const uint8_t*>(b)
+
+#ifndef NDEBUG
+#define CHECK_HASH(i)                                                                                      \
+    {                                                                                                      \
+        uint32_t h2 = update_hash(update_hash(update_hash(0, buf[(i) + 0]), buf[(i) + 1]), buf[(i) + 2]);  \
+        uint32_t h3 = (CU8PTR(buf)[(i) + 0] << 16) | (CU8PTR(buf)[(i) + 1] << 8) | (CU8PTR(buf)[(i) + 2]); \
+        assert(h2 == h3);                                                                                  \
+        xassert(h == h2, "%u != %u", h, h2);                                                               \
+    }
+#else
+#define CHECK_HASH(i)
+#endif
+
 BlockResults analyze_block(const char* const buf, size_t size) {
     // TODO: add fast path for analyzing very small blocks. no point in even trying
     //       dynamic encoding in that case, and potentially gives optimization ability
@@ -592,22 +635,17 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     std::vector<int> len_vals;
     std::vector<int> dst_vals;
 
-    // using Hash = std::tuple<char, char, char>;
-    // std::map<Hash, std::vector<int>> htable;
-    std::map<uint32_t, std::vector<int>> htable;
+    std::map<uint32_t, std::vector<int>> ht;
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
-    uint32_t h = 0;
-    if (size >= 2) {
-        h = update_hash(h, buf[0]);
-        h = update_hash(h, buf[1]);
-    }
+    uint32_t h = size >= 2 ? (CU8PTR(buf)[0] << 8) | CU8PTR(buf)[1] : 0;
 
     size_t i = 0;
     while (i + 3 < size) {
         xassert(i + 2 < size, "i=%zu size=%zu", i, size);
         h = update_hash(h, buf[i + 2]);
-        auto& locs = htable[h];
+        CHECK_HASH(i);
+        auto& locs = ht[h];
         int length = 2;
         int distance = 0;
         for (auto rit = locs.rbegin(); rit != locs.rend(); ++rit) {
@@ -626,8 +664,9 @@ BlockResults analyze_block(const char* const buf, size_t size) {
                 if (i + j + 2 >= size) {
                     break;
                 }
-                h = update_hash(h, buf[i+j+2]);
-                htable[h].push_back(i + j);
+                h = update_hash(h, buf[i + j + 2]);
+                CHECK_HASH(i + j);
+                ht[h].push_back(i + j);
             }
             i += length;
             lit_codes.push_back(get_length_code(length));
@@ -716,10 +755,9 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         codelens[value] = codelen;
     }
     for (auto&& [value, codelen] : dst_tree) {
-        value += hlit;
-        xassert(hlit <= value && value < codelens.size(), "invalid value: %d", value);
+        xassert(hlit <= (value + hlit) && (value + hlit) < codelens.size(), "invalid value: %d", value);
         xassert(1 <= codelen && codelen <= MaxBits, "invalid codelen: %d", codelen);
-        codelens[value] = codelen;
+        codelens[value + hlit] = codelen;
     }
     assert(codelens[256] != 0);
 
@@ -761,14 +799,14 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
     // TODO(peter): better way to detect this?
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
-    int64_t nc_cost = 5 + 16 + 16 + 8 * size;  // "Header Block flush" + LEN + NLEN + `LEN` bytes
-    const char* compress_type = nullptr; // TEMP TEMP
-    uint64_t before = 0, after = 0, hdr_after = 0; // TEMP TEMP
+    int64_t nc_cost = 5 + 16 + 16 + 8 * size;       // "Header Block flush" + LEN + NLEN + `LEN` bytes
+    const char* compress_type = nullptr;            // TEMP TEMP
+    uint64_t before = 0, after = 0, hdr_after = 0;  // TEMP TEMP
 
     // TEMP TEMP -- 3 bits for the header, can delete this later because same for all
     dyn_cost += 3;
     fix_cost += 3;
-    nc_cost  += 3;
+    nc_cost += 3;
 
     auto tot_dyn_cost = is_possible ? hdr_cost + dyn_cost : INT64_MAX;
 
