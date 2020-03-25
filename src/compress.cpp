@@ -539,17 +539,27 @@ DynamicHeader make_header_tree(const CodeLengths& codelens) {
     return {codes, extra, tree};
 }
 
-CodeLengths make_header_tree_length_data(const Tree& tree) {
+struct HeaderTreeData {
+    std::array<int, NumHeaderCodeLengths> codelens;
+    int hclen = 0;
+    int64_t cost = 0;
+};
+HeaderTreeData make_header_tree_data(const Tree& tree) {
     constexpr std::array<int, NumHeaderCodeLengths> order = {16, 17, 18, 0, 8,  7, 9,  6, 10, 5,
                                                              11, 4,  12, 3, 13, 2, 14, 1, 15};
-    CodeLengths results(order.size(), 0);
-    for (size_t index = 0; index < order.size(); ++index) {
-        results[index] = tree.codelens[order[index]];
+    // TDOO: detect codelen > MaxHeaderCodeLength and bail if so by setting hdr_cost very high
+    HeaderTreeData results = {};
+    for (size_t i = 0; i < order.size(); ++i) {
+        results.codelens[i] = tree.codelens[order[i]];
+        if (results.codelens[i] > 0) {
+            results.cost += results.codelens[i];
+            results.cost += header_extra_bits[i];
+        }
     }
-    while (results.size() > 4 && results.back() == 0) {
-        results.pop_back();
+    results.hclen = static_cast<int>(order.size());
+    while (results.hclen > 4 && results.codelens[results.hclen-1] == 0) {
+        --results.hclen;
     }
-    assert(4 <= results.size() && results.size() <= 19);
     return results;
 }
 
@@ -750,8 +760,7 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
 void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
-    auto htree_length_data = make_header_tree_length_data(htree);
-    auto hdr_cost = calculate_header_cost(htree, hcodes, htree_length_data.size());
+    auto&& [header_data, hclen, hdr_cost] = make_header_tree_data(htree);
     // TODO(peter): better way to detect this?
     bool is_possible = std::all_of(htree.codelens.begin(), htree.codelens.end(),
                                    [](uint8_t codelen) { return codelen <= MaxHeaderCodeLength; });
@@ -777,10 +786,9 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         static uint16_t codes[MaxNumCodes + 1];  // TODO: figure out where to put this data
         init_huffman_tree(&codelens[0], hlit, &codes[0]);
         init_huffman_tree(&codelens[hlit], hdist, &codes[hlit]);
-        auto hclen = htree_length_data.size();
         xassert(257 <= hlit && hlit <= 286, "hlit = %zu", hlit);
         xassert(1 <= hdist && hdist <= 32, "hdist = %zu", hdist);
-        xassert(4 <= hclen && hclen <= 19, "hclen = %zu", hclen);
+        xassert(4 <= hclen && hclen <= 19, "hclen = %d", hclen);
 
         before = out.total_written;
         uint8_t block_type = static_cast<uint8_t>(BType::DYNAMIC_HUFFMAN);
@@ -791,8 +799,8 @@ void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out
         out.write_bits(hclen - 4, 4);
 
         // header tree code lengths
-        for (auto codelen : htree_length_data) {
-            out.write_bits(codelen, 3);
+        for (int i = 0; i < hclen; ++i) {
+            out.write_bits(header_data[i], 3);
         }
 
         // literal and distance code lengths
