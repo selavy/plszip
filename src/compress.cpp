@@ -592,21 +592,21 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     std::vector<int> len_vals;
     std::vector<int> dst_vals;
 
-    using Hash = std::tuple<char, char, char>;
-    std::map<Hash, std::vector<int>> htable;
+    // using Hash = std::tuple<char, char, char>;
+    // std::map<Hash, std::vector<int>> htable;
+    std::map<uint32_t, std::vector<int>> htable;
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
-    // uint32_t h = 0;
-    // if (size >= 2) {
-    //     h = update_hash(h, buf[0]);
-    //     h = update_hash(h, buf[1]);
-    // }
+    uint32_t h = 0;
+    if (size >= 2) {
+        h = update_hash(h, buf[0]);
+        h = update_hash(h, buf[1]);
+    }
 
     size_t i = 0;
     while (i + 3 < size) {
         xassert(i + 2 < size, "i=%zu size=%zu", i, size);
-        // h = update_hash(h, buf[i + 2]);
-        auto h = std::make_tuple(buf[i + 0], buf[i + 1], buf[i + 2]);
+        h = update_hash(h, buf[i + 2]);
         auto& locs = htable[h];
         int length = 2;
         int distance = 0;
@@ -626,8 +626,8 @@ BlockResults analyze_block(const char* const buf, size_t size) {
                 if (i + j + 2 >= size) {
                     break;
                 }
-                auto h2 = std::make_tuple(buf[i + j + 0], buf[i + j + 1], buf[i + j + 2]);
-                htable[h2].push_back(i + j);
+                h = update_hash(h, buf[i+j+2]);
+                htable[h].push_back(i + j);
             }
             i += length;
             lit_codes.push_back(get_length_code(length));
@@ -743,7 +743,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
     return {codelens, hlit, hdist, lit_codes, dst_vals, len_vals, fix_cost, dyn_cost};
 }
 
-int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, size_t n_hcodelens) {
+int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, int n_hcodelens) {
     int64_t cost = 5 + 5 + 4;
     cost += 3 * n_hcodelens;
     for (auto hcode : hcodes) {
