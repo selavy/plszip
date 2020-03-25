@@ -58,51 +58,6 @@ struct HuffTrees {
 
 constexpr HuffTrees fixed_tree = {fixed_codes, fixed_codelens, NumFixedTreeLiterals, NumFixedTreeDistances};
 
-int get_distance_code(int value) {
-    for (size_t i = 0; i < ARRSIZE(distance_info); ++i) {
-        if (distance_info[i].start <= value && value <= distance_info[i].stop) {
-
-            return distance_info[i].code;
-        }
-    }
-    xassert(0, "invalid value: %d", value);
-    return -1;
-}
-
-int get_distance_base(int value) {
-    for (size_t i = 0; i < ARRSIZE(distance_info); ++i) {
-        if (distance_info[i].start <= value && value <= distance_info[i].stop) {
-            return distance_info[i].start;
-        }
-    }
-    xassert(0, "invalid value: %d", value);
-    return -1;
-}
-int get_distance_extra_bits(int value) {
-    for (size_t i = 0; i < ARRSIZE(distance_info); ++i) {
-        if (distance_info[i].start <= value && value <= distance_info[i].stop) {
-            return distance_info[i].extra_bits;
-        }
-    }
-    xassert(0, "invalid value: %d", value);
-    return -1;
-}
-
-constexpr int get_length_code(int length) noexcept {
-    assert(0 <= length && length < ARRSIZE(length_codes));
-    return length_codes[length];
-}
-
-constexpr int get_length_base(int length) noexcept {
-    assert(0 <= length && length < ARRSIZE(length_bases));
-    return length_bases[length];
-}
-
-constexpr int get_length_extra_bits(int length) noexcept {
-    assert(0 <= length && length < ARRSIZE(length_extra_bits));
-    return length_extra_bits[length];
-}
-
 struct FileHandle {
     FileHandle(FILE* f = nullptr) noexcept : fp(f) {}
     FileHandle(FileHandle&) noexcept = delete;

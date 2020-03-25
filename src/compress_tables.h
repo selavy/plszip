@@ -10,6 +10,7 @@
 
 constexpr int NumFixedTreeLiterals = 288;
 constexpr int NumFixedTreeDistances = 32;
+
 constexpr uint16_t fixed_codes[320] = {
      12, 140,  76, 204,  44, 172, 108, 236,
      28, 156,  92, 220,  60, 188, 124, 252,
@@ -338,21 +339,37 @@ constexpr int distance_extra_bits[512] = {
     13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
 };
 
+
 constexpr int get_distance_index(int dst) noexcept {
     assert(1 <= dst && dst <= 32768);
-    return dst < 256 ? dst - 1 : ((dst - 1) >> 7) + 256;
+    return dst <= 256 ? dst - 1 : ((dst - 1) >> 7) + 256;
 }
 
-constexpr int get_distance_code2(int dst) noexcept {
+constexpr int get_distance_code(int dst) noexcept {
     return distance_codes[get_distance_index(dst)];
 }
 
-constexpr int get_distance_base2(int dst) noexcept {
+constexpr int get_distance_base(int dst) noexcept {
     return distance_bases[get_distance_index(dst)];
 }
 
-constexpr int get_distance_extra_bits2(int dst) noexcept {
+constexpr int get_distance_extra_bits(int dst) noexcept {
     return distance_extra_bits[get_distance_index(dst)];
+}
+
+constexpr int get_length_code(int length) noexcept {
+    assert(0 <= length && length <= 258);
+    return length_codes[length];
+}
+
+constexpr int get_length_base(int length) noexcept {
+    assert(0 <= length && length <= 258);
+    return length_bases[length];
+}
+
+constexpr int get_length_extra_bits(int length) noexcept {
+    assert(0 <= length && length <= 258);
+    return length_extra_bits[length];
 }
 
 // END LENGTH + DISTANCE TABLES -------------------------------------

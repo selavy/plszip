@@ -32,6 +32,7 @@ print("// FIXED HUFFMAN TABLES ---------------------------------------------")
 print("")
 print(f"constexpr int NumFixedTreeLiterals = {num_fixed_tree_lits};")
 print(f"constexpr int NumFixedTreeDistances = {num_fixed_tree_dists};")
+print("")
 print_array(
     dtype='uint16_t',
     name='fixed_codes',
@@ -119,21 +120,37 @@ print_array(
     nums_per_row=16,
 )
 print("")
-print("""constexpr int get_distance_index(int dst) noexcept {
+print("""
+constexpr int get_distance_index(int dst) noexcept {
     assert(1 <= dst && dst <= 32768);
-    return dst < 256 ? dst - 1 : ((dst - 1) >> 7) + 256;
+    return dst <= 256 ? dst - 1 : ((dst - 1) >> 7) + 256;
 }
-""")
-print("""constexpr int get_distance_code2(int dst) noexcept {
+
+constexpr int get_distance_code(int dst) noexcept {
     return distance_codes[get_distance_index(dst)];
 }
-""")
-print("""constexpr int get_distance_base2(int dst) noexcept {
+
+constexpr int get_distance_base(int dst) noexcept {
     return distance_bases[get_distance_index(dst)];
 }
-""")
-print("""constexpr int get_distance_extra_bits2(int dst) noexcept {
+
+constexpr int get_distance_extra_bits(int dst) noexcept {
     return distance_extra_bits[get_distance_index(dst)];
+}
+
+constexpr int get_length_code(int length) noexcept {
+    assert(0 <= length && length <= 258);
+    return length_codes[length];
+}
+
+constexpr int get_length_base(int length) noexcept {
+    assert(0 <= length && length <= 258);
+    return length_bases[length];
+}
+
+constexpr int get_length_extra_bits(int length) noexcept {
+    assert(0 <= length && length <= 258);
+    return length_extra_bits[length];
 }
 """)
 print("// END LENGTH + DISTANCE TABLES -------------------------------------")

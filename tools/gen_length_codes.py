@@ -131,10 +131,6 @@ def get_length_extra(x):
         raise ValueError(f"invalid length: {x}")
 
 
-# length_codes = [get_length_code(x) for x in range(3, 258+1)]
-# length_bases = [get_length_base(x) for x in range(3, 258+1)]
-# length_extra = [get_length_extra(x) for x in range(3, 258+1)]
-
 N = 258+1
 length_codes = [-1]*N
 length_bases = [-1]*N
