@@ -7,6 +7,7 @@
 #include <libgen.h>
 #include <cassert>
 #include <memory>
+#include <map>
 
 // TODO(peter): NOTE TO SELF -- maxbits == 15 because that is the largest code
 // length that the header tree can communicate. I think that I had been
@@ -608,27 +609,27 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     literal_tree.codelens.assign(&dynamic_code_lengths[0], &dynamic_code_lengths[hlit]);
     literal_tree.maxlen = 0;
 
-#if 0
+#if 1
     // TEMP TEMP
     {
-        printf("--- DYNAMIC HUFFMAN LENGTHS ---\n");
+        fprintf(stderr, "--- DYNAMIC HUFFMAN LENGTHS ---\n");
         const auto& cl = literal_tree.codelens;
-        printf("constexpr uint16_t litlens_table[%zu] = {\n", cl.size());
+        fprintf(stderr, "constexpr uint16_t litlens_table[%zu] = {\n", cl.size());
         size_t i;
         for (i = 0; i + 8 < cl.size(); i += 8) {
-            printf(
+            fprintf(stderr, 
                     "\t%u, %u, %u, %u, %u, %u, %u, %u,\n",
                     cl[i+0], cl[i+1], cl[i+2], cl[i+3],
                     cl[i+4], cl[i+5], cl[i+6], cl[i+7]
                   );
         }
         if (i < cl.size())
-            printf("\t");
+            fprintf(stderr, "\t");
         for (; i < cl.size(); ++i) {
-            printf("%u, ", cl[i]);
+            fprintf(stderr, "%u, ", cl[i]);
         }
-        printf("\n};\n");
-        printf("--- END DYNAMIC HUFFMAN LENGTHS ---\n");
+        fprintf(stderr, "\n};\n");
+        fprintf(stderr, "--- END DYNAMIC HUFFMAN LENGTHS ---\n");
     }
     // TEMP TEMP
 #endif
@@ -643,27 +644,27 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     distance_tree.codelens.assign(&dynamic_code_lengths[hlit], &dynamic_code_lengths[ncodes]);
     distance_tree.maxlen = 0;
 
-#if 0
+#if 1
     // TEMP TEMP
     {
-        printf("--- DYNAMIC HUFFMAN LENGTHS ---\n");
+        fprintf(stderr, "--- DYNAMIC HUFFMAN LENGTHS ---\n");
         const auto& cl = distance_tree.codelens;
-        printf("constexpr uint16_t dstlens_table[%zu] = {\n", cl.size());
+        fprintf(stderr, "constexpr uint16_t dstlens_table[%zu] = {\n", cl.size());
         size_t i;
         for (i = 0; i + 8 < cl.size(); i += 8) {
-            printf(
+            fprintf(stderr, 
                     "\t%u, %u, %u, %u, %u, %u, %u, %u,\n",
                     cl[i+0], cl[i+1], cl[i+2], cl[i+3],
                     cl[i+4], cl[i+5], cl[i+6], cl[i+7]
                   );
         }
         if (i < cl.size())
-            printf("\t");
+            fprintf(stderr, "\t");
         for (; i < cl.size(); ++i) {
-            printf("%u, ", cl[i]);
+            fprintf(stderr, "%u, ", cl[i]);
         }
-        printf("\n};\n");
-        printf("--- END DYNAMIC HUFFMAN LENGTHS ---\n");
+        fprintf(stderr, "\n};\n");
+        fprintf(stderr, "--- END DYNAMIC HUFFMAN LENGTHS ---\n");
     }
     // TEMP TEMP
 #endif
@@ -913,7 +914,6 @@ int main(int argc, char** argv)
     do {
         block_size = 0;
         size_t write_length = 0;
-        size_t tot_match_length = 0;
         reader.need(1 + 2);
         bfinal = reader.read_bits(1);
         BType btype = static_cast<BType>(reader.read_bits(2));
@@ -960,8 +960,13 @@ int main(int argc, char** argv)
                 read_dynamic_huffman_trees(reader, literal_tree, distance_tree);
             }
 
+            std::map<int, int> lit_counts; // TEMP TEMP
+            std::map<int, int> dst_counts; // TEMP TEMP
+            size_t num_matches = 0;
+            size_t tot_match_length = 0;
             for (;;) {
                 uint16_t value = read_huffman_value(reader, literal_tree);
+                lit_counts[value]++;
                 if (value < 256) {
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
@@ -977,6 +982,7 @@ int main(int argc, char** argv)
                     xassert(length <= 258, "invalid length");
 
                     uint16_t distance_code = read_huffman_value(reader, distance_tree);
+                    dst_counts[distance_code]++;
                     xassert(distance_code < 32, "invalid distance code");
                     size_t base_distance = DISTANCE_BASES[distance_code];
                     size_t extra_distance = reader.read_bits(
@@ -988,6 +994,7 @@ int main(int argc, char** argv)
                     }
                     // DEBUG("pos=%zu len=%zu dist=%zu", write_length, length, distance);
                     tot_match_length += length;
+                    num_matches++;
                     size_t index = write_buffer.size() - distance;
                     for (size_t i = 0; i < length; ++i) {
                         // NOTE: because the ring buffer is always full, the
@@ -1009,7 +1016,21 @@ int main(int argc, char** argv)
                 }
             }
 
-            DEBUG("total_match_length = %zu", tot_match_length);
+            DEBUG("num_matches=%zu total_match_length = %zu", num_matches, tot_match_length);
+            // TEMP TEMP
+            {
+                DEBUG("LITERAL COUNTS");
+                for (auto&& [lit, count] : lit_counts) {
+                    DEBUG("%3d: %4d", lit, count);
+                }
+                DEBUG("END LITERAL COUNTS");
+                DEBUG("DISTANCE CODE COUNTS");
+                for (auto&& [dst_code, count] : dst_counts) {
+                    DEBUG("%3d: %4d", dst_code, count);
+                }
+                DEBUG("END DISTANCE CODE COUNTS");
+            }
+            // TEMP TEMP
         } else {
             panic("unsupported block encoding: %u", (uint8_t)btype);
         }

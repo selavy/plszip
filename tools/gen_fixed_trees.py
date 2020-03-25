@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 
-import pprint
-from utils import (flip_code, group_by, print_array)
-
+from utils import flip_code
+from utils import group_by
 
 MAX_BIT_LENGTH = 15
 
@@ -32,7 +31,6 @@ def init_tree(codelens):
     return codes
 
 
-
 lit_codelens = []
 while len(lit_codelens) < 144:
     lit_codelens.append(8)
@@ -50,25 +48,7 @@ assert len(dst_codelens) == 32
 lits = init_tree(lit_codelens)
 dsts = init_tree(dst_codelens)
 
-codes = lits + dsts
-codelens = lit_codelens + dst_codelens
-
-print("// clang-format off")
-print(f"constexpr int NumFixedTreeLiterals = {len(lit_codelens)};")
-print(f"constexpr int NumFixedTreeDistances = {len(dst_codelens)};")
-print_array(
-    dtype='uint16_t',
-    name='fixed_codes',
-    vals=codes,
-    min_width=3,
-    nums_per_row=8,
-)
-print("")
-print_array(
-    dtype='uint8_t',
-    name='fixed_codelens',
-    vals=codelens,
-    min_width=1,
-    nums_per_row=16,
-)
-print("// clang-format on")
+num_fixed_tree_lits = len(lit_codelens)
+num_fixed_tree_dists = len(dst_codelens)
+fixed_codes = lits + dsts
+fixed_codelens = lit_codelens + dst_codelens

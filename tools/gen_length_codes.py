@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 
-from utils import print_array
-
-
 length_info = (
     # code, extra_bits, start, stop
     ( 257,   0,     3,   3, ),
@@ -71,6 +68,28 @@ distance_info = (
     ( 29,   13,   24577, 32768, ),
 )
 
+def get_distance_extra_bits(dst):
+    for code, extra_bits, start, stop in distance_info:
+        if start <= dst <= stop:
+            return extra_bits
+    raise ValueError("invalid distance: {dst}")
+
+
+def get_distance_base(x):
+    for code, extra_bits, start, stop in distance_info:
+        if start <= x <= stop:
+            return start
+    else:
+        raise ValueError(f"invalid distance: {x}")
+
+
+def get_distance_code(x):
+    for code, extra_bits, start, stop in distance_info:
+        if start <= x <= stop:
+            return code
+    else:
+        raise ValueError(f"invalid distance: {x}")
+
 
 def get_extra_bits_from_distance_code(dst_code):
     for code, extra_bits, start, stop in distance_info:
@@ -133,44 +152,27 @@ distance_code_to_extra_bits = [
 ]
 
 
-print("// clang-format off")
-print_array(
-    dtype='int',
-    name='length_codes',
-    vals=length_codes,
-    min_width=3,
-    nums_per_row=8,
-)
-print("")
-print_array(
-    dtype='int',
-    name='length_bases',
-    vals=length_bases,
-    min_width=3,
-    nums_per_row=8,
-)
-print("")
-print_array(
-    dtype='int',
-    name='length_extra_bits',
-    vals=length_extra,
-    min_width=1,
-    nums_per_row=16,
-)
-print("")
-print_array(
-    dtype='int',
-    name='literal_to_extra_bits',
-    vals=literal_to_extra_bits,
-    min_width=1,
-    nums_per_row=16,
-)
-print("")
-print_array(
-    dtype='int',
-    name='distance_code_to_extra_bits',
-    vals=distance_code_to_extra_bits,
-    min_width=2,
-    nums_per_row=16,
-)
-print("// clang-format on")
+def dist_index(dst):
+    if dst <= 256:
+        return dst-1
+    else:
+        return 256 + ((dst-1) >> 7)
+
+
+max_dist = 32768-1
+max_dist_index = dist_index(max_dist)
+distance_codes = [-1]*(max_dist_index+1)
+distance_bases = [-1]*(max_dist_index+1)
+distance_extra = [-1]*(max_dist_index+1)
+for dst in range(1, max_dist+1):
+    index = dist_index(dst)
+    code = get_distance_code(dst)
+    base = get_distance_base(dst)
+    extra = get_distance_extra_bits(dst)
+    assert distance_codes[index] == -1 or distance_codes[index] == code
+    assert distance_bases[index] == -1 or distance_bases[index] == base
+    assert distance_extra[index] == -1 or distance_extra[index] == extra
+    distance_codes[index] = code
+    distance_bases[index] = base
+    distance_extra[index] = extra
+

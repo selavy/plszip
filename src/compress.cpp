@@ -61,6 +61,7 @@ constexpr HuffTrees fixed_tree = {fixed_codes, fixed_codelens, NumFixedTreeLiter
 int get_distance_code(int value) {
     for (size_t i = 0; i < ARRSIZE(distance_info); ++i) {
         if (distance_info[i].start <= value && value <= distance_info[i].stop) {
+
             return distance_info[i].code;
         }
     }
@@ -77,7 +78,6 @@ int get_distance_base(int value) {
     xassert(0, "invalid value: %d", value);
     return -1;
 }
-
 int get_distance_extra_bits(int value) {
     for (size_t i = 0; i < ARRSIZE(distance_info); ++i) {
         if (distance_info[i].start <= value && value <= distance_info[i].stop) {
@@ -88,17 +88,17 @@ int get_distance_extra_bits(int value) {
     return -1;
 }
 
-int get_length_code(int length) {
+constexpr int get_length_code(int length) noexcept {
     assert(0 <= length && length < ARRSIZE(length_codes));
     return length_codes[length];
 }
 
-int get_length_base(int length) {
+constexpr int get_length_base(int length) noexcept {
     assert(0 <= length && length < ARRSIZE(length_bases));
     return length_bases[length];
 }
 
-int get_length_extra_bits(int length) {
+constexpr int get_length_extra_bits(int length) noexcept {
     assert(0 <= length && length < ARRSIZE(length_extra_bits));
     return length_extra_bits[length];
 }
@@ -787,6 +787,7 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
     cost += 3 * n_hcodelens;
     for (size_t i = 0; i < hcodes.size(); ++i) {
         cost += htree.codelens[hcodes[i]];
+        // TODO: generate table for this?
         switch (hcodes[i]) {
         case 16:
             cost += 2;
