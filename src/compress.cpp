@@ -650,7 +650,7 @@ constexpr Config configs[10] = {
     /* 9 */ {32, 258, 258, 4096},  // deflate_slow}}; /* max compression */
 };
 
-BlockResults finish_up(std::vector<int>& lit_codes, std::vector<int>& dst_vals, std::vector<int>& len_vals,
+BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::vector<int>& lens,
                        std::map<int, int>& lit_counts, std::map<int, int>& dst_counts) {
     // TODO: remove this, shouldn't do dynamic encoding if the input is empty
     // edge case for when input is empty
@@ -659,13 +659,13 @@ BlockResults finish_up(std::vector<int>& lit_codes, std::vector<int>& dst_vals, 
     }
 
     // must have code for END_BLOCK
-    lit_codes.push_back(256);
-    dst_vals.push_back(0);
-    len_vals.push_back(0);
-    lit_counts[lit_codes.back()] = 1;
+    lits.push_back(256);
+    dsts.push_back(0);
+    lens.push_back(0);
+    lit_counts[lits.back()] = 1;
 
-    assert(lit_codes.size() == dst_vals.size());
-    assert(lit_codes.size() == len_vals.size());
+    assert(lits.size() == dsts.size());
+    assert(lits.size() == lens.size());
 
     auto lit_tree = construct_huffman_tree(lit_counts);
 #ifndef NDEBUG
@@ -738,27 +738,34 @@ BlockResults finish_up(std::vector<int>& lit_codes, std::vector<int>& dst_vals, 
         fix_cost += count * distance_code_to_extra_bits[dst_code];
     }
 
-    return {codelens, hlit, hdist, lit_codes, dst_vals, len_vals, fix_cost, dyn_cost};
+    return {codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost};
 }
 
-#if 0
 BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config config) {
-    std::vector<int> lit_codes;
-    std::vector<int> len_vals;
+    std::vector<int> lit_vals;
     std::vector<int> dst_vals;
+    std::vector<int> len_vals;
 
-    return {};
+    // TEMP TEMP -- for simplicity count everything at the end
+    std::map<int, int> lit_counts;
+    std::map<int, int> dst_counts;
+    for (auto lit : lit_vals) {
+        lit_counts[lit]++;
+    }
+    for (auto dst : dst_vals) {
+        dst_counts[get_distance_code(dst)];
+    }
+    return finish_up(lit_vals, dst_vals, len_vals, lit_counts, dst_counts);
 }
-#endif
 
 BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config) {
     // TODO: add fast path for analyzing very small blocks. no point in even trying
     //       dynamic encoding in that case, and potentially gives optimization ability
     //       to know that there are at least N bytes of input
 
-    std::vector<int> lit_codes;
-    std::vector<int> dst_vals;
-    std::vector<int> len_vals;
+    std::vector<int> lits;
+    std::vector<int> dsts;
+    std::vector<int> lens;
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
     std::map<uint32_t, std::vector<int>> ht;
@@ -801,29 +808,29 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
                 ht[h].push_back(i + j);
             }
             i += length;
-            lit_codes.push_back(get_length_code(length));
-            len_vals.push_back(length);
-            dst_vals.push_back(distance);
-            lit_counts[lit_codes.back()]++;
-            dst_counts[get_distance_code(dst_vals.back())]++;
+            lits.push_back(get_length_code(length));
+            lens.push_back(length);
+            dsts.push_back(distance);
+            lit_counts[lits.back()]++;
+            dst_counts[get_distance_code(dsts.back())]++;
         } else {
             int value = buf[i];
-            lit_codes.push_back(value);
-            len_vals.push_back(0);
-            dst_vals.push_back(0);
-            lit_counts[lit_codes.back()]++;
+            lits.push_back(value);
+            lens.push_back(0);
+            dsts.push_back(0);
+            lit_counts[lits.back()]++;
             i += 1;
         }
     }
     for (; i < size; ++i) {
         int value = buf[i];
-        lit_codes.push_back(value);
-        len_vals.push_back(0);
-        dst_vals.push_back(0);
-        lit_counts[lit_codes.back()]++;
+        lits.push_back(value);
+        lens.push_back(0);
+        dsts.push_back(0);
+        lit_counts[lits.back()]++;
     }
 
-    return finish_up(lit_codes, dst_vals, len_vals, lit_counts, dst_counts);
+    return finish_up(lits, dsts, lens, lit_counts, dst_counts);
 }
 
 int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, int n_hcodelens) {
