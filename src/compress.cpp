@@ -358,7 +358,7 @@ struct BitWriter {
     uint64_t total_written = 0;
 };
 
-void blkwrite_no_compression(const char* buffer, size_t size, uint8_t bfinal, BitWriter& out) {
+void blkwrite_no_compression(const uint8_t* const buffer, size_t size, uint8_t bfinal, BitWriter& out) {
     uint8_t block_type = static_cast<uint8_t>(BType::NO_COMPRESSION);
     uint8_t btype = static_cast<uint8_t>(BType::NO_COMPRESSION);
     xassert(size < UINT16_MAX, "invalid size: %zu", size);
@@ -564,7 +564,7 @@ constexpr uint32_t update_hash(uint32_t current, uint8_t c) noexcept {
     return ((current << 8) | c) & mask;
 }
 
-int longest_match(const char* wnd, const char* str, int max_length) {
+int longest_match(const uint8_t* const wnd, const uint8_t* const str, int max_length) {
     int i = 0;
     for (; i < max_length; ++i) {
         if (wnd[i] != str[i]) break;
@@ -626,7 +626,7 @@ void analyze_hash_table(const T& ht, const char* buf) {
 #define CHECK_HASH(i)
 #endif
 
-BlockResults analyze_block(const char* const buf, size_t size) {
+BlockResults analyze_block(const uint8_t* const buf, size_t size) {
     // TODO: add fast path for analyzing very small blocks. no point in even trying
     //       dynamic encoding in that case, and potentially gives optimization ability
     //       to know that there are at least N bytes of input
@@ -675,7 +675,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
             lit_counts[lit_codes.back()]++;
             dst_counts[get_distance_code(dst_vals.back())]++;
         } else {
-            int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
+            int value = buf[i];
             lit_codes.push_back(value);
             len_vals.push_back(0);
             dst_vals.push_back(0);
@@ -684,7 +684,7 @@ BlockResults analyze_block(const char* const buf, size_t size) {
         }
     }
     for (; i < size; ++i) {
-        int value = static_cast<int>(*reinterpret_cast<const uint8_t*>(buf + i));
+        int value = buf[i];
         lit_codes.push_back(value);
         len_vals.push_back(0);
         dst_vals.push_back(0);
@@ -791,7 +791,7 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
     return cost;
 }
 
-void compress_block(const char* buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
+void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto&& [header_data, hclen] = make_header_tree_data(htree);
@@ -945,6 +945,7 @@ int main(int argc, char** argv) {
     static char buf[BUFSIZE];
     size_t size = 0;
     size_t read;
+    const uint8_t* pbuf = reinterpret_cast<const uint8_t*>(&buf[0]); // TEMP: for convenience
     while ((read = fread(&buf[size], 1, BUFSIZE - size, fp)) > 0) {
         crc = calc_crc32(crc, reinterpret_cast<const uint8_t*>(&buf[size]), read);
         isize += read;
@@ -952,7 +953,7 @@ int main(int argc, char** argv) {
         assert(isize <= filesize);
         while (size >= BLOCKSIZE) {
             uint8_t bfinal = size <= BLOCKSIZE && isize == filesize;
-            compress_fn(&buf[0], BLOCKSIZE, bfinal, writer, block_number++);
+            compress_fn(pbuf, BLOCKSIZE, bfinal, writer, block_number++);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -966,7 +967,7 @@ int main(int argc, char** argv) {
     // contain no data.
     assert(size < BLOCKSIZE);
     if (size > 0 || block_number == 0) {
-        compress_fn(&buf[0], size, 1, writer, block_number++);
+        compress_fn(pbuf, size, 1, writer, block_number++);
     }
     writer.flush();
 
