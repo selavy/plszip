@@ -635,20 +635,23 @@ struct Config {
     // using compress_func = BlockResult (*)(const uint8_t* const buf, size_t size, Config config);
 };
 
+// clang-format off
+// configs taken from zlib in deflate.c
 constexpr Config configs[10] = {
     /*      good lazy nice chain */
-    /* 0 */ {0, 0, 0, 0},    // deflate_stored},  /* store only */
-    /* 1 */ {4, 4, 8, 4},    // deflate_fast}, /* max speed, no lazy matches */
-    /* 2 */ {4, 5, 16, 8},   // deflate_fast},
-    /* 3 */ {4, 6, 32, 32},  // deflate_fast},
+    /* 0 */ {  0,   0,   0,    0 },  // deflate_stored},  /* store only */
+    /* 1 */ {  4,   4,   8,    4 },  // deflate_fast}, /* max speed, no lazy matches */
+    /* 2 */ {  4,   5,  16,    8 },  // deflate_fast},
+    /* 3 */ {  4,   6,  32,   32 },  // deflate_fast},
 
-    /* 4 */ {4, 4, 16, 16},        // deflate_slow},  /* lazy matches */
-    /* 5 */ {8, 16, 32, 32},       // deflate_slow},
-    /* 6 */ {8, 16, 128, 128},     // deflate_slow},
-    /* 7 */ {8, 32, 128, 256},     // deflate_slow},
-    /* 8 */ {32, 128, 258, 1024},  // deflate_slow},
-    /* 9 */ {32, 258, 258, 4096},  // deflate_slow}}; /* max compression */
+    /* 4 */ {  4,   4,  16,   16 },  // deflate_slow},  /* lazy matches */
+    /* 5 */ {  8,  16,  32,   32 },  // deflate_slow},
+    /* 6 */ {  8,  16, 128,  128 },  // deflate_slow},
+    /* 7 */ {  8,  32, 128,  256 },  // deflate_slow},
+    /* 8 */ { 32, 128, 258, 1024 },  // deflate_slow},
+    /* 9 */ { 32, 258, 258, 4096 },  // deflate_slow}}; /* max compression */
 };
+// clang-format on
 
 BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::vector<int>& lens,
                        std::map<int, int>& lit_counts, std::map<int, int>& dst_counts) {
