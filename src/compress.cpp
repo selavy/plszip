@@ -626,75 +626,35 @@ void analyze_hash_table(const T& ht, const char* buf) {
 #define CHECK_HASH(i)
 #endif
 
-BlockResults analyze_block(const uint8_t* const buf, size_t size) {
-    // TODO: add fast path for analyzing very small blocks. no point in even trying
-    //       dynamic encoding in that case, and potentially gives optimization ability
-    //       to know that there are at least N bytes of input
+struct Config {
+    int good_length; /* reduce lazy search above this match length */
+    int max_lazy;    /* do not perform lazy search above this match length */
+    int nice_length; /* quit search above this match length */
+    int max_chain;
+    // compress_func func;
+    // using compress_func = BlockResult (*)(const uint8_t* const buf, size_t size, Config config);
+};
 
-    std::vector<int> lit_codes;
-    std::vector<int> len_vals;
-    std::vector<int> dst_vals;
+constexpr Config configs[10] = {
+    /*      good lazy nice chain */
+    /* 0 */ {0, 0, 0, 0},    // deflate_stored},  /* store only */
+    /* 1 */ {4, 4, 8, 4},    // deflate_fast}, /* max speed, no lazy matches */
+    /* 2 */ {4, 5, 16, 8},   // deflate_fast},
+    /* 3 */ {4, 6, 32, 32},  // deflate_fast},
 
-    std::map<uint32_t, std::vector<int>> ht;
-    std::map<int, int> lit_counts;
-    std::map<int, int> dst_counts;
-    uint32_t h = size >= 2 ? (CU8PTR(buf)[0] << 8) | CU8PTR(buf)[1] : 0;
+    /* 4 */ {4, 4, 16, 16},        // deflate_slow},  /* lazy matches */
+    /* 5 */ {8, 16, 32, 32},       // deflate_slow},
+    /* 6 */ {8, 16, 128, 128},     // deflate_slow},
+    /* 7 */ {8, 32, 128, 256},     // deflate_slow},
+    /* 8 */ {32, 128, 258, 1024},  // deflate_slow},
+    /* 9 */ {32, 258, 258, 4096},  // deflate_slow}}; /* max compression */
+};
 
-    size_t i = 0;
-    while (i + 3 < size) {
-        xassert(i + 2 < size, "i=%zu size=%zu", i, size);
-        h = update_hash(h, buf[i + 2]);
-        CHECK_HASH(i);
-        auto& locs = ht[h];
-        int length = 2;
-        int distance = 0;
-        for (auto rit = locs.rbegin(); rit != locs.rend(); ++rit) {
-            int pos = *rit;
-            int match_length = longest_match(buf + pos, buf + i, std::min(MaxMatchLength, size - i));
-            if (match_length > length) {
-                length = match_length;
-                distance = i - pos;
-                xassert(3 <= length && length <= MaxMatchLength, "invalid match length (too long): %d", length);
-                xassert(0 <= distance && distance <= MaxMatchDistance, "invalid distance (too far): %d", distance);
-            }
-        }
-        locs.push_back(i);
-        if (length >= 3) {
-            for (int j = 1; j < length; ++j) {
-                if (i + j + 2 >= size) {
-                    break;
-                }
-                h = update_hash(h, buf[i + j + 2]);
-                CHECK_HASH(i + j);
-                ht[h].push_back(i + j);
-            }
-            i += length;
-            lit_codes.push_back(get_length_code(length));
-            len_vals.push_back(length);
-            dst_vals.push_back(distance);
-            lit_counts[lit_codes.back()]++;
-            dst_counts[get_distance_code(dst_vals.back())]++;
-        } else {
-            int value = buf[i];
-            lit_codes.push_back(value);
-            len_vals.push_back(0);
-            dst_vals.push_back(0);
-            lit_counts[lit_codes.back()]++;
-            i += 1;
-        }
-    }
-    for (; i < size; ++i) {
-        int value = buf[i];
-        lit_codes.push_back(value);
-        len_vals.push_back(0);
-        dst_vals.push_back(0);
-        lit_counts[lit_codes.back()]++;
-    }
-
+BlockResults finish_up(std::vector<int>& lit_codes, std::vector<int>& dst_vals, std::vector<int>& len_vals,
+                       std::map<int, int>& lit_counts, std::map<int, int>& dst_counts) {
     // TODO: remove this, shouldn't do dynamic encoding if the input is empty
     // edge case for when input is empty
     if (lit_counts.empty()) {
-        assert(size == 0u);
         lit_counts[0] = 1;
     }
 
@@ -781,6 +741,91 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size) {
     return {codelens, hlit, hdist, lit_codes, dst_vals, len_vals, fix_cost, dyn_cost};
 }
 
+#if 0
+BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config config) {
+    std::vector<int> lit_codes;
+    std::vector<int> len_vals;
+    std::vector<int> dst_vals;
+
+    return {};
+}
+#endif
+
+BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config) {
+    // TODO: add fast path for analyzing very small blocks. no point in even trying
+    //       dynamic encoding in that case, and potentially gives optimization ability
+    //       to know that there are at least N bytes of input
+
+    std::vector<int> lit_codes;
+    std::vector<int> dst_vals;
+    std::vector<int> len_vals;
+    std::map<int, int> lit_counts;
+    std::map<int, int> dst_counts;
+    std::map<uint32_t, std::vector<int>> ht;
+    const int nice_length = config.nice_length;
+    const int max_chain = config.max_chain;
+    uint32_t h = size >= 2 ? (CU8PTR(buf)[0] << 8) | CU8PTR(buf)[1] : 0;
+
+    size_t i = 0;
+    while (i + 3 < size) {
+        xassert(i + 2 < size, "i=%zu size=%zu", i, size);
+        h = update_hash(h, buf[i + 2]);
+        CHECK_HASH(i);
+        auto& locs = ht[h];
+        int length = 2;
+        int distance = 0;
+        int iter = 0;
+        for (auto rit = locs.rbegin(); rit != locs.rend(); ++rit) {
+            int pos = *rit;
+            int match_length = longest_match(buf + pos, buf + i, std::min(MaxMatchLength, size - i));
+            if (match_length > length) {
+                length = match_length;
+                distance = i - pos;
+                xassert(3 <= length && length <= MaxMatchLength, "invalid match length (too long): %d", length);
+                xassert(0 <= distance && distance <= MaxMatchDistance, "invalid distance (too far): %d", distance);
+
+                if (match_length > nice_length || iter++ >= max_chain) {
+                    DEBUG("exceeded match or chain length: match_length=%d chain_length=%d", match_length, iter);
+                    break;
+                }
+            }
+        }
+        locs.push_back(i);
+        if (length >= 3) {
+            for (int j = 1; j < length; ++j) {
+                if (i + j + 2 >= size) {
+                    break;
+                }
+                h = update_hash(h, buf[i + j + 2]);
+                CHECK_HASH(i + j);
+                ht[h].push_back(i + j);
+            }
+            i += length;
+            lit_codes.push_back(get_length_code(length));
+            len_vals.push_back(length);
+            dst_vals.push_back(distance);
+            lit_counts[lit_codes.back()]++;
+            dst_counts[get_distance_code(dst_vals.back())]++;
+        } else {
+            int value = buf[i];
+            lit_codes.push_back(value);
+            len_vals.push_back(0);
+            dst_vals.push_back(0);
+            lit_counts[lit_codes.back()]++;
+            i += 1;
+        }
+    }
+    for (; i < size; ++i) {
+        int value = buf[i];
+        lit_codes.push_back(value);
+        len_vals.push_back(0);
+        dst_vals.push_back(0);
+        lit_counts[lit_codes.back()]++;
+    }
+
+    return finish_up(lit_codes, dst_vals, len_vals, lit_counts, dst_counts);
+}
+
 int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, int n_hcodelens) {
     int64_t cost = 5 + 5 + 4;
     cost += 3 * n_hcodelens;
@@ -792,7 +837,7 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
 }
 
 void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
-    auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size);
+    auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size, configs[0]);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto&& [header_data, hclen] = make_header_tree_data(htree);
     auto hdr_cost = calculate_header_cost(htree, hcodes, hclen);
@@ -945,7 +990,7 @@ int main(int argc, char** argv) {
     static char buf[BUFSIZE];
     size_t size = 0;
     size_t read;
-    const uint8_t* pbuf = reinterpret_cast<const uint8_t*>(&buf[0]); // TEMP: for convenience
+    const uint8_t* pbuf = reinterpret_cast<const uint8_t*>(&buf[0]);  // TEMP: for convenience
     while ((read = fread(&buf[size], 1, BUFSIZE - size, fp)) > 0) {
         crc = calc_crc32(crc, reinterpret_cast<const uint8_t*>(&buf[size]), read);
         isize += read;
