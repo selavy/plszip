@@ -32,6 +32,8 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
+#define TRACE(fmt, ...) fprintf(stdout, "TRACE: " fmt "\n", ##__VA_ARGS__);
+
 constexpr size_t BUFSIZE = 1 << 15;  // 1 << 10;
 constexpr size_t BLOCKSIZE = 1 << 15;
 constexpr size_t NumHeaderCodeLengths = 19;
@@ -168,6 +170,7 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
     std::vector<Node*> nodes;
     for (auto&& [value, count] : counts) {
         assert(0 <= value);
+        assert(count > 0);
         auto& n = pool.emplace_back(value, count);
         n.left = n.right = nullptr;
         nodes.push_back(&n);
@@ -614,12 +617,12 @@ void analyze_hash_table(const T& ht, const char* buf) {
 #endif
 
 #ifndef NDEBUG
-#define CHECK_HASH(i)                                                                                      \
-    {                                                                                                      \
-        uint32_t h2 = update_hash(update_hash(update_hash(0, buf[(i) + 0]), buf[(i) + 1]), buf[(i) + 2]);  \
-        uint32_t h3 = (buf[(i) + 0] << 16) | (buf[(i) + 1] << 8) | (buf[(i) + 2]); \
-        assert(h2 == h3);                                                                                  \
-        xassert(h == h2, "%u != %u", h, h2);                                                               \
+#define CHECK_HASH(i)                                                                                     \
+    {                                                                                                     \
+        uint32_t h2 = update_hash(update_hash(update_hash(0, buf[(i) + 0]), buf[(i) + 1]), buf[(i) + 2]); \
+        uint32_t h3 = (buf[(i) + 0] << 16) | (buf[(i) + 1] << 8) | (buf[(i) + 2]);                        \
+        assert(h2 == h3);                                                                                 \
+        xassert(h == h2, "%u != %u", h, h2);                                                              \
     }
 #else
 #define CHECK_HASH(i)
@@ -745,6 +748,9 @@ BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::vect
 }
 
 BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config config) {
+    TRACE("analyze_block_lazy: good_length=%d max_lazy=%d nice_length=%d max_chain=%d", config.good_length,
+          config.max_lazy, config.nice_length, config.max_chain);
+
     const int good_length = config.good_length;
     const int max_lazy = config.max_lazy;
     const int nice_length = config.nice_length;
@@ -778,11 +784,11 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
         }
     };
 
-    int pos = 0;
     const int max_pos = static_cast<int>(size) - MinMatchLength;
+    int pos = 0;
     int prev_length = MinMatchLength - 1;
     int prev_distance = -1;  // TEMP TEMP
-    bool match_available = false;
+    bool need_flush = false;
     while (pos < max_pos) {
         int length = MinMatchLength - 1;
         int distance = -1;  // TEMP TEMP
@@ -791,7 +797,8 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
 
         if (prev_length < max_lazy) {
             // find longest match (within constraints of max_chain and nice_length)
-            int max_iters = prev_length >= good_length ? max_chain >> 2 : max_chain;
+            const int max_iters = prev_length >= good_length ? max_chain >> 2 : max_chain;
+            int iter = 0;
             for (auto rit = locs.rbegin(); rit != locs.rend(); ++rit) {
                 int loc = *rit;
                 const int match_length = longest_match(buf + loc, buf + pos, std::min(MaxMatchLength, size - pos));
@@ -801,8 +808,8 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
                     xassert(3 <= length && length <= MaxMatchLength, "invalid match length (too long): %d", length);
                     xassert(0 <= distance && distance <= MaxMatchDistance, "invalid distance (too far): %d", distance);
                 }
-                if (length > nice_length || !(max_iters-- > 0)) {
-                    // DEBUG("exceeded match or chain length: match_length=%d chain_length=%d", match_length, iter);
+                if (length >= nice_length || ++iter >= max_iters /*!(max_iters-- > 0)*/) {
+                    TRACE("exceeded match or chain length: match_length=%d chain_length=%d", length, iter);
                     break;
                 }
             }
@@ -811,54 +818,58 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
         // add position
         locs.push_back(pos);
 
+        const int prev_pos = pos - 1;
         if (prev_length >= MinMatchLength && prev_length >= length) {
+            TRACE("using match: len=%d dist=%d str=\"%.*s\" (new_len=%d, new_dst=%d)", prev_length, prev_distance, prev_length,
+                  &buf[prev_pos - prev_distance], length, distance);
+
             xassert(pos != 0, "had previous match at pos=0?");
             tally_dst_len(prev_distance, prev_length);
 
             // prev_length = 3 ; prev_distance = 3                   curr position     new position
-            //                                                              |               |
-            //                                                              v               v
-            //          | pos-6 | pos-5 | pos-4 | pos-3 | pos-2 | pos-1 | pos   | pos+1 | pos+2 | pos+3 | pos+4 |
-            //          -----------------------------------------------------------------------------------------
-            //          | 'T'   | 'h'   | 'i'   | 's'   | ' '   | 'i'   | 's'   | ' '   | 'a'   | 't'   | 'e'   |
-            //          -----------------------------------------------------------------------------------------
-            // hashed:  |  x    |  x    |  x    |  x    |  x    |  x    |  x    |  x    |  x    |
-            //                                                                                             ^
-            //                                                                                             |
-            //                                                                                    need to hash to here
+            //                                                             |               |
+            //                                                             v               v
+            //         | pos-5 | pos-4 | pos-3 | pos-2 | pos-1 | pos   | pos+1 | pos+2 | pos+3 | pos+4 |
+            //         ---------------------------------------------------------------------------------
+            //         | 'h'   | 'i'   | 's'   | ' '   | 'i'   | 's'   | ' '   | 'a'   | 't'   | 'e'   |
+            //         ---------------------------------------------------------------------------------
+            // hashed: |  x    |  x    |  x    |  x    |  x    |  x    |  x    |  x    |       |       |
+            //         ---------------------------------------------------------------------------------
+            //                                                                                    ^
+            //                                                                                    |
+            //                                                                           need to hash to here
 
-            const int prev_pos = pos - 1;
             for (int i = 2; i < prev_length && (prev_pos + 2 + i) < size; ++i) {
                 h = update_hash(h, buf[prev_pos + 2 + i]);
                 CHECK_HASH(prev_pos + i);
                 ht[h].push_back(prev_pos + i);
             }
-            match_available = false;
+            need_flush = false;
             pos = prev_pos + prev_length;
             prev_length = MinMatchLength - 1;
             prev_distance = -1;  // TEMP TEMP
-        } else if (match_available) {
-            assert(pos != 0);
-            tally_lit(buf[pos - 1]);
+        } else if (need_flush) {
+            assert(prev_pos >= 0);
+            tally_lit(buf[prev_pos]);
             pos++;
             prev_length = length;
             prev_distance = distance;
         } else {
-            match_available = true;
+            need_flush = true;
             pos++;
             prev_length = length;
             prev_distance = distance;
         }
     }
 
-    { // flush final match or literal
+    {  // flush final match or literal
         const int prev_pos = pos - 1;
         if (prev_length >= MinMatchLength) {
             tally_dst_len(prev_distance, prev_length);
             pos = prev_pos + prev_length;
-        } else if (match_available) {
+        } else if (need_flush) {
             tally_lit(buf[prev_pos]);
-            pos = prev_pos + 1; // TEMP TEMP -- no-op remove
+            pos = prev_pos + 1;  // TEMP TEMP -- no-op remove
         }
     }
 
@@ -874,9 +885,16 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
     }
     for (int dst : dsts) {
         if (dst != 0) {
-            dst_counts[get_distance_code(dst)];
+            dst_counts[get_distance_code(dst)]++;
         }
     }
+
+    TRACE("--- DST CODE COUNTS")
+    for (auto&& [dst, cnt] : dst_counts) {
+        TRACE("%d: %d", dst, cnt);
+    }
+    TRACE("--- END DST CODE COUNTS")
+
     return finish_up(lits, dsts, lens, lit_counts, dst_counts);
 }
 
@@ -884,6 +902,9 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
     // TODO: add fast path for analyzing very small blocks. no point in even trying
     //       dynamic encoding in that case, and potentially gives optimization ability
     //       to know that there are at least N bytes of input
+
+    TRACE("analyze_block: good_length=%d max_lazy=%d nice_length=%d max_chain=%d", config.good_length, config.max_lazy,
+          config.nice_length, config.max_chain);
 
     std::vector<int> lits;
     std::vector<int> dsts;
@@ -913,13 +934,14 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
                 xassert(3 <= length && length <= MaxMatchLength, "invalid match length (too long): %d", length);
                 xassert(0 <= distance && distance <= MaxMatchDistance, "invalid distance (too far): %d", distance);
             }
-            if (match_length > nice_length || iter++ >= max_chain) {
-                // DEBUG("exceeded match or chain length: match_length=%d chain_length=%d", match_length, iter);
+            if (length >= nice_length || iter++ >= max_chain) {
+                TRACE("exceeded match or chain length: match_length=%d chain_length=%d", length, iter);
                 break;
             }
         }
         locs.push_back(i);
         if (length >= 3) {
+            TRACE("using match: len=%d dist=%d str=\"%.*s\"", length, distance, length, &buf[i - distance]);
             for (int j = 1; j < length; ++j) {
                 if (i + j + 2 >= size) {
                     break;
@@ -951,6 +973,12 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
         lit_counts[lits.back()]++;
     }
 
+    TRACE("--- DST CODE COUNTS")
+    for (auto&& [dst, cnt] : dst_counts) {
+        TRACE("%d: %d", dst, cnt);
+    }
+    TRACE("--- END DST CODE COUNTS")
+
     return finish_up(lits, dsts, lens, lit_counts, dst_counts);
 }
 
@@ -965,10 +993,11 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
 }
 
 void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
+    analyze_block(buf, size, configs[0]);
 #if 0
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size, configs[0]);
 #else
-    auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block_lazy(buf, size, configs[9]);
+    auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block_lazy(buf, size, configs[10]);
 #endif
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto&& [header_data, hclen] = make_header_tree_data(htree);
