@@ -39,11 +39,18 @@ run_test() {
     OUTPUT=${BUILD}/${BASENAME}.txt.gz
     GUNZIP_OUTPUT=${BUILD}/${BASENAME}.txt
     echo -n "$BASENAME..."
-    $PROG $INPUT $OUTPUT > /dev/null 2> /dev/null || die "Failed to compress $INPUT with $PROG"
+
+    $PROG --fast --level=2 $INPUT $OUTPUT > /dev/null 2> /dev/null || die "Failed to compress $INPUT with $PROG"
     gunzip $OUTPUT || die "Failed to inflate $INPUT"
     diff $INPUT $GUNZIP_OUTPUT || die "Diff failed"
-    echo " Passed!"
     rm -f $GUNZIP_OUTPUT
+
+    $PROG --slow --level=9 $INPUT $OUTPUT > /dev/null 2> /dev/null || die "Failed to compress $INPUT with $PROG"
+    gunzip $OUTPUT || die "Failed to inflate $INPUT"
+    diff $INPUT $GUNZIP_OUTPUT || die "Diff failed"
+    rm -f $GUNZIP_OUTPUT
+
+    echo " Passed!"
 }
 
 if [[ $# -gt 2 ]];
