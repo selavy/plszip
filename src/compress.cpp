@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <cxxopts.hpp>
 
 #include "compress_tables.h"
 #include "crc32.h"
@@ -995,13 +996,11 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
     return cost;
 }
 
-void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
-    // analyze_block(buf, size, configs[0]);
-#if 1
-    auto&& [codelens, hlit, hdist, lits, dsts, fix_cost, dyn_cost] = analyze_block(buf, size, configs[6]);
-#else
-    auto&& [codelens, hlit, hdist, lits, dsts, fix_cost, dyn_cost] = analyze_block_lazy(buf, size, configs[10]);
-#endif
+void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, bool use_fast, int compression_level, BitWriter& out, int block_number) {
+    auto* analyzer = use_fast ? analyze_block : analyze_block_lazy;
+    auto& config = configs[compression_level];
+    // analyze_block(buf, size, config);
+    auto&& [codelens, hlit, hdist, lits, dsts, fix_cost, dyn_cost] = analyzer(buf, size, config);
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto&& [header_data, hclen] = make_header_tree_data(htree);
     auto hdr_cost = calculate_header_cost(htree, hcodes, hclen);
@@ -1096,15 +1095,47 @@ void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWr
 }
 
 int main(int argc, char** argv) {
-    if (argc != 2 && argc != 3) {
-        fprintf(stderr, "Usage: %s [FILE]\n", argv[0]);
-        exit(0);
+    cxxopts::Options options("compress", "compress files using the LZ77 compression algorithm into the gzip format");
+    options.add_options()
+        ("f,fast", "use the non-lazy implementation")
+        ("s,slow", "use the lazy implementation")
+        ("l,level", "the level of compression to use", cxxopts::value<int>()->default_value("6"))
+        ("input", "input filename", cxxopts::value<std::string>(), "FILE")
+        ("output", "output filename", cxxopts::value<std::string>(), "OUTPUT")
+        ("h,help", "Print usage")
+        ;
+    options.parse_positional({ "input", "output", "too many positional arguments" });
+    auto args = options.parse(argc, argv);
+
+    if (args.count("help")) {
+        std::cerr << options.help() << std::endl;
+        return 0;
     }
-    std::string input_filename = argv[1];
-    std::string output_filename = argc == 3 ? argv[2] : input_filename + ".gz";
+
+    if (!args.count("input")) {
+        std::cerr << "Must specify input filename\n\n"
+            << options.help()
+            << std::endl;
+        return 1;
+    }
+    if (args.count("fast") && args.count("slow")) {
+        std::cerr << "Can't specify both fast and slow implementations\n\n"
+            << options.help()
+            << std::endl;
+        return 1;
+    }
+
+    auto input_filename = args["input"].as<std::string>();
+    auto output_filename = args.count("output") ? args["output"].as<std::string>() : input_filename + ".gz";
+    bool use_fast = args.count("fast") || !args.count("slow");
+    int compression_level = args["level"].as<int>();
+    int max_compression = ARRSIZE(configs) - 1;
+    compression_level = std::clamp(compression_level, 0, max_compression);
 
     printf("Input Filename : %s\n", input_filename.c_str());
     printf("Output Filename: %s\n", output_filename.c_str());
+    printf("UseFast        : %s\n", use_fast ? "TRUE": "FALSE");
+    printf("Level          : %d\n", compression_level);
 
     FileHandle fp = fopen(input_filename.c_str(), "rb");
     if (!fp) {
@@ -1162,7 +1193,7 @@ int main(int argc, char** argv) {
         assert(isize <= filesize);
         while (size >= BLOCKSIZE) {
             uint8_t bfinal = size <= BLOCKSIZE && isize == filesize;
-            compress_fn(pbuf, BLOCKSIZE, bfinal, writer, block_number++);
+            compress_fn(pbuf, BLOCKSIZE, bfinal, use_fast, compression_level, writer, block_number++);
             size -= BLOCKSIZE;
             memmove(&buf[0], &buf[BLOCKSIZE], size);
         }
@@ -1176,7 +1207,7 @@ int main(int argc, char** argv) {
     // contain no data.
     assert(size < BLOCKSIZE);
     if (size > 0 || block_number == 0) {
-        compress_fn(pbuf, size, 1, writer, block_number++);
+        compress_fn(pbuf, size, 1, use_fast, compression_level, writer, block_number++);
     }
     writer.flush();
 

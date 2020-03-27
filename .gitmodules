@@ -1,3 +1,6 @@
 [submodule "third_party/sml"]
 	path = third_party/sml
 	url = git@github.com:boost-experimental/sml.git
+[submodule "third_party/cxxopts"]
+	path = third_party/cxxopts
+	url = git@github.com:jarro2783/cxxopts.git

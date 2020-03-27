@@ -6,7 +6,7 @@ add_executable(compress
     compress.cpp
     )
 target_compile_features(compress PUBLIC cxx_std_17)
-target_link_libraries(compress PRIVATE cxx_project_options)
+target_link_libraries(compress PRIVATE cxx_project_options cxxopts::cxxopts)
 
 add_executable(inflate
     inflate_tables.h
