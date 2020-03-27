@@ -636,7 +636,7 @@ struct Config {
 
 // clang-format off
 // configs taken from zlib in deflate.c
-constexpr Config configs[10] = {
+constexpr Config configs[/*10*/] = {
     /*      good lazy nice chain */
     /* 0 */ {  0,   0,   0,    0 },  // deflate_stored},  /* store only */
     /* 1 */ {  4,   4,   8,    4 },  // deflate_fast}, /* max speed, no lazy matches */
@@ -649,6 +649,7 @@ constexpr Config configs[10] = {
     /* 7 */ {  8,  32, 128,  256 },  // deflate_slow},
     /* 8 */ { 32, 128, 258, 1024 },  // deflate_slow},
     /* 9 */ { 32, 258, 258, 4096 },  // deflate_slow}}; /* max compression */
+    /* 10 */ { INT_MAX, INT_MAX, INT_MAX, INT_MAX },
 };
 // clang-format on
 
@@ -744,11 +745,6 @@ BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::vect
 }
 
 BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config config) {
-#if OUTOUT
-    // TEMP TEMP:
-    std::string outout;
-#endif
-
     const int good_length = config.good_length;
     const int max_lazy = config.max_lazy;
     const int nice_length = config.nice_length;
@@ -817,15 +813,6 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
 
         if (prev_length >= MinMatchLength && prev_length >= length) {
             xassert(pos != 0, "had previous match at pos=0?");
-
-#if OUTOUT
-            // TEMP TEMP
-            for (int i = 0; i < prev_length; ++i) {
-                outout += buf[pos - 1 - prev_distance + i];
-            }
-            DEBUG("outout = %s", outout.c_str());
-#endif
-
             tally_dst_len(prev_distance, prev_length);
 
             // prev_length = 3 ; prev_distance = 3                   curr position     new position
@@ -840,7 +827,7 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
             //                                                                                             |
             //                                                                                    need to hash to here
 
-            const auto prev_pos = pos - 1;
+            const int prev_pos = pos - 1;
             for (int i = 2; i < prev_length && (prev_pos + 2 + i) < size; ++i) {
                 h = update_hash(h, buf[prev_pos + 2 + i]);
                 CHECK_HASH(prev_pos + i);
@@ -852,13 +839,6 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
             prev_distance = -1;  // TEMP TEMP
         } else if (match_available) {
             assert(pos != 0);
-
-#if OUTOUT
-            // TEMP TEMP
-            outout += buf[pos - 1];
-            DEBUG("outout = %s", outout.c_str());
-#endif
-
             tally_lit(buf[pos - 1]);
             pos++;
             prev_length = length;
@@ -871,55 +851,31 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
         }
     }
 
-#if OUTOUT
-    DEBUG("leaving -- outout = %s", outout.c_str());  // TEMP TEMP
-#endif
-
-    // flush final match or literal
-    if (prev_length >= MinMatchLength) {
-#if OUTOUT
-        // TEMP TEMP
-        for (int i = 0; i < prev_length; ++i) {
-            outout += buf[pos - 1 - prev_distance + i];
+    { // flush final match or literal
+        const int prev_pos = pos - 1;
+        if (prev_length >= MinMatchLength) {
+            tally_dst_len(prev_distance, prev_length);
+            pos = prev_pos + prev_length;
+        } else if (match_available) {
+            tally_lit(buf[prev_pos]);
+            pos = prev_pos + 1; // TEMP TEMP -- no-op remove
         }
-        DEBUG("flush match outout = %s", outout.c_str());
-#endif
-
-        tally_dst_len(prev_distance, prev_length);
-        pos += prev_length - 1;
-    } else if (match_available) {
-#if OUTOUT
-        // TEMP TEMP
-        outout += buf[pos - 1];
-        DEBUG("flush literal outout = %s", outout.c_str());
-#endif
-
-        tally_lit(buf[pos - 1]);
-        // pos++;
     }
 
     for (; pos < size; ++pos) {
-#if OUTOUT
-        // TEMP TEMP
-        outout += buf[pos];
-        DEBUG("outout = %s", outout.c_str());
-#endif
-
         tally_lit(buf[pos]);
     }
-
-#if OUTOUT
-    DEBUG("Final outout = %s", outout.c_str());
-#endif
 
     // TEMP TEMP -- for simplicity count everything at the end
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
-    for (auto lit : lits) {
+    for (int lit : lits) {
         lit_counts[lit]++;
     }
-    for (auto dst : dsts) {
-        if (dst != 0) dst_counts[get_distance_code(dst)];
+    for (int dst : dsts) {
+        if (dst != 0) {
+            dst_counts[get_distance_code(dst)];
+        }
     }
     return finish_up(lits, dsts, lens, lit_counts, dst_counts);
 }
