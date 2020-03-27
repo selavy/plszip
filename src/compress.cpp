@@ -48,6 +48,7 @@ constexpr size_t MaxBits = 15;
 constexpr uint8_t ID1_GZIP = 31;
 constexpr uint8_t ID2_GZIP = 139;
 constexpr uint8_t CM_DEFLATE = 8;
+constexpr int MinMatchLength = 3;
 
 struct HuffTrees {
     const uint16_t* codes;
@@ -612,13 +613,11 @@ void analyze_hash_table(const T& ht, const char* buf) {
 }
 #endif
 
-#define CU8PTR(b) reinterpret_cast<const uint8_t*>(b)
-
 #ifndef NDEBUG
 #define CHECK_HASH(i)                                                                                      \
     {                                                                                                      \
         uint32_t h2 = update_hash(update_hash(update_hash(0, buf[(i) + 0]), buf[(i) + 1]), buf[(i) + 2]);  \
-        uint32_t h3 = (CU8PTR(buf)[(i) + 0] << 16) | (CU8PTR(buf)[(i) + 1] << 8) | (CU8PTR(buf)[(i) + 2]); \
+        uint32_t h3 = (buf[(i) + 0] << 16) | (buf[(i) + 1] << 8) | (buf[(i) + 2]); \
         assert(h2 == h3);                                                                                  \
         xassert(h == h2, "%u != %u", h, h2);                                                               \
     }
@@ -745,20 +744,183 @@ BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::vect
 }
 
 BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config config) {
-    std::vector<int> lit_vals;
-    std::vector<int> dst_vals;
-    std::vector<int> len_vals;
+#if OUTOUT
+    // TEMP TEMP:
+    std::string outout;
+#endif
+
+    const int good_length = config.good_length;
+    const int max_lazy = config.max_lazy;
+    const int nice_length = config.nice_length;
+    const int max_chain = config.max_chain;
+    std::vector<int> lits;
+    std::vector<int> dsts;
+    std::vector<int> lens;
+    std::map<uint32_t, std::vector<int>> ht;
+    uint32_t h = size >= MinMatchLength ? (buf[0] << 8) | buf[1] : 0;
+
+    auto tally_lit = [&](int lit) {
+        lits.push_back(lit);
+        dsts.push_back(0);
+        lens.push_back(0);
+    };
+
+    auto tally_dst_len = [&](int dst, int len) {
+        lits.push_back(get_length_code(len));
+        dsts.push_back(dst);
+        lens.push_back(len);
+    };
+
+    auto update_hash_for_length = [&](int pos, int match_length) {
+        for (int i = 1; i < match_length; ++i) {
+            if (pos + i + 2 >= size) {
+                return;
+            }
+            h = update_hash(h, buf[pos + i + 2]);
+            CHECK_HASH(pos + i);
+            ht[h].push_back(pos + i);
+        }
+    };
+
+    int pos = 0;
+    const int max_pos = static_cast<int>(size) - MinMatchLength;
+    int prev_length = MinMatchLength - 1;
+    int prev_distance = -1;  // TEMP TEMP
+    bool match_available = false;
+    while (pos < max_pos) {
+        int length = MinMatchLength - 1;
+        int distance = -1;  // TEMP TEMP
+        h = update_hash(h, buf[pos + 2]);
+        auto& locs = ht[h];
+
+        if (prev_length < max_lazy) {
+            // find longest match (within constraints of max_chain and nice_length)
+            int max_iters = prev_length >= good_length ? max_chain >> 2 : max_chain;
+            for (auto rit = locs.rbegin(); rit != locs.rend(); ++rit) {
+                int loc = *rit;
+                const int match_length = longest_match(buf + loc, buf + pos, std::min(MaxMatchLength, size - pos));
+                if (match_length > length) {
+                    length = match_length;
+                    distance = pos - loc;
+                    xassert(3 <= length && length <= MaxMatchLength, "invalid match length (too long): %d", length);
+                    xassert(0 <= distance && distance <= MaxMatchDistance, "invalid distance (too far): %d", distance);
+                }
+                if (length > nice_length || !(max_iters-- > 0)) {
+                    // DEBUG("exceeded match or chain length: match_length=%d chain_length=%d", match_length, iter);
+                    break;
+                }
+            }
+        }
+
+        // add position
+        locs.push_back(pos);
+
+        if (prev_length >= MinMatchLength && prev_length >= length) {
+            xassert(pos != 0, "had previous match at pos=0?");
+
+#if OUTOUT
+            // TEMP TEMP
+            for (int i = 0; i < prev_length; ++i) {
+                outout += buf[pos - 1 - prev_distance + i];
+            }
+            DEBUG("outout = %s", outout.c_str());
+#endif
+
+            tally_dst_len(prev_distance, prev_length);
+
+
+            // prev_length = 3 ; prev_distance = 3
+            //                                                            |
+            //                                                            v
+            //          | pos-6 | pos-5 | pos-4 | pos-3 | pos-2 | pos-1 | pos   | pos+1 | pos+2 | pos+3 | pos+4 |
+            //          -----------------------------------------------------------------------------------------
+            //          | 'T'   | 'h'   | 'i'   | 's'   | ' '   | 'i'   | 's'   | ' '   | 'a'   | 't'   | 'e'   |
+            //          -----------------------------------------------------------------------------------------
+            // hashed:  |  x    |  x    |  x    |  x    |  x    |  x    |  x    |  x    |  x    |
+
+            // hash already has updated for up to buf[pos+2]
+            int prev_pos = pos - 1;
+            for (int i = 2; i < prev_length && (prev_pos + 2 + i) < size; ++i) {
+                h = update_hash(h, buf[prev_pos + 2 + i]);
+                CHECK_HASH(prev_pos + i);
+                ht[h].push_back(prev_pos + i);
+            }
+            match_available = false;
+            pos = prev_pos + prev_length;
+            prev_length = MinMatchLength - 1;
+            prev_distance = -1;  // TEMP TEMP
+        } else if (match_available) {
+            assert(pos != 0);
+
+#if OUTOUT
+            // TEMP TEMP
+            outout += buf[pos - 1];
+            DEBUG("outout = %s", outout.c_str());
+#endif
+
+            tally_lit(buf[pos - 1]);
+            pos++;
+            prev_length = length;
+            prev_distance = distance;
+        } else {
+            match_available = true;
+            pos++;
+            prev_length = length;
+            prev_distance = distance;
+        }
+    }
+
+#if OUTOUT
+    DEBUG("leaving -- outout = %s", outout.c_str());  // TEMP TEMP
+#endif
+
+    // flush final match or literal
+    if (prev_length >= MinMatchLength) {
+#if OUTOUT
+        // TEMP TEMP
+        for (int i = 0; i < prev_length; ++i) {
+            outout += buf[pos - 1 - prev_distance + i];
+        }
+        DEBUG("flush match outout = %s", outout.c_str());
+#endif
+
+        tally_dst_len(prev_distance, prev_length);
+        pos += prev_length - 1;
+    } else if (match_available) {
+#if OUTOUT
+        // TEMP TEMP
+        outout += buf[pos - 1];
+        DEBUG("flush literal outout = %s", outout.c_str());
+#endif
+
+        tally_lit(buf[pos - 1]);
+        // pos++;
+    }
+
+    for (; pos < size; ++pos) {
+#if OUTOUT
+        // TEMP TEMP
+        outout += buf[pos];
+        DEBUG("outout = %s", outout.c_str());
+#endif
+
+        tally_lit(buf[pos]);
+    }
+
+#if OUTOUT
+    DEBUG("Final outout = %s", outout.c_str());
+#endif
 
     // TEMP TEMP -- for simplicity count everything at the end
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
-    for (auto lit : lit_vals) {
+    for (auto lit : lits) {
         lit_counts[lit]++;
     }
-    for (auto dst : dst_vals) {
-        dst_counts[get_distance_code(dst)];
+    for (auto dst : dsts) {
+        if (dst != 0) dst_counts[get_distance_code(dst)];
     }
-    return finish_up(lit_vals, dst_vals, len_vals, lit_counts, dst_counts);
+    return finish_up(lits, dsts, lens, lit_counts, dst_counts);
 }
 
 BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config) {
@@ -774,7 +936,7 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
     std::map<uint32_t, std::vector<int>> ht;
     const int nice_length = config.nice_length;
     const int max_chain = config.max_chain;
-    uint32_t h = size >= 2 ? (CU8PTR(buf)[0] << 8) | CU8PTR(buf)[1] : 0;
+    uint32_t h = size >= 2 ? ((buf[0] << 8) | (buf[1] << 0)) : 0;
 
     size_t i = 0;
     while (i + 3 < size) {
@@ -793,11 +955,10 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
                 distance = i - pos;
                 xassert(3 <= length && length <= MaxMatchLength, "invalid match length (too long): %d", length);
                 xassert(0 <= distance && distance <= MaxMatchDistance, "invalid distance (too far): %d", distance);
-
-                if (match_length > nice_length || iter++ >= max_chain) {
-                    DEBUG("exceeded match or chain length: match_length=%d chain_length=%d", match_length, iter);
-                    break;
-                }
+            }
+            if (match_length > nice_length || iter++ >= max_chain) {
+                // DEBUG("exceeded match or chain length: match_length=%d chain_length=%d", match_length, iter);
+                break;
             }
         }
         locs.push_back(i);
@@ -847,7 +1008,11 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
 }
 
 void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
+#if 0
     auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size, configs[0]);
+#else
+    auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block_lazy(buf, size, configs[9]);
+#endif
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto&& [header_data, hclen] = make_header_tree_data(htree);
     auto hdr_cost = calculate_header_cost(htree, hcodes, hclen);

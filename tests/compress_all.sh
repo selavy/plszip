@@ -8,11 +8,11 @@ die() {
 }
 
 DO_LZ4=0
-DO_GZIP_FAST=1
+DO_GZIP_FAST=0
 DO_GZIP_SLOW=0
-DO_GZIP_FAST_1=1
-DO_GZIP_FAST_2=1
-DO_GZIP_FAST_3=1
+DO_GZIP_FAST_1=0
+DO_GZIP_FAST_2=0
+DO_GZIP_FAST_3=0
 
 rm -rf *.txt.gz
 rm -rf *.txt.gz.fast
