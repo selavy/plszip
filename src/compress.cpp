@@ -32,25 +32,27 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__);
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
-#define TRACE(fmt, ...) fprintf(stdout, "TRACE: " fmt "\n", ##__VA_ARGS__);
+#define TRACE(fmt, ...)
+// #define TRACE(fmt, ...) fprintf(stdout, "TRACE: " fmt "\n", ##__VA_ARGS__);
 
 constexpr size_t BUFSIZE = 1 << 15;  // 1 << 10;
 constexpr size_t BLOCKSIZE = 1 << 15;
-constexpr size_t NumHeaderCodeLengths = 19;
-constexpr size_t LiteralCodes = 256;  // [0, 255] doesn't include END_BLOCK code
-constexpr size_t LengthCodes = 29;    // [257, 285]
-constexpr size_t LitCodes = LiteralCodes + LengthCodes + 1;
-constexpr size_t DistCodes = 30;  // [0, 29]
-constexpr size_t MaxNumCodes = LitCodes + DistCodes;
-constexpr size_t HeaderLengthBits = 3;
-constexpr size_t MaxHeaderCodeLength = (1u << HeaderLengthBits) - 1;
-constexpr size_t MaxMatchLength = 258;
-constexpr size_t MaxMatchDistance = 32768;
-constexpr size_t MaxBits = 15;
+constexpr int NumHeaderCodeLengths = 19;
+constexpr int LiteralCodes = 256;  // [0, 255] doesn't include END_BLOCK code
+constexpr int LengthCodes = 29;    // [257, 285]
+constexpr int LitCodes = LiteralCodes + LengthCodes + 1;
+constexpr int DistCodes = 30;  // [0, 29]
+constexpr int MaxNumCodes = LitCodes + DistCodes;
+constexpr int HeaderLengthBits = 3;
+constexpr int MaxHeaderCodeLength = (1u << HeaderLengthBits) - 1;
+constexpr int MinMatchLength = 3;
+constexpr int MaxMatchLength = 258;
+constexpr int MinMatchDistance = 1;
+constexpr int MaxMatchDistance = 32768;
+constexpr int MaxBits = 15;
 constexpr uint8_t ID1_GZIP = 31;
 constexpr uint8_t ID2_GZIP = 139;
 constexpr uint8_t CM_DEFLATE = 8;
-constexpr int MinMatchLength = 3;
 
 struct HuffTrees {
     const uint16_t* codes;
@@ -377,11 +379,11 @@ void blkwrite_no_compression(const uint8_t* const buffer, size_t size, uint8_t b
     out.write(&buffer[0], size);
 }
 
-void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, const std::vector<int>& lens,
-                 const HuffTrees& tree, BitWriter& out) {
-    assert(lits.size() == dsts.size() && lits.size() == lens.size());
+void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, const HuffTrees& tree, BitWriter& out) {
+    assert(lits.size() == dsts.size());
     for (size_t i = 0; i < lits.size(); ++i) {
-        auto lit = lits[i];
+        auto len = lits[i] - LiteralCodes;
+        auto lit = lits[i] <= LiteralCodes ? lits[i] : get_length_code(len);
         xassert(0 <= lit && lit <= 285, "invalid literal: %d", lit);
         uint16_t lit_huff_code = tree.codes[lit];
         int lit_n_bits = tree.codelens[lit];
@@ -389,7 +391,6 @@ void write_block(const std::vector<int>& lits, const std::vector<int>& dsts, con
         assert(1 <= lit_n_bits && lit_n_bits <= MaxBits);
         out.write_bits(lit_huff_code, lit_n_bits);
         if (lit >= 257) {
-            auto len = lens[i];
             auto len_base = get_length_base(len);
             auto len_extra = len - len_base;
             xassert(len_extra >= 0, "len < len_base: %d %d", len, len_base);
@@ -580,9 +581,9 @@ struct BlockResults {
     CodeLengths codelens;
     size_t hlit;
     size_t hdist;
-    std::vector<int> lit_codes;
-    std::vector<int> dst_vals;
-    std::vector<int> len_vals;
+    std::vector<int> lits;  // lit <= LiteralCodes --> literal code
+                            // lit  > LiteralCodes --> length value
+    std::vector<int> dsts;
     int64_t fix_cost;
     int64_t dyn_cost;
 };
@@ -656,8 +657,8 @@ constexpr Config configs[/*10*/] = {
 };
 // clang-format on
 
-BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::vector<int>& lens,
-                       std::map<int, int>& lit_counts, std::map<int, int>& dst_counts) {
+BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::map<int, int>& lit_counts,
+                       std::map<int, int>& dst_counts) {
     // TODO: remove this, shouldn't do dynamic encoding if the input is empty
     // edge case for when input is empty
     if (lit_counts.empty()) {
@@ -667,11 +668,10 @@ BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::vect
     // must have code for END_BLOCK
     lits.push_back(256);
     dsts.push_back(0);
-    lens.push_back(0);
     lit_counts[lits.back()] = 1;
 
     assert(lits.size() == dsts.size());
-    assert(lits.size() == lens.size());
+    // assert(lits.size() == lens.size());
 
     auto lit_tree = construct_huffman_tree(lit_counts);
 #ifndef NDEBUG
@@ -744,7 +744,7 @@ BlockResults finish_up(std::vector<int>& lits, std::vector<int>& dsts, std::vect
         fix_cost += count * distance_code_to_extra_bits[dst_code];
     }
 
-    return {codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost};
+    return {codelens, hlit, hdist, lits, dsts, fix_cost, dyn_cost};
 }
 
 BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config config) {
@@ -757,20 +757,17 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
     const int max_chain = config.max_chain;
     std::vector<int> lits;
     std::vector<int> dsts;
-    std::vector<int> lens;
     std::map<uint32_t, std::vector<int>> ht;
     uint32_t h = size >= MinMatchLength ? (buf[0] << 8) | buf[1] : 0;
 
     auto tally_lit = [&](int lit) {
         lits.push_back(lit);
         dsts.push_back(0);
-        lens.push_back(0);
     };
 
     auto tally_dst_len = [&](int dst, int len) {
-        lits.push_back(get_length_code(len));
+        lits.push_back(LiteralCodes + len);
         dsts.push_back(dst);
-        lens.push_back(len);
     };
 
     auto update_hash_for_length = [&](int pos, int match_length) {
@@ -801,7 +798,7 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
             int iter = 0;
             for (auto rit = locs.rbegin(); rit != locs.rend(); ++rit) {
                 int loc = *rit;
-                const int match_length = longest_match(buf + loc, buf + pos, std::min(MaxMatchLength, size - pos));
+                const int match_length = longest_match(buf + loc, buf + pos, std::min(static_cast<size_t>(MaxMatchLength), size - pos));
                 if (match_length > length) {
                     length = match_length;
                     distance = pos - loc;
@@ -820,8 +817,8 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
 
         const int prev_pos = pos - 1;
         if (prev_length >= MinMatchLength && prev_length >= length) {
-            TRACE("using match: len=%d dist=%d str=\"%.*s\" (new_len=%d, new_dst=%d)", prev_length, prev_distance, prev_length,
-                  &buf[prev_pos - prev_distance], length, distance);
+            TRACE("using match: len=%d dist=%d str=\"%.*s\" (new_len=%d, new_dst=%d)", prev_length, prev_distance,
+                  prev_length, &buf[prev_pos - prev_distance], length, distance);
 
             xassert(pos != 0, "had previous match at pos=0?");
             tally_dst_len(prev_distance, prev_length);
@@ -881,7 +878,11 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
     for (int lit : lits) {
-        lit_counts[lit]++;
+        if (lit <= LiteralCodes) {
+            lit_counts[lit]++;
+        } else {
+            lit_counts[get_length_code(lit - LiteralCodes)]++;
+        }
     }
     for (int dst : dsts) {
         if (dst != 0) {
@@ -895,7 +896,7 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
     }
     TRACE("--- END DST CODE COUNTS")
 
-    return finish_up(lits, dsts, lens, lit_counts, dst_counts);
+    return finish_up(lits, dsts, lit_counts, dst_counts);
 }
 
 BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config) {
@@ -908,13 +909,27 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
 
     std::vector<int> lits;
     std::vector<int> dsts;
-    std::vector<int> lens;
     std::map<int, int> lit_counts;
     std::map<int, int> dst_counts;
     std::map<uint32_t, std::vector<int>> ht;
     const int nice_length = config.nice_length;
     const int max_chain = config.max_chain;
     uint32_t h = size >= 2 ? ((buf[0] << 8) | (buf[1] << 0)) : 0;
+
+    auto tally_lit = [&](int lit) {
+        assert(0 <= lit && lit <= LiteralCodes);
+        lits.push_back(lit);
+        dsts.push_back(0);
+        lit_counts[lit]++;
+    };
+    auto tally_dst_len = [&](int dst, int len) {
+        assert(MinMatchDistance <= dst && dst <= MaxMatchDistance);
+        assert(MinMatchLength <= len && len <= MaxMatchLength);
+        lits.push_back(LiteralCodes + len);
+        dsts.push_back(dst);
+        lit_counts[get_length_code(len)]++;
+        dst_counts[get_distance_code(dst)]++;
+    };
 
     size_t i = 0;
     while (i + 3 < size) {
@@ -927,7 +942,7 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
         int iter = 0;
         for (auto rit = locs.rbegin(); rit != locs.rend(); ++rit) {
             int pos = *rit;
-            int match_length = longest_match(buf + pos, buf + i, std::min(MaxMatchLength, size - i));
+            int match_length = longest_match(buf + pos, buf + i, std::min(static_cast<size_t>(MaxMatchLength), size - i));
             if (match_length > length) {
                 length = match_length;
                 distance = i - pos;
@@ -951,26 +966,14 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
                 ht[h].push_back(i + j);
             }
             i += length;
-            lits.push_back(get_length_code(length));
-            lens.push_back(length);
-            dsts.push_back(distance);
-            lit_counts[lits.back()]++;
-            dst_counts[get_distance_code(dsts.back())]++;
+            tally_dst_len(distance, length);
         } else {
-            int value = buf[i];
-            lits.push_back(value);
-            lens.push_back(0);
-            dsts.push_back(0);
-            lit_counts[lits.back()]++;
+            tally_lit(buf[i]);
             i += 1;
         }
     }
     for (; i < size; ++i) {
-        int value = buf[i];
-        lits.push_back(value);
-        lens.push_back(0);
-        dsts.push_back(0);
-        lit_counts[lits.back()]++;
+        tally_lit(buf[i]);
     }
 
     TRACE("--- DST CODE COUNTS")
@@ -979,7 +982,7 @@ BlockResults analyze_block(const uint8_t* const buf, size_t size, Config config)
     }
     TRACE("--- END DST CODE COUNTS")
 
-    return finish_up(lits, dsts, lens, lit_counts, dst_counts);
+    return finish_up(lits, dsts, lit_counts, dst_counts);
 }
 
 int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes, int n_hcodelens) {
@@ -993,11 +996,11 @@ int64_t calculate_header_cost(const Tree& htree, const std::vector<int>& hcodes,
 }
 
 void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWriter& out, int block_number) {
-    analyze_block(buf, size, configs[0]);
-#if 0
-    auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block(buf, size, configs[0]);
+    // analyze_block(buf, size, configs[0]);
+#if 1
+    auto&& [codelens, hlit, hdist, lits, dsts, fix_cost, dyn_cost] = analyze_block(buf, size, configs[6]);
 #else
-    auto&& [codelens, hlit, hdist, lits, dsts, lens, fix_cost, dyn_cost] = analyze_block_lazy(buf, size, configs[10]);
+    auto&& [codelens, hlit, hdist, lits, dsts, fix_cost, dyn_cost] = analyze_block_lazy(buf, size, configs[10]);
 #endif
     auto&& [hcodes, hextra, htree] = make_header_tree(codelens);
     auto&& [header_data, hclen] = make_header_tree_data(htree);
@@ -1073,7 +1076,7 @@ void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWr
         trees.n_lits = hlit;
         trees.n_dists = hdist;
         hdr_after = out.total_written;
-        write_block(lits, dsts, lens, trees, out);
+        write_block(lits, dsts, trees, out);
         after = out.total_written;
         compress_type = "Dynamic Huffman";
     } else {
@@ -1081,7 +1084,7 @@ void compress_block(const uint8_t* const buf, size_t size, uint8_t bfinal, BitWr
         uint8_t block_type = static_cast<uint8_t>(BType::FIXED_HUFFMAN);
         out.write_bits(bfinal, 1);
         out.write_bits(block_type, 2);
-        write_block(lits, dsts, lens, fixed_tree, out);
+        write_block(lits, dsts, fixed_tree, out);
         after = out.total_written;
         compress_type = "Fixed Huffman";
     }
