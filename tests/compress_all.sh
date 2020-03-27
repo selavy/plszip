@@ -31,9 +31,9 @@ do
     TARNAME=${FILENAME}.txt.gz.out
     echo "file = $i tar = $TARNAME"
 
-    ../build/debug/compress $i $TARNAME > /dev/null 2> /dev/null || die "failed to compress $i"
+    ../build/debug/compress --slow --level=9 $i $TARNAME > /dev/null 2> /dev/null || die "failed to compress $i"
 
-    gzip -k $i || die "gzip failed on $i"
+    gzip -k -9 $i || die "gzip failed on $i"
 
     if [[ $DO_LZ4 -ne 0 ]];
     then
