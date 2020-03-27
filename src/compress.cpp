@@ -828,18 +828,19 @@ BlockResults analyze_block_lazy(const uint8_t* const buf, size_t size, Config co
 
             tally_dst_len(prev_distance, prev_length);
 
-
-            // prev_length = 3 ; prev_distance = 3
-            //                                                            |
-            //                                                            v
+            // prev_length = 3 ; prev_distance = 3                   curr position     new position
+            //                                                              |               |
+            //                                                              v               v
             //          | pos-6 | pos-5 | pos-4 | pos-3 | pos-2 | pos-1 | pos   | pos+1 | pos+2 | pos+3 | pos+4 |
             //          -----------------------------------------------------------------------------------------
             //          | 'T'   | 'h'   | 'i'   | 's'   | ' '   | 'i'   | 's'   | ' '   | 'a'   | 't'   | 'e'   |
             //          -----------------------------------------------------------------------------------------
             // hashed:  |  x    |  x    |  x    |  x    |  x    |  x    |  x    |  x    |  x    |
+            //                                                                                             ^
+            //                                                                                             |
+            //                                                                                    need to hash to here
 
-            // hash already has updated for up to buf[pos+2]
-            int prev_pos = pos - 1;
+            const auto prev_pos = pos - 1;
             for (int i = 2; i < prev_length && (prev_pos + 2 + i) < size; ++i) {
                 h = update_hash(h, buf[prev_pos + 2 + i]);
                 CHECK_HASH(prev_pos + i);
