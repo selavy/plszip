@@ -34,6 +34,8 @@
 #define DEBUG(fmt, ...) fprintf(stderr, "DEBUG: " fmt "\n", ##__VA_ARGS__)
 #endif
 
+#define TRACE(fmt, ...) fprintf(stdout, "TRACE: " fmt "\n", ##__VA_ARGS__)
+
 #define ARRSIZE(x) (sizeof(x) / sizeof(x[0]))
 
 #define INFO(fmt, ...) fprintf(stdout, "INFO: " fmt "\n", ##__VA_ARGS__)
@@ -520,12 +522,16 @@ void read_dynamic_header_tree(BitReader& reader, size_t hclen, HTree& header_tre
     constexpr static uint16_t order[NumCodeLengths] = {
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
     };
+    int total_read = 0;
     header_tree.codes.clear(); // TEMP TEMP
     header_tree.codelens.assign(NumCodeLengths, 0); // TODO: should this be `hclen`?
     header_tree.maxlen = 0; // TEMP TEMP
     for (size_t i = 0; i < hclen; ++i) {
         header_tree.codelens[order[i]] = reader.read_bits(3);
+        total_read += 3;
+        TRACE("HEADER: codelen[%u]=%u", order[i], header_tree.codelens[order[i]]);
     }
+    TRACE("HEADER CODELENS total_read=%d bits", total_read);
     init_huffman_tree(header_tree);
     assert(header_tree.maxlen != 0);
 }
@@ -565,12 +571,15 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     // TEMP TEMP
 #endif
 
+    int total_read = 0;
     std::vector<uint16_t> dynamic_code_lengths;
     dynamic_code_lengths.reserve(ncodes);
     while (dynamic_code_lengths.size() < ncodes) {
         uint16_t value = read_huffman_value(reader, header_tree);
-        // DEBUG("header length: %u", value);
+        int codelen = header_tree.codelens[value];
+        total_read += codelen;
         if (value <= 15) {
+            TRACE("HEADER: val=%u (%d)", value, codelen);
             dynamic_code_lengths.push_back(value);
         } else if (value <= 18) {
             size_t nbits;
@@ -595,13 +604,14 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
                 xassert(0, "branch should never be hit");
             }
             size_t repeat_times = reader.read_bits(nbits) + offset;
-            // printf("--- repeat_times = %zu offset = %zu repeat_value = %u\n",
-            //         repeat_times, offset, repeat_value);
+            TRACE("HEADER: code=%u times=%zu val=%u (%d %zu)", value, repeat_times, repeat_value, codelen, nbits);
             dynamic_code_lengths.insert(dynamic_code_lengths.end(), repeat_times, repeat_value);
+            total_read += nbits;
         } else {
             panic("invalid value: %u", value);
         }
     }
+    TRACE("HEADER total_read=%d bits", total_read);
     xassert(dynamic_code_lengths.size() == ncodes, "Went over the number of expected codes");
     xassert(dynamic_code_lengths.size() > 256 && dynamic_code_lengths[256] != 0, "invalid code -- missing end-of-block");
 
@@ -609,7 +619,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     literal_tree.codelens.assign(&dynamic_code_lengths[0], &dynamic_code_lengths[hlit]);
     literal_tree.maxlen = 0;
 
-#if 1
+#if 0
     // TEMP TEMP
     {
         fprintf(stderr, "--- DYNAMIC HUFFMAN LENGTHS ---\n");
@@ -644,7 +654,7 @@ void read_dynamic_huffman_trees(BitReader& reader, HTree& literal_tree, HTree& d
     distance_tree.codelens.assign(&dynamic_code_lengths[hlit], &dynamic_code_lengths[ncodes]);
     distance_tree.maxlen = 0;
 
-#if 1
+#if 0
     // TEMP TEMP
     {
         fprintf(stderr, "--- DYNAMIC HUFFMAN LENGTHS ---\n");
@@ -966,14 +976,18 @@ int main(int argc, char** argv)
             size_t tot_match_length = 0;
             for (;;) {
                 uint16_t value = read_huffman_value(reader, literal_tree);
+                int codelen = literal_tree.codelens[value];
                 lit_counts[value]++;
                 if (value < 256) {
+                    TRACE("HUFF: lit=%u (%d)", value, codelen);
                     write_buffer.push_back(static_cast<uint8_t>(value));
                     ++write_length;
                 } else if (value == 256) {
+                    TRACE("HUFF: lit=%u (%d) [END OF BLOCK]", value, codelen);
                     DEBUG("inflate: end of block found");
                     break;
                 } else if (value <= 285) {
+                    const auto litcode = value;
                     value -= LENGTH_BASE_CODE;
                     assert(value < ARRSIZE(LENGTH_EXTRA_BITS));
                     size_t base_length = LENGTH_BASES[value];
@@ -992,7 +1006,7 @@ int main(int argc, char** argv)
                         panic("invalid distance: %zu >= %zu",
                                 distance, write_buffer.size());
                     }
-                    // DEBUG("pos=%zu len=%zu dist=%zu", write_length, length, distance);
+                    TRACE("HUFF: lit=%u len=%zu dist=%zu (lcl=%d, lx=%zu dcl=%d dx=%zu)", litcode, length, distance, codelen, LENGTH_EXTRA_BITS[value], distance_tree.codelens[distance_code], DISTANCE_EXTRA_BITS[distance_code]);
                     tot_match_length += length;
                     num_matches++;
                     size_t index = write_buffer.size() - distance;
@@ -1016,21 +1030,23 @@ int main(int argc, char** argv)
                 }
             }
 
-            DEBUG("num_matches=%zu total_match_length = %zu", num_matches, tot_match_length);
+#if 1
+            TRACE("num_matches=%zu total_match_length = %zu", num_matches, tot_match_length);
             // TEMP TEMP
             {
-                DEBUG("LITERAL COUNTS");
+                TRACE("LITERAL COUNTS");
                 for (auto&& [lit, count] : lit_counts) {
-                    DEBUG("%3d: %4d", lit, count);
+                    TRACE("%3d: %4d", lit, count);
                 }
-                DEBUG("END LITERAL COUNTS");
-                DEBUG("DISTANCE CODE COUNTS");
+                TRACE("END LITERAL COUNTS");
+                TRACE("DISTANCE CODE COUNTS");
                 for (auto&& [dst_code, count] : dst_counts) {
-                    DEBUG("%3d: %4d", dst_code, count);
+                    TRACE("%3d: %4d", dst_code, count);
                 }
-                DEBUG("END DISTANCE CODE COUNTS");
+                TRACE("END DISTANCE CODE COUNTS");
             }
             // TEMP TEMP
+#endif
         } else {
             panic("unsupported block encoding: %u", (uint8_t)btype);
         }
@@ -1040,6 +1056,7 @@ int main(int argc, char** argv)
             block_size += write_length;
         }
 
+        DEBUG("block_size = %zu", block_size);
 
         ++block_number;
     } while (bfinal == 0);

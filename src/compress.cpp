@@ -147,7 +147,7 @@ struct Node {
 struct NodeCmp {
     bool operator()(const Node* a, const Node* b) {
         // STL heap api is for a max heap and expects less than comparison
-        return a->weight > b->weight;
+        return a->weight > b->weight || (a->weight == b->weight && a->value > b->value);
     }
 };
 
@@ -191,8 +191,10 @@ std::vector<TreeNode> construct_huffman_tree(const std::map<int, int>& counts) {
         Node* b = nodes[0];
         pop_heap(nodes);
         auto& n = pool.emplace_back(-1, a->weight + b->weight);
-        n.left = a->weight < b->weight ? a : b;
-        n.right = a->weight < b->weight ? b : a;
+        n.left = a;
+        n.right = b;
+        // n.left  = a->weight < b->weight ? a : b;
+        // n.right = a->weight < b->weight ? b : a;
         nodes.push_back(&n);
         std::push_heap(nodes.begin(), nodes.end(), NodeCmp{});
     }
